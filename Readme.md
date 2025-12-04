@@ -258,9 +258,8 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## 📬 Contact & Support
 
-**Project Maintainer**: [Your Name]  
-**Email**: your.email@example.com  
-**LinkedIn**: [linkedin.com/in/yourprofile](https://linkedin.com/in/yourprofile)
+**Project Maintainer**: [Ashutosh Patra]  
+**Email**: ashutoshpatraybl@gmail.com  
 
 For bug reports and feature requests, please use the [GitHub Issues](https://github.com/yourusername/PrepIQ/issues) page.
 
