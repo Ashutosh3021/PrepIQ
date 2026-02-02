@@ -1,0 +1,138 @@
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    def _generate_gemini_response(self, prompt: str) -> str:
+        """Generate response from Gemini with retry logic"""
+        try:
+            response = self.model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "object",
+                        "properties": {
+                            "predictions": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "question_number": {"type": "integer"},
+                                        "text": {"type": "string"},
+                                        "marks": {"type": "integer"},
+                                        "unit": {"type": "string"},
+                                        "probability": {"type": "string", "enum": ["very_high", "high", "moderate", "low"]},
+                                        "reasoning": {"type": "string"}
+                                    },
+                                    "required": ["question_number", "text", "marks", "unit", "probability", "reasoning"]
+                                }
+                            },
+                            "total_marks": {"type": "integer"},
+                            "coverage_percentage": {"type": "number"},
+                            "unit_coverage": {
+                                "type": "object",
+                                "additionalProperties": {"type": "number"}
+                            },
+                            "generated_at": {"type": "string"}
+                        },
+                        "required": ["predictions", "total_marks", "coverage_percentage", "unit_coverage", "generated_at"]
+                    }
+                )
+            )
+            return response.text
+        except Exception as e:
+            logger.error(f"Error generating Gemini response: {str(e)}")
+            raise
+
+    def predict_exam_topics(self, study_material: str, db: Session, subject_id: str) -> Dict[str, Any]:
+        """Predict likely exam topics based on study material and historical data"""
+        # Get historical data for the subject
+        historical_questions = db.query(models.Question).join(
+            models.QuestionPaper
+        ).filter(
+            models.QuestionPaper.subject_id == subject_id
+        ).all()
+        
+        # Format historical data
+        historical_data = []
+        for q in historical_questions:
+            historical_data.append({
+                "text": q.question_text,
+                "marks": q.marks,
+                "unit": q.unit_name,
+                "type": q.question_type
+            })
+        
+        # Create prompt with historical context
+        historical_context = json.dumps(historical_data[:10])  # Limit to first 10 for context
+        prompt = f"""
+        Analyze the following study material and historical question patterns to predict the most likely exam topics:
+        Study Material: {study_material}
+        
+        Historical Questions: {historical_context}
+        
+        Provide your response in the following JSON format:
+        {{
+            "predictions": [
+                {{
+                    "question_number": "integer",
+                    "text": "string",
+                    "marks": "integer",
+                    "unit": "string",
+                    "probability": "very_high|high|moderate|low",
+                    "reasoning": "string"
+                }}
+            ],
+            "total_marks": "integer",
+            "coverage_percentage": "float",
+            "unit_coverage": {{
+                "Unit Name": "percentage"
+            }},
+            "generated_at": "timestamp"
+        }}
+        """
+        
+        try:
+            # Use the Gemini API with retry logic
+            response_text = self._generate_gemini_response(prompt)
+            
+            # Parse the JSON response
+            try:
+                result = json.loads(response_text)
+                return result
+            except json.JSONDecodeError as e:
+                logger.error(f"Error parsing Gemini response as JSON: {str(e)}")
+                # Return a structured response even if parsing fails
+                return {
+                    "predictions": [
+                        {
+                            "question_number": 1,
+                            "text": f"Error parsing response: {response_text[:200]}...",
+                            "marks": 5,
+                            "unit": "Error",
+                            "probability": "moderate",
+                            "reasoning": "Response parsing error"
+                        }
+                    ],
+                    "total_marks": 100,
+                    "coverage_percentage": 0,
+                    "unit_coverage": {},
+                    "generated_at": str(time.time())
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in prediction after retries: {str(e)}")
+            # Return a fallback response
+            return {
+                "predictions": [
+                    {
+                        "question_number": 1,
+                        "text": f"Prediction temporarily unavailable due to API error: {str(e)}",
+                        "marks": 5,
+                        "unit": "API Error",
+                        "probability": "low",
+                        "reasoning": "API connection error"
+                    }
+                ],
+                "total_marks": 100,
+                "coverage_percentage": 0,
+                "unit_coverage": {},
+                "generated_at": str(time.time())
+            }
