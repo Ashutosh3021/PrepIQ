@@ -9,8 +9,8 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 import networkx as nx
 
-from .core.base_model import RecommendationModel
-from .core.config import settings
+from ..core.base_model import RecommendationModel
+from ..core.config import settings
 
 
 class TopicRecommender(RecommendationModel):

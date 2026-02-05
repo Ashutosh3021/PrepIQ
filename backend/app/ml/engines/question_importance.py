@@ -17,8 +17,8 @@ from sentence_transformers import SentenceTransformer
 import warnings
 warnings.filterwarnings('ignore')
 
-from .core.base_model import BaseModel
-from .core.config import settings
+from ..core.base_model import BaseModel
+from ..core.config import settings
 
 
 class EnhancedQuestionAnalyzer(BaseModel):

@@ -8,10 +8,10 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 from sklearn.model_selection import train_test_split, cross_val_score
 from imblearn.over_sampling import SMOTE
-import xgboost as xgb
+# import xgboost as xgb
 
-from .core.base_model import ClassificationModel
-from .core.config import settings
+from ..core.base_model import ClassificationModel
+from ..core.config import settings
 
 
 class FocusAreaIdentifier(ClassificationModel):
