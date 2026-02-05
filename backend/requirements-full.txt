@@ -13,15 +13,21 @@ passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0
 pydantic-settings==2.6.1
 
-# Machine Learning and Data Science (lightweight)
+# Machine Learning and Data Science
 scikit-learn==1.5.0
 numpy==1.26.4
 pandas==2.2.3
+tensorflow==2.18.0
+torch==2.5.1
+transformers==4.46.3
+sentence-transformers==3.2.1
 xgboost==2.1.2
 imbalanced-learn==0.12.4
+networkx==3.4.2
 
 # Natural Language Processing
 nltk==3.9.1
+spacy==3.7.5
 
 # Data Processing and Utilities
 joblib==1.4.2
@@ -37,8 +43,18 @@ google-generativeai==0.8.3
 # PDF Processing
 PyPDF2==3.0.1
 PyMuPDF==1.24.1
+tesseract==0.1.3
 Pillow==10.4.0
+
+# Monitoring and Performance
+mlflow==2.18.0
 
 # Development and Testing
 pytest==8.3.3
+pytest-asyncio==0.24.0
 httpx==0.27.2
+black==24.10.0
+flake8==7.1.1
+
+# Production dependencies
+gunicorn==23.0.0

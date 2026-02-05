@@ -79,3 +79,22 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Additional improvements for better coverage
+*.egg-info/
+*.egg
+/backend/*.db
+/backend/logs/
+*.log
+logs/
+*.log.*
+/prisma/dev.db
+*.jar
+*.war
+*.ear
+coverage/
+.nyc_output/
+*.tmp
+*.temp
+*.bak
+*.backup
