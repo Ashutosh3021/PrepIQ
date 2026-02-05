@@ -53,9 +53,14 @@ export default function LoginPage() {
         }
         setError(errorMessage);
       }
-    } catch (err) {
-      setError('An error occurred. Please try again.');
-      console.error(err);
+    } catch (err: any) {
+      // Handle network errors and other exceptions
+      if (err.name === 'TypeError' && err.message.includes('fetch')) {
+        setError('Failed to connect to the server. Please check your internet connection and make sure the backend server is running.');
+      } else {
+        setError('An unexpected error occurred. Please try again.');
+      }
+      console.error('Login error:', err);
     } finally {
       setLoading(false);
     }

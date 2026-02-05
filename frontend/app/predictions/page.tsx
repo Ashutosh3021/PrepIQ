@@ -1,11 +1,43 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import DashboardLayout from '@/src/components/dashboard/DashboardLayout';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  PieChart, Pie, Cell
+} from 'recharts';
+import { predictionService } from '@/src/lib/api';
+import type { PredictionData, PredictionQuestion, TopicHeatMapEntry } from '@/src/lib/api';
+import { toast } from 'sonner';
 
 const PredictionsPage = () => {
   const [activeTab, setActiveTab] = useState('predictions');
   const [expandedQuestions, setExpandedQuestions] = useState<{[key: string]: boolean}>({});
+  const [predictionData, setPredictionData] = useState<PredictionData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchPredictions = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await predictionService.getLatestPredictions();
+        setPredictionData(data);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load predictions';
+        setError(errorMessage);
+        toast.error(errorMessage);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPredictions();
+  }, []);
 
   const toggleQuestion = (id: string) => {
     setExpandedQuestions(prev => ({
@@ -14,59 +46,59 @@ const PredictionsPage = () => {
     }));
   };
 
-  // Mock data for predictions
-  const predictionData = {
-    confidence: 85,
-    summary: "Covers 95% of likely topics",
-    questions: [
-      {
-        id: 'q1',
-        number: 1,
-        text: "Explain the concept of eigenvalues and eigenvectors. Provide an example with a 2x2 matrix.",
-        marks: 10,
-        unit: "Linear Transformations",
-        probability: "very_high",
-        appearedIn: [2020, 2022, 2024],
-        difficulty: "Medium",
-        expectedAnswer: "Eigenvalues and eigenvectors are fundamental concepts in linear algebra..."
-      },
-      {
-        id: 'q2',
-        number: 2,
-        text: "Define the rank of a matrix and explain its properties.",
-        marks: 5,
-        unit: "Matrix Theory",
-        probability: "high",
-        appearedIn: [2021, 2023],
-        difficulty: "Easy",
-        expectedAnswer: "The rank of a matrix is defined as..."
-      },
-      {
-        id: 'q3',
-        number: 3,
-        text: "Solve the system of linear equations using Gaussian elimination method.",
-        marks: 5,
-        unit: "Systems of Equations",
-        probability: "moderate",
-        appearedIn: [2022],
-        difficulty: "Hard",
-        expectedAnswer: "To solve using Gaussian elimination..."
-      }
-    ],
-    topicHeatmap: [
-      { unit: "Matrix Theory", veryHigh: 4, high: 2, moderate: 1 },
-      { unit: "Linear Transformations", veryHigh: 3, high: 3, moderate: 0 },
-      { unit: "Systems of Equations", veryHigh: 2, high: 4, moderate: 2 },
-      { unit: "Vector Spaces", veryHigh: 1, high: 2, moderate: 3 }
-    ],
-    studyRecommendations: [
-      "Focus on Unit 1 (Matrix Theory) - appears in 45% of papers",
-      "Unit 2 (Linear Transformations) is important - appears in 30% of papers",
-      "Day 1-5: Deep dive into Matrix Theory",
-      "Day 6-8: Linear Transformations concepts",
-      "Day 9-10: Revision and mock tests"
-    ]
-  };
+  // Loading state
+  if (loading) {
+    return (
+      <DashboardLayout>
+        <div className="max-w-7xl mx-auto p-6">
+          <div className="flex items-center justify-center h-64">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
+              <p className="mt-4 text-lg text-gray-600">Loading predictions...</p>
+            </div>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <DashboardLayout>
+        <div className="max-w-7xl mx-auto p-6">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+            <h3 className="text-lg font-medium text-red-800 mb-2">Error Loading Predictions</h3>
+            <p className="text-red-700">{error}</p>
+            <Button 
+              onClick={() => window.location.reload()} 
+              className="mt-4"
+              variant="outline"
+            >
+              Retry
+            </Button>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  // Empty state
+  if (!predictionData) {
+    return (
+      <DashboardLayout>
+        <div className="max-w-7xl mx-auto p-6">
+          <div className="text-center py-12">
+            <h2 className="text-2xl font-bold text-gray-800 mb-4">No Predictions Available</h2>
+            <p className="text-gray-600 mb-8">Generate predictions by uploading subject materials first.</p>
+            <Button onClick={() => window.location.href = '/upload'}>
+              Upload Study Materials
+            </Button>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -209,7 +241,7 @@ const PredictionsPage = () => {
               <h3 className="text-lg font-semibold mb-4">SECTION 1: Part A (2-Mark Questions) - Total: 30 marks</h3>
               <p>Probability breakdown: Very High: 6, High: 3, Moderate: 1</p>
               
-              {predictionData.questions.filter(q => q.marks === 2).map((question) => (
+              {predictionData.questions.filter((q: PredictionQuestion) => q.marks === 2).map((question: PredictionQuestion) => (
                 <div key={question.id} className="border rounded-lg mb-4">
                   <div 
                     className="p-4 cursor-pointer flex justify-between items-center"
@@ -244,7 +276,7 @@ const PredictionsPage = () => {
               <h3 className="text-lg font-semibold mb-4">SECTION 2: Part B (5-Mark Questions) - Total: 40 marks</h3>
               <p>Probability breakdown: Very High: 4, High: 4, Moderate: 2</p>
               
-              {predictionData.questions.filter(q => q.marks === 5).map((question) => (
+              {predictionData.questions.filter((q: PredictionQuestion) => q.marks === 5).map((question: PredictionQuestion) => (
                 <div key={question.id} className="border rounded-lg mb-4">
                   <div 
                     className="p-4 cursor-pointer flex justify-between items-center"
@@ -279,7 +311,7 @@ const PredictionsPage = () => {
               <h3 className="text-lg font-semibold mb-4">SECTION 3: Part C (10-Mark Questions) - Total: 30 marks</h3>
               <p>Probability breakdown: Very High: 2, High: 1, Moderate: 1</p>
               
-              {predictionData.questions.filter(q => q.marks === 10).map((question) => (
+              {predictionData.questions.filter((q: PredictionQuestion) => q.marks === 10).map((question: PredictionQuestion) => (
                 <div key={question.id} className="border rounded-lg mb-4">
                   <div 
                     className="p-4 cursor-pointer flex justify-between items-center"
@@ -326,7 +358,7 @@ const PredictionsPage = () => {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {predictionData.topicHeatmap.map((row, index) => (
+                  {predictionData.topicHeatmap.map((row: TopicHeatMapEntry, index: number) => (
                     <tr key={index}>
                       <td className="px-6 py-4 whitespace-nowrap font-medium">{row.unit}</td>
                       <td className="px-6 py-4 whitespace-nowrap">

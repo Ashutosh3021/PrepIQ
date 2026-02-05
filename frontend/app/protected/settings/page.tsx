@@ -1,14 +1,20 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/src/components/ui/card';
-import { Button } from '@/src/components/ui/button';
-import { Input } from '@/src/components/ui/input';
-import { Label } from '@/src/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/src/components/ui/select';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { AlertCircle } from 'lucide-react';
+import { authService } from '@/src/lib/api';
+import type { UserProfile } from '@/src/lib/api';
+import { toast } from 'sonner';
 
 export default function SettingsPage() {
-  const [userData, setUserData] = useState({
+  const [userData, setUserData] = useState<UserProfile>({
+    id: '',
     full_name: '',
     email: '',
     college_name: '',
@@ -16,40 +22,32 @@ export default function SettingsPage() {
     year_of_study: 1,
     exam_date: '',
     theme_preference: 'system',
-    language: 'en'
+    language: 'en',
+    created_at: '',
+    updated_at: ''
   });
+  
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const fetchUserData = async () => {
       try {
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/profile`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
-            'Content-Type': 'application/json',
-          },
-        });
+        setLoading(true);
+        setError(null);
         
-        if (response.ok) {
-          const data = await response.json();
-          setUserData({
-            full_name: data.full_name || '',
-            email: data.email || '',
-            college_name: data.college_name || '',
-            program: data.program || '',
-            year_of_study: data.year || 1,
-            exam_date: '',
-            theme_preference: 'system',
-            language: 'en'
-          });
-        } else {
-          console.error('Failed to fetch user data');
-        }
-      } catch (error) {
-        console.error('Error fetching user data:', error);
+        const data = await authService.getCurrentUser();
+        setUserData(data);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load user data';
+        setError(errorMessage);
+        toast.error(errorMessage);
+      } finally {
+        setLoading(false);
       }
     };
-    
+
     fetchUserData();
   }, []);
 
@@ -63,33 +61,55 @@ export default function SettingsPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaving(true);
     
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/profile`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          full_name: userData.full_name,
-          college_name: userData.college_name,
-          program: userData.program,
-          year_of_study: userData.year_of_study,
-          exam_date: userData.exam_date
-        }),
-      });
-      
-      if (response.ok) {
-        alert('Profile updated successfully!');
-      } else {
-        alert('Failed to update profile');
-      }
+      const updateData = {
+        full_name: userData.full_name,
+        college_name: userData.college_name,
+        program: userData.program,
+        year_of_study: userData.year_of_study,
+        exam_date: userData.exam_date,
+        theme_preference: userData.theme_preference,
+        language: userData.language
+      };
+
+      await authService.updateProfile(updateData);
+      toast.success('Profile updated successfully');
     } catch (error) {
-      console.error('Error updating profile:', error);
-      alert('An error occurred while updating profile');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to update profile';
+      toast.error(errorMessage);
+    } finally {
+      setSaving(false);
     }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
+          <p className="mt-4 text-lg text-gray-600">Loading settings...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Settings</h1>
+          <p className="text-muted-foreground">Manage your account settings and preferences</p>
+        </div>
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -126,7 +146,9 @@ export default function SettingsPage() {
                   value={userData.email}
                   onChange={handleChange}
                   placeholder="Enter your email"
+                  disabled
                 />
+                <p className="text-xs text-muted-foreground">Email cannot be changed</p>
               </div>
               
               <div className="space-y-2">
@@ -185,7 +207,9 @@ export default function SettingsPage() {
                 />
               </div>
               
-              <Button type="submit" className="w-full">Update Profile</Button>
+              <Button type="submit" className="w-full" disabled={saving}>
+                {saving ? 'Saving...' : 'Update Profile'}
+              </Button>
             </form>
           </CardContent>
         </Card>

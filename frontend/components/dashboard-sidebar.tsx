@@ -1,7 +1,21 @@
 "use client"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { BookOpen, LayoutDashboard, LineChart, MessageSquare, Settings, ShieldCheck, Upload, User } from "lucide-react"
+import { 
+  BookOpen, 
+  LayoutDashboard, 
+  LineChart, 
+  MessageSquare, 
+  Settings, 
+  ShieldCheck, 
+  Upload, 
+  User,
+  Brain,
+  FileCheck,
+  Star,
+  TrendingUp,
+  Flame
+} from "lucide-react"
 
 import {
   Sidebar,
@@ -38,12 +52,22 @@ const items = [
   {
     title: "AI Tutor",
     url: "/protected/chat",
-    icon: MessageSquare,
+    icon: Brain,
   },
   {
     title: "Mock Tests",
     url: "/protected/tests",
-    icon: ShieldCheck,
+    icon: FileCheck,
+  },
+  {
+    title: "Important Questions",
+    url: "/protected/questions",
+    icon: Star,
+  },
+  {
+    title: "Trend Analysis",
+    url: "/protected/analysis",
+    icon: TrendingUp,
   },
 ]
 
@@ -71,7 +95,7 @@ export function DashboardSidebar() {
                 className="hover:bg-primary/10 hover:text-primary transition-colors"
               >
                 <Link href={item.url}>
-                  <item.icon />
+                  <item.icon className="h-4 w-4" />
                   <span>{item.title}</span>
                 </Link>
               </SidebarMenuButton>
@@ -84,7 +108,7 @@ export function DashboardSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton asChild tooltip="Profile">
               <Link href="/protected/profile">
-                <User />
+                <User className="h-4 w-4" />
                 <span>My Profile</span>
               </Link>
             </SidebarMenuButton>
@@ -92,9 +116,15 @@ export function DashboardSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton asChild tooltip="Settings">
               <Link href="/protected/settings">
-                <Settings />
+                <Settings className="h-4 w-4" />
                 <span>Settings</span>
               </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton tooltip="Streak">
+              <Flame className="h-4 w-4 text-orange-500" />
+              <span>Streak: 0 days</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
