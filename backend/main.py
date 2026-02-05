@@ -20,13 +20,20 @@ import logging
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.exceptions import prep_iq_exception_handler, validation_exception_handler
-from app.ml.training.model_trainer import ModelTrainer
 
 # Set up logging
 logger = setup_logging()
 
-# Initialize ML components
-model_trainer = ModelTrainer()
+# Initialize ML components with error handling
+try:
+    from app.ml.training.model_trainer import ModelTrainer
+    model_trainer = ModelTrainer()
+    ml_available = True
+    logger.info("ML components loaded successfully")
+except ImportError as e:
+    logger.warning(f"ML components not available: {str(e)}")
+    model_trainer = None
+    ml_available = False
 
 
 @asynccontextmanager
@@ -37,12 +44,13 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Debug Mode: {settings.DEBUG}")
     
-    # Load training history
-    try:
-        model_trainer.load_training_history()
-        logger.info("Training history loaded successfully")
-    except Exception as e:
-        logger.warning(f"Failed to load training history: {str(e)}")
+    # Load training history if ML is available
+    if ml_available:
+        try:
+            model_trainer.load_training_history()
+            logger.info("Training history loaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to load training history: {str(e)}")
     
     # Log important configurations
     logger.info(f"API Version: {settings.API_V1_STR}")
@@ -97,20 +105,30 @@ def create_app() -> FastAPI:
             "timestamp": "2026-01-06T00:00:00Z"
         }
     
-    # ML Model Status endpoint
-    @app.get("/ml/status")
-    async def ml_status():
-        """Get status of all ML models."""
-        try:
-            report = model_trainer.get_model_performance_report()
+    # ML Model Status endpoint (only if ML is available)
+    if ml_available:
+        @app.get("/ml/status")
+        async def ml_status():
+            """Get status of all ML models."""
+            try:
+                report = model_trainer.get_model_performance_report()
+                return {
+                    "status": "success",
+                    "models": report.get("models_by_type", {}),
+                    "total_models": report.get("total_models_trained", 0),
+                    "timestamp": "2026-01-06T00:00:00Z"
+                }
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to get ML status: {str(e)}")
+    else:
+        @app.get("/ml/status")
+        async def ml_status():
+            """ML status endpoint (ML not available)."""
             return {
-                "status": "success",
-                "models": report.get("models_by_type", {}),
-                "total_models": report.get("total_models_trained", 0),
+                "status": "unavailable",
+                "message": "Machine Learning components are not available",
                 "timestamp": "2026-01-06T00:00:00Z"
             }
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to get ML status: {str(e)}")
     
     return app
 

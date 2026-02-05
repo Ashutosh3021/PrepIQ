@@ -23,7 +23,7 @@ except ImportError:
     Client = None
 
 # Initialize password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__ident="2b", bcrypt__rounds=12)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT Configuration
 SECRET_KEY = os.getenv("JWT_SECRET")
@@ -238,6 +238,11 @@ class SupabaseAuthService:
     @staticmethod
     def hash_password(password: str) -> str:
         """Hash password with fallback mechanism"""
+        # Truncate password to 72 bytes if needed for bcrypt
+        if len(password.encode('utf-8')) > 72:
+            password = password[:72]
+            print("Password truncated to 72 bytes for bcrypt compatibility")
+        
         try:
             return pwd_context.hash(password)
         except Exception as e:
@@ -249,11 +254,21 @@ class SupabaseAuthService:
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:
         """Verify password with fallback mechanism"""
+        # Truncate password to 72 bytes if needed for bcrypt
+        if len(plain_password.encode('utf-8')) > 72:
+            plain_password = plain_password[:72]
+        
         try:
-            return pwd_context.verify(plain_password, hashed_password)
+            # Check if it's a bcrypt hash
+            if hashed_password.startswith('$2b$') or hashed_password.startswith('$2a$') or hashed_password.startswith('$2y$'):
+                return pwd_context.verify(plain_password, hashed_password)
+            else:
+                # It's likely our fallback SHA256 hash
+                import hashlib
+                return hashlib.sha256(plain_password.encode()).hexdigest() == hashed_password
         except Exception as e:
             print(f"Password verification error: {e}")
-            # Fallback to simple comparison if bcrypt fails
+            # Fallback to simple comparison
             import hashlib
             return hashlib.sha256(plain_password.encode()).hexdigest() == hashed_password
 
