@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import auth, subjects, papers, predictions, chat, tests, analysis, plans, dashboard
+from .routers import auth, subjects, papers, predictions, chat, tests, analysis, plans, dashboard, questions, wizard
 
 app = FastAPI(title="PrepIQ Backend API", version="1.0.0")
 
@@ -28,6 +28,8 @@ app.include_router(tests.router)
 app.include_router(analysis.router)
 app.include_router(plans.router)
 app.include_router(dashboard.router)
+app.include_router(questions.router)
+app.include_router(wizard.router)
 
 @app.get("/")
 async def root():

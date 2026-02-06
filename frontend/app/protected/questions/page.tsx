@@ -1,41 +1,66 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Star, BookOpen, Clock, TrendingUp } from 'lucide-react';
+import { questionService } from '@/src/lib/api';
+import type { ImportantQuestion } from '@/src/lib/api';
+import { toast } from 'sonner';
 
 const QuestionsPage = () => {
-  const importantQuestions = [
-    {
-      id: 1,
-      subject: 'Linear Algebra',
-      topic: 'Eigenvalues and Eigenvectors',
-      question: 'Find the eigenvalues of the matrix A = [[3, 1], [0, 2]]',
-      difficulty: 'Medium',
-      importance: 'High',
-      last_asked: '2025-12-15'
-    },
-    {
-      id: 2,
-      subject: 'Calculus',
-      topic: 'Definite Integrals',
-      question: 'Evaluate ∫₀¹ x² dx using fundamental theorem',
-      difficulty: 'Easy',
-      importance: 'Very High',
-      last_asked: '2025-12-20'
-    },
-    {
-      id: 3,
-      subject: 'Physics',
-      topic: 'Newton\'s Laws',
-      question: 'A 5kg block is pulled with 20N force on frictionless surface. Find acceleration.',
-      difficulty: 'Medium',
-      importance: 'High',
-      last_asked: '2025-12-18'
-    }
-  ];
+  const [importantQuestions, setImportantQuestions] = useState<ImportantQuestion[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    const fetchImportantQuestions = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await questionService.getImportant();
+        setImportantQuestions(data);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load important questions';
+        setError(errorMessage);
+        toast.error(errorMessage);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchImportantQuestions();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="max-w-7xl mx-auto p-6 flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
+          <p className="mt-4 text-lg text-gray-600">Loading important questions...</p>
+        </div>
+      </div>
+    );
+  }
+  
+  if (error) {
+    return (
+      <div className="max-w-7xl mx-auto p-6">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+          <h3 className="text-lg font-medium text-red-800 mb-2">Error Loading Questions</h3>
+          <p className="text-red-700">{error}</p>
+          <Button 
+            onClick={() => window.location.reload()} 
+            className="mt-4"
+            variant="outline"
+          >
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  
   return (
     <div className="max-w-7xl mx-auto p-6">
       <div className="mb-8">

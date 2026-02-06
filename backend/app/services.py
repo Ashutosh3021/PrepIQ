@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 from dateutil.parser import parse
 
@@ -66,7 +66,7 @@ class PrepIQService:
             paper.raw_text = text_content
             paper.metadata_json = json.dumps(metadata)  # Store metadata
             paper.processing_status = "completed"
-            paper.processed_at = datetime.utcnow()
+            paper.processed_at = datetime.now(timezone.utc)
             
             # Create question records with enhanced attributes
             for q_data in unique_questions:
@@ -233,7 +233,7 @@ class PrepIQService:
             "total_marks": total_predicted_marks,
             "coverage_percentage": len(set(unit_coverage.keys())) / max(len(unit_coverage.keys()), 1) * 100,
             "unit_coverage": unit_coverage,
-            "generated_at": datetime.utcnow(),
+            "generated_at": datetime.now(timezone.utc),
             "analysis_method": "ML-enhanced prediction with pattern analysis",
             "accuracy_score": prediction_record.prediction_accuracy_score
         }
@@ -374,7 +374,7 @@ class PrepIQService:
     
     def generate_study_plan(self, db: Session, user_id: str, subject_id: str, start_date: str, exam_date: str) -> Dict[str, Any]:
         """Generate a personalized study plan"""
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         from dateutil.parser import parse
         
         # Verify subject belongs to user

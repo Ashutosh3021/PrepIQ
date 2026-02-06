@@ -31,8 +31,33 @@ export default function LoginPage() {
       if (response.ok) {
         // Store access token in localStorage or cookie
         localStorage.setItem('access_token', data.access_token);
-        // Redirect to dashboard
-        router.push('/protected');
+        
+        // Check if user has completed the wizard
+        try {
+          const wizardResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/wizard/status`, {
+            headers: {
+              'Authorization': `Bearer ${data.access_token}`
+            }
+          });
+          
+          if (wizardResponse.ok) {
+            const wizardData = await wizardResponse.json();
+            if (wizardData.completed) {
+              // Wizard completed, go to dashboard
+              router.push('/protected');
+            } else {
+              // Wizard not completed, go to wizard
+              router.push('/wizard');
+            }
+          } else {
+            // If wizard check fails, go to dashboard as fallback
+            router.push('/protected');
+          }
+        } catch (wizardError) {
+          console.error('Wizard check failed:', wizardError);
+          // Go to dashboard as fallback
+          router.push('/protected');
+        }
       } else {
         // Handle both string and object error responses
         let errorMessage = 'Login failed';

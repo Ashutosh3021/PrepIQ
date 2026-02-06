@@ -42,6 +42,13 @@ class UserUpdate(BaseModel):
     program: Optional[str] = None
     year_of_study: Optional[int] = None
     exam_date: Optional[str] = None
+    exam_name: Optional[str] = None
+    days_until_exam: Optional[int] = None
+    focus_subjects: Optional[List[str]] = None
+    study_hours_per_day: Optional[int] = None
+    target_score: Optional[int] = None
+    preparation_level: Optional[str] = None
+    wizard_completed: Optional[bool] = None
 
 class UserResponse(UserBase):
     id: str
@@ -291,3 +298,89 @@ class UploadProgressResponse(BaseModel):
     status: str
     progress: int
     message: str
+
+
+# Questions Schemas
+class ImportantQuestion(BaseModel):
+    id: str
+    subject: str
+    topic: str
+    question: str
+    difficulty: str
+    importance: str
+    last_asked: str
+
+
+class Question(BaseModel):
+    id: str
+    text: str
+    marks: int
+    difficulty: str
+    subject_id: str
+    topic: str
+    created_at: datetime
+
+
+# Wizard Schemas
+class WizardStep1(BaseModel):
+    exam_name: str
+    days_until_exam: int
+    
+    @field_validator('exam_name')
+    @classmethod
+    def validate_exam_name(cls, v):
+        if not v or len(v.strip()) < 2:
+            raise ValueError('Exam name must be at least 2 characters long')
+        return v.strip()
+    
+    @field_validator('days_until_exam')
+    @classmethod
+    def validate_days_until_exam(cls, v):
+        if v < 1 or v > 365:
+            raise ValueError('Days until exam must be between 1 and 365')
+        return v
+
+
+class WizardStep2(BaseModel):
+    focus_subjects: List[str]
+    study_hours_per_day: int
+    
+    @field_validator('focus_subjects')
+    @classmethod
+    def validate_focus_subjects(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError('You must select at least one subject')
+        if len(v) > 10:
+            raise ValueError('You can select up to 10 subjects')
+        return v
+    
+    @field_validator('study_hours_per_day')
+    @classmethod
+    def validate_study_hours(cls, v):
+        if v < 1 or v > 24:
+            raise ValueError('Study hours per day must be between 1 and 24')
+        return v
+
+
+class WizardStep3(BaseModel):
+    target_score: int
+    preparation_level: str
+    
+    @field_validator('target_score')
+    @classmethod
+    def validate_target_score(cls, v):
+        if v < 1 or v > 100:
+            raise ValueError('Target score must be between 1 and 100')
+        return v
+    
+    @field_validator('preparation_level')
+    @classmethod
+    def validate_preparation_level(cls, v):
+        valid_levels = ['beginner', 'intermediate', 'advanced']
+        if v not in valid_levels:
+            raise ValueError('Preparation level must be beginner, intermediate, or advanced')
+        return v
+
+
+class WizardCompletion(BaseModel):
+    wizard_completed: bool = True

@@ -1,7 +1,7 @@
 from typing import Dict, List, Any, Optional, Tuple
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 from collections import Counter
 import nltk
@@ -178,7 +178,7 @@ class EnhancedQuestionAnalyzer(BaseModel):
             
             # Update model metadata
             self.is_trained = True
-            self.training_date = datetime.utcnow()
+            self.training_date = datetime.now(timezone.utc)
             self.metrics = metrics
             
             return metrics

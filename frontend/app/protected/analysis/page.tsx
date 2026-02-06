@@ -1,38 +1,79 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, AreaChart, Area } from 'recharts';
 import { TrendingUp, Users, Calendar, Target, BookOpen } from 'lucide-react';
+import { analysisService } from '@/src/lib/api';
+import type { ChartDataPoint } from '@/src/lib/api';
+import { toast } from 'sonner';
 
 const AnalysisPage = () => {
-  // Mock data for charts
-  const performanceData = [
-    { name: 'Jan', score: 65, target: 80 },
-    { name: 'Feb', score: 72, target: 80 },
-    { name: 'Mar', score: 78, target: 80 },
-    { name: 'Apr', score: 85, target: 80 },
-    { name: 'May', score: 82, target: 80 },
-    { name: 'Jun', score: 88, target: 80 },
-  ];
+  const [performanceData, setPerformanceData] = useState<ChartDataPoint[]>([]);
+  const [subjectPerformance, setSubjectPerformance] = useState<any[]>([]);
+  const [weeklyProgress, setWeeklyProgress] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const subjectPerformance = [
-    { subject: 'Mathematics', performance: 85, color: '#3b82f6' },
-    { subject: 'Physics', performance: 78, color: '#10b981' },
-    { subject: 'Chemistry', performance: 72, color: '#f59e0b' },
-    { subject: 'Biology', performance: 81, color: '#ef4444' },
-  ];
+  useEffect(() => {
+    const fetchAnalysisData = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        
+        // Fetch all analysis data from API
+        const analysisData = await analysisService.getAnalysisData();
+        
+        setPerformanceData(analysisData.performanceData || []);
+        setSubjectPerformance(analysisData.subjectPerformance || []);
+        setWeeklyProgress(analysisData.weeklyProgress || []);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load analysis data';
+        setError(errorMessage);
+        toast.error(errorMessage);
+        
+        // Set default empty data to prevent crashes
+        setPerformanceData([]);
+        setSubjectPerformance([]);
+        setWeeklyProgress([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchAnalysisData();
+  }, []);
 
-  const weeklyProgress = [
-    { week: 'Week 1', progress: 65 },
-    { week: 'Week 2', progress: 70 },
-    { week: 'Week 3', progress: 75 },
-    { week: 'Week 4', progress: 82 },
-    { week: 'Week 5', progress: 85 },
-    { week: 'Week 6', progress: 88 },
-  ];
-
+  if (loading) {
+    return (
+      <div className="max-w-7xl mx-auto p-6 flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
+          <p className="mt-4 text-lg text-gray-600">Loading analysis data...</p>
+        </div>
+      </div>
+    );
+  }
+  
+  if (error) {
+    return (
+      <div className="max-w-7xl mx-auto p-6">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+          <h3 className="text-lg font-medium text-red-800 mb-2">Error Loading Analysis Data</h3>
+          <p className="text-red-700">{error}</p>
+          <Button 
+            onClick={() => window.location.reload()} 
+            className="mt-4"
+            variant="outline"
+          >
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  
   return (
     <div className="max-w-7xl mx-auto p-6">
       <div className="mb-8">

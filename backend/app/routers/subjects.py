@@ -1,15 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from ..database import get_db
 from .. import models, schemas
-from ..routers.auth import get_current_user
+# Import from the new Supabase-first auth service
+from services.supabase_first_auth import get_current_user_from_token
 
 router = APIRouter(
     prefix="/subjects",
     tags=["Subjects"]
 )
+
+# Dependency for protected routes
+async def get_current_user(authorization: str = None):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header required")
+    return await get_current_user_from_token(authorization)
 
 @router.get("/", response_model=List[schemas.SubjectResponse])
 def get_subjects(

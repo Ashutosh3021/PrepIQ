@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import React from 'react';
 
 // API Configuration
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3009';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 // Error types
 export class APIError extends Error {
@@ -33,26 +33,65 @@ const getAuthToken = (): string | null => {
   return null;
 };
 
-// Response handler
+// Response handler with enhanced error handling
 const handleResponse = async <T>(response: Response): Promise<T> => {
-  const data = await response.json().catch(() => ({}));
+  let data: any;
+  
+  try {
+    data = await response.json();
+  } catch (e) {
+    data = {};
+  }
   
   if (!response.ok) {
-    const error = new APIError(
-      data.detail || data.message || `HTTP ${response.status}`,
-      response.status,
-      data.code
-    );
+    // Handle different types of errors
+    let errorMessage = 'An error occurred';
+    let errorCode = data.code;
     
+    // Handle authentication errors
+    if (response.status === 401) {
+      errorMessage = 'Authentication required. Please log in again.';
+      // Clear auth token
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('supabase.auth.token');
+      }
+    } 
+    // Handle forbidden errors
+    else if (response.status === 403) {
+      errorMessage = 'Access forbidden. You do not have permission to perform this action.';
+    }
+    // Handle not found errors
+    else if (response.status === 404) {
+      errorMessage = 'Resource not found.';
+    }
+    // Handle validation errors
+    else if (response.status === 422) {
+      if (Array.isArray(data.detail)) {
+        errorMessage = data.detail.map((err: any) => err.msg || err).join(', ');
+      } else {
+        errorMessage = data.detail || 'Validation error';
+      }
+    }
+    // Handle server errors
+    else if (response.status >= 500) {
+      errorMessage = 'Server error. Please try again later.';
+    }
+    // Handle other errors
+    else {
+      errorMessage = data.detail || data.message || data.error || `HTTP ${response.status}`;
+    }
+    
+    const error = new APIError(errorMessage, response.status, errorCode);
     throw error;
   }
   
   return data;
 };
 
-// Core API client
+// Core API client with retry logic
 export const apiClient = {
-  // Generic request method
+  // Generic request method with retry logic
   async request<T>(
     endpoint: string,
     config: RequestConfig = {}
@@ -80,28 +119,54 @@ export const apiClient = {
       }
     }
 
-    try {
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        headers: defaultHeaders,
-        ...restConfig,
-      });
+    // Retry logic
+    const maxRetries = 3;
+    let lastError: Error;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+          headers: defaultHeaders,
+          ...restConfig,
+        });
 
-      const data = await handleResponse<T>(response);
-      return data;
-    } catch (error) {
-      if (error instanceof APIError) {
-        if (toastErrors && error.status !== 401) {
-          toast.error(error.message);
+        const data = await handleResponse<T>(response);
+        return data;
+      } catch (error) {
+        lastError = error as Error;
+        
+        // Don't retry on authentication errors or client errors
+        if (error instanceof APIError) {
+          if (error.status === 401 || error.status === 403 || error.status === 404 || error.status === 422) {
+            if (toastErrors && error.status !== 401) {
+              toast.error(error.message);
+            }
+            throw error;
+          }
+          
+          // Don't retry on final attempt
+          if (attempt === maxRetries) {
+            if (toastErrors && error.status !== 401) {
+              toast.error(error.message);
+            }
+            throw error;
+          }
         }
-        throw error;
+        
+        // Wait before retry (exponential backoff)
+        if (attempt < maxRetries) {
+          const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
       }
-      
-      const networkError = new APIError('Network error occurred', 0);
-      if (toastErrors) {
-        toast.error('Network error - please check your connection');
-      }
-      throw networkError;
     }
+    
+    // If we get here, all retries failed
+    const networkError = new APIError('Network error occurred after multiple attempts', 0);
+    if (toastErrors) {
+      toast.error('Network error - please check your connection');
+    }
+    throw networkError;
   },
 
   // HTTP methods
@@ -166,6 +231,30 @@ export const authService = {
 
   async getAuthStatus() {
     return apiClient.get('/auth/me');
+  },
+
+  async getWizardStatus() {
+    return apiClient.get<WizardStatus>('/wizard/status');
+  },
+
+  async completeWizardStep1(data: WizardStep1Data) {
+    return apiClient.post<UserProfile>('/wizard/step1', data);
+  },
+
+  async completeWizardStep2(data: WizardStep2Data) {
+    return apiClient.post<UserProfile>('/wizard/step2', data);
+  },
+
+  async completeWizardStep3(data: WizardStep3Data) {
+    return apiClient.post<UserProfile>('/wizard/step3', data);
+  },
+
+  async completeWizard() {
+    return apiClient.post<UserProfile>('/wizard/complete', { wizard_completed: true });
+  },
+
+  async updateWizardData(data: Partial<UserProfile>) {
+    return apiClient.put<UserProfile>('/wizard/update', data);
   }
 };
 
@@ -173,6 +262,10 @@ export const authService = {
 export const predictionService = {
   async getLatestPredictions() {
     return apiClient.get<PredictionData>('/api/predictions/latest');
+  },
+  
+  async getLatestPredictionsForSubject(subjectId: string) {
+    return apiClient.get<PredictionData>(`/api/predictions/${subjectId}/latest`);
   },
 
   async getPredictionTrend() {
@@ -205,8 +298,15 @@ export const dashboardService = {
 
 // Subject services
 export const subjectService = {
-  async getAll() {
-    return apiClient.get<Subject[]>('/api/subjects');
+  async getAll(params?: { search?: string; semester?: number; limit?: number }) {
+    const searchParams = new URLSearchParams();
+    if (params?.search) searchParams.append('search', params.search);
+    if (params?.semester) searchParams.append('semester', params.semester.toString());
+    if (params?.limit) searchParams.append('limit', params.limit.toString());
+    
+    const queryString = searchParams.toString();
+    const url = queryString ? `/api/subjects?${queryString}` : '/api/subjects';
+    return apiClient.get<Subject[]>(url);
   },
 
   async getById(id: string) {
@@ -229,12 +329,31 @@ export const subjectService = {
 // Question services
 export const questionService = {
   async getImportant() {
-    return apiClient.get<ImportantQuestion[]>('/api/questions/important');
+    return apiClient.get<ImportantQuestion[]>('/questions/important');
   },
 
   async search(params: QuestionSearchParams) {
     const queryString = new URLSearchParams(params as any).toString();
-    return apiClient.get<Question[]>('/api/questions/search?' + queryString);
+    return apiClient.get<Question[]>('/questions/search?' + queryString);
+  }
+};
+
+// Analysis services
+export const analysisService = {
+  async getAnalysisData() {
+    return apiClient.get<AnalysisData>('/analysis/data');
+  },
+
+  async getPerformanceTrends() {
+    return apiClient.get<ChartDataPoint[]>('/analysis/performance-trends');
+  },
+
+  async getSubjectPerformance() {
+    return apiClient.get<SubjectPerformance[]>('/analysis/subject-performance');
+  },
+
+  async getWeeklyProgress() {
+    return apiClient.get<WeeklyProgress[]>('/analysis/weekly-progress');
   }
 };
 
@@ -334,6 +453,24 @@ export interface ProgressPoint {
   target?: number;
 }
 
+// Analysis types
+export interface AnalysisData {
+  performanceData: ChartDataPoint[];
+  subjectPerformance: SubjectPerformance[];
+  weeklyProgress: WeeklyProgress[];
+}
+
+export interface SubjectPerformance {
+  subject: string;
+  performance: number;
+  color?: string;
+}
+
+export interface WeeklyProgress {
+  week: string;
+  progress: number;
+}
+
 export interface Subject {
   id: string;
   name: string;
@@ -381,6 +518,32 @@ export interface Question {
   subject_id: string;
   topic: string;
   created_at: string;
+}
+
+// Wizard Types
+export interface WizardStatus {
+  completed: boolean;
+  exam_name?: string;
+  days_until_exam?: number;
+  focus_subjects?: string[];
+  study_hours_per_day?: number;
+  target_score?: number;
+  preparation_level?: string;
+}
+
+export interface WizardStep1Data {
+  exam_name: string;
+  days_until_exam: number;
+}
+
+export interface WizardStep2Data {
+  focus_subjects: string[];
+  study_hours_per_day: number;
+}
+
+export interface WizardStep3Data {
+  target_score: number;
+  preparation_level: string;
 }
 
 // Hook for data fetching (using useEffect pattern)

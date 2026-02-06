@@ -1,7 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import DashboardLayout from '@/src/components/dashboard/DashboardLayout';
+import { subjectService } from '@/src/lib/api';
+import { toast } from 'sonner';
+import { useApi } from '@/hooks/use-api';
+import { LoadingSpinner, InlineLoader } from '@/components/ui/loading-spinner';
 
 interface Subject {
   id: string;
@@ -28,12 +32,87 @@ interface SubjectCreate {
   syllabus_json?: any;
 }
 
+// Subject Row Component - extracted to handle client-side interactions
+const SubjectRow = ({ subject }: { subject: Subject }) => {
+  return (
+    <div className="bg-white rounded-lg shadow">
+      <div className="p-6">
+        <div className="flex justify-between items-start">
+          <div>
+            <h3 className="text-lg font-bold">{subject.name}</h3>
+            <p className="text-gray-500">{subject.code}</p>
+            <p className="text-sm text-gray-500">Semester {subject.semester}</p>
+          </div>
+          {/* Using a simple button instead of dropdown to avoid hydration issues */}
+          <div className="relative">
+            <button className="text-gray-400 hover:text-gray-600">
+              ⋯
+            </button>
+          </div>
+        </div>
+        
+        <div className="mt-4 space-y-2">
+          <div className="flex justify-between text-sm">
+            <span>Total Marks:</span>
+            <span className="font-medium">{subject.total_marks}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span>Exam Date:</span>
+            <span className="font-medium">{new Date(subject.exam_date || '').toLocaleDateString()}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span>Papers Uploaded:</span>
+            <span className="font-medium">{subject.papers_uploaded}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span>Predictions Generated:</span>
+            <span className="font-medium">{subject.predictions_generated}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span>Mock Tests:</span>
+            <span className="font-medium">{subject.mock_tests_created}</span>
+          </div>
+        </div>
+        
+        <div className="mt-4">
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div 
+              className="bg-teal-600 h-2 rounded-full" 
+              style={{ width: `${Math.min((subject.papers_uploaded / 10) * 100, 100)}%` }}
+            ></div>
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            {subject.papers_uploaded} papers uploaded
+          </p>
+        </div>
+        
+        <div className="flex mt-4 space-x-2">
+          <button 
+            onClick={() => window.location.href = `/protected/upload?subjectId=${subject.id}`}
+            className="flex-1 bg-gray-100 text-gray-700 py-2 rounded hover:bg-gray-200 text-sm"
+          >
+            📤 Upload Paper
+          </button>
+          <button 
+            onClick={() => window.location.href = `/protected/predictions?subjectId=${subject.id}`}
+            className="flex-1 bg-teal-100 text-teal-700 py-2 rounded hover:bg-teal-200 text-sm"
+          >
+            🔮 Predictions
+          </button>
+          <button 
+            onClick={() => window.location.href = `/protected/tests?subjectId=${subject.id}`}
+            className="flex-1 bg-purple-100 text-purple-700 py-2 rounded hover:bg-purple-200 text-sm"
+          >
+            🎯 Mock Test
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const SubjectsPage = () => {
-  const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState<SubjectCreate>({
     name: '',
@@ -43,27 +122,47 @@ const SubjectsPage = () => {
     exam_date: '',
     exam_duration_minutes: 180,
   });
-  
-  // Fetch subjects from API
-  useEffect(() => {
-    const fetchSubjects = async () => {
-      try {
-        setLoading(true);
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/subjects?search=${searchTerm}`);
-        if (!response.ok) {
-          throw new Error('Failed to fetch subjects');
-        }
-        const data = await response.json();
-        setSubjects(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'An error occurred');
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    fetchSubjects();
-  }, [searchTerm]);
+
+  // Use the custom hook for data fetching
+  const { 
+    data: subjects, 
+    loading, 
+    error, 
+    execute: refreshSubjects 
+  } = useApi(
+    () => subjectService.getAll({ search: searchTerm || undefined }),
+    {
+      immediate: true,
+      loadingMessage: 'Loading your subjects...',
+      errorMessage: 'Failed to load subjects'
+    }
+  );
+
+  // Use custom hook for mutations
+  const { 
+    loading: creatingSubject, 
+    error: createError, 
+    execute: createSubject 
+  } = useApi(
+    () => subjectService.create(formData),
+    {
+      immediate: false,
+      onSuccess: (newSubject) => {
+        toast.success('Subject created successfully!');
+        setShowForm(false);
+        setFormData({
+          name: '',
+          code: '',
+          semester: 2,
+          total_marks: 100,
+          exam_date: '',
+          exam_duration_minutes: 180,
+        });
+        refreshSubjects(); // Refresh the list
+      },
+      errorMessage: 'Failed to create subject'
+    }
+  );
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -75,35 +174,7 @@ const SubjectsPage = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/subjects`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(formData),
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to create subject');
-      }
-      
-      const newSubject = await response.json();
-      setSubjects([...subjects, newSubject]);
-      
-      setFormData({
-        name: '',
-        code: '',
-        semester: 2,
-        total_marks: 100,
-        exam_date: '',
-        exam_duration_minutes: 180,
-      });
-      setShowForm(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create subject');
-    }
+    await createSubject();
   };
 
   return (
@@ -134,16 +205,12 @@ const SubjectsPage = () => {
         {/* Error message */}
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-            {error}
+            {error.message}
           </div>
         )}
 
         {/* Loading indicator */}
-        {loading && (
-          <div className="flex justify-center items-center h-32">
-            <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-teal-500"></div>
-          </div>
-        )}
+        {loading && <InlineLoader message="Loading your subjects..." />}
 
         {/* Add Subject Form */}
         {showForm && (
@@ -221,8 +288,17 @@ const SubjectsPage = () => {
                 </div>
               </div>
               <div className="flex mt-4 space-x-2">
-                <button type="submit" className="bg-teal-600 text-white px-4 py-2 rounded hover:bg-teal-700">
-                  Add Subject
+                <button 
+                  type="submit" 
+                  disabled={creatingSubject}
+                  className="bg-teal-600 text-white px-4 py-2 rounded hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {creatingSubject ? (
+                    <>
+                      <LoadingSpinner size="sm" />
+                      Creating...
+                    </>
+                  ) : 'Add Subject'}
                 </button>
                 <button 
                   type="button" 
@@ -237,77 +313,10 @@ const SubjectsPage = () => {
         )}
 
         {/* Subjects List */}
-        {!loading && (
+        {!loading && subjects && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {subjects.map((subject) => (
-              <div key={subject.id} className="bg-white rounded-lg shadow">
-                <div className="p-6">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h3 className="text-lg font-bold">{subject.name}</h3>
-                      <p className="text-gray-500">{subject.code}</p>
-                      <p className="text-sm text-gray-500">Semester {subject.semester}</p>
-                    </div>
-                    <button className="text-gray-400 hover:text-gray-600">⋯</button>
-                  </div>
-                  
-                  <div className="mt-4 space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Total Marks:</span>
-                      <span className="font-medium">{subject.total_marks}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Exam Date:</span>
-                      <span className="font-medium">{new Date(subject.exam_date || '').toLocaleDateString()}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Papers Uploaded:</span>
-                      <span className="font-medium">{subject.papers_uploaded}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Predictions Generated:</span>
-                      <span className="font-medium">{subject.predictions_generated}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Mock Tests:</span>
-                      <span className="font-medium">{subject.mock_tests_created}</span>
-                    </div>
-                  </div>
-                  
-                  <div className="mt-4">
-                    <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div 
-                        className="bg-teal-600 h-2 rounded-full" 
-                        style={{ width: `${Math.min((subject.papers_uploaded / 10) * 100, 100)}%` }}
-                      ></div>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {subject.papers_uploaded} papers uploaded
-                    </p>
-                  </div>
-                  
-                  <div className="flex mt-4 space-x-2">
-                    <button 
-                      onClick={() => window.location.href = `/protected/upload?subjectId=${subject.id}`}
-                      className="flex-1 bg-gray-100 text-gray-700 py-2 rounded hover:bg-gray-200 text-sm"
-                    >
-                      📤 Upload Paper
-                    </button>
-                    <button 
-                      onClick={() => window.location.href = `/protected/predictions?subjectId=${subject.id}`}
-                      className="flex-1 bg-teal-100 text-teal-700 py-2 rounded hover:bg-teal-200 text-sm"
-                    >
-                      🔮 Predictions
-                    </button>
-                    <button 
-                      onClick={() => window.location.href = `/protected/tests?subjectId=${subject.id}`}
-                      className="flex-1 bg-purple-100 text-purple-700 py-2 rounded hover:bg-purple-200 text-sm"
-                    >
-                      🎯 Mock Test
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <SubjectRow key={subject.id} subject={subject} />
             ))}
             {subjects.length === 0 && !loading && (
               <div className="col-span-full text-center py-12">

@@ -104,7 +104,7 @@ class TopicRecommender(RecommendationModel):
         
         # Update model metadata
         self.is_trained = True
-        self.training_date = datetime.utcnow()
+        self.training_date = datetime.now(timezone.utc)
         self.metrics = {'training_complete': True}
         
         return self.metrics

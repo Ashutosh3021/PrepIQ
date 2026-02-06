@@ -34,6 +34,17 @@ class User(Base):
     theme_preference = Column(String(20), default='system')  # light/dark/system
     language = Column(String(10), default='en')
     exam_date = Column(DateTime)
+    
+    # Wizard Completion Flag
+    wizard_completed = Column(Boolean, default=False)
+    
+    # Wizard Data
+    exam_name = Column(String(255))
+    days_until_exam = Column(Integer)
+    focus_subjects = Column(JSON)  # Array of subject names/IDs
+    study_hours_per_day = Column(Integer)
+    target_score = Column(Integer)  # Percentage target
+    preparation_level = Column(String(50))  # beginner, intermediate, advanced
 
     # Account
     email_verified = Column(Boolean, default=False)

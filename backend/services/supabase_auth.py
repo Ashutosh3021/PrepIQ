@@ -1,58 +1,51 @@
-from fastapi import HTTPException, Depends
-from pydantic import BaseModel, EmailStr
-import os
-import uuid
-import jwt
-from datetime import datetime, timedelta
-from passlib.context import CryptContext
-from sqlalchemy.orm import Session
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from app.database import get_db
-from app import models
+import logging
 from typing import Optional
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+from pydantic import BaseModel, EmailStr
+import bcrypt
+import jwt
+from datetime import datetime, timedelta, timezone
+import uuid
+import os
 
-# Supabase client import with error handling
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+# Supabase setup
 try:
     from supabase import create_client, Client
-    SUPABASE_AVAILABLE = True
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+    
+    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        logger.info("✅ Supabase client initialized successfully")
+    else:
+        supabase = None
+        logger.warning("⚠️  Supabase credentials not found in environment variables")
+        print("⚠️  Supabase credentials not found - users will only be stored locally")
+        
 except ImportError:
-    SUPABASE_AVAILABLE = False
-    Client = None
+    supabase = None
+    logger.warning("⚠️  Supabase library not available")
+    print("⚠️  Supabase library not available - users will only be stored locally")
+except Exception as e:
+    supabase = None
+    logger.error(f"❌ Supabase client initialization failed: {e}")
+    print(f"❌ Supabase client initialization failed: {e}")
 
-# Initialize password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+from .. import models
 
-# JWT Configuration
+# JWT configuration
 SECRET_KEY = os.getenv("JWT_SECRET")
 if not SECRET_KEY:
     raise ValueError("JWT_SECRET environment variable must be set")
+
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours
-REFRESH_TOKEN_EXPIRE_MINUTES = 43200  # 30 days
 
-# Supabase Configuration
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-
-# Initialize Supabase client with error handling
-supabase = None
-if SUPABASE_AVAILABLE and SUPABASE_URL and SUPABASE_SERVICE_KEY:
-    try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-        # Test the connection
-        supabase.auth.get_user()  # This will test if the connection works
-    except Exception as e:
-        print(f"Warning: Could not connect to Supabase: {e}")
-        print("Falling back to local database only mode")
-        supabase = None
-else:
-    print("Supabase not configured - using local database only")
-    supabase = None
-
-# Models
 class SignupRequest(BaseModel):
     email: EmailStr
     password: str
@@ -79,12 +72,46 @@ class UserResponse(BaseModel):
 
 class SupabaseAuthService:
     @staticmethod
+    def hash_password(password: str) -> str:
+        """Hash a password using bcrypt"""
+        salt = bcrypt.gensalt()
+        hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+        return hashed.decode('utf-8')
+
+    @staticmethod
+    def verify_password(plain_password: str, hashed_password: str) -> bool:
+        """Verify a password against its hash"""
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+
+    @staticmethod
+    def create_access_token(data: dict) -> str:
+        """Create a JWT access token"""
+        to_encode = data.copy()
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        to_encode.update({"exp": expire})
+        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=JWT_ALGORITHM)
+        return encoded_jwt
+
+    @staticmethod
+    def create_refresh_token(data: dict) -> str:
+        """Create a JWT refresh token"""
+        to_encode = data.copy()
+        expire = datetime.now(timezone.utc) + timedelta(days=30)  # 30 days
+        to_encode.update({"exp": expire})
+        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=JWT_ALGORITHM)
+        return encoded_jwt
+
+    @staticmethod
     async def signup(req: SignupRequest, db: Session):
         """Create a new user account with fallback to local database"""
+        logger.info(f"Attempting signup for: {req.email}")
+        print(f"📝 Signup attempt for: {req.email}")
+        
         try:
             # First try to create user in local database
             existing_user = db.query(models.User).filter(models.User.email == req.email).first()
             if existing_user:
+                logger.warning(f"User already exists: {req.email}")
                 raise HTTPException(
                     status_code=400,
                     detail="User with this email already exists"
@@ -107,31 +134,48 @@ class SupabaseAuthService:
             db.commit()
             db.refresh(user)
             
+            logger.info(f"✅ Local user created: {user.id}")
+            print(f"✅ Local user created successfully: {user.email}")
+            
             # Try to create user in Supabase if available
+            supabase_success = False
             if supabase:
                 try:
-                    supabase_response = supabase.auth.sign_up({
+                    logger.info(f"Attempting to create user in Supabase: {req.email}")
+                    print(f"🔄 Attempting Supabase sync for: {req.email}")
+                    
+                    # Use admin.create_user() instead of sign_up() for service key
+                    supabase_response = supabase.auth.admin.create_user({
                         "email": req.email,
                         "password": req.password,
-                        "options": {
-                            "data": {
-                                "full_name": req.full_name,
-                                "college_name": req.college_name,
-                                "program": req.program,
-                                "year_of_study": req.year_of_study
-                            }
+                        "email_confirm": True,  # Skip email confirmation for immediate visibility
+                        "user_metadata": {
+                            "full_name": req.full_name,
+                            "college_name": req.college_name,
+                            "program": req.program,
+                            "year_of_study": req.year_of_study
                         }
                     })
-                    print(f"Supabase user created: {supabase_response}")
+                    
+                    supabase_user_id = supabase_response.data['user']['id']
+                    logger.info(f"✅ Supabase user created successfully: {supabase_user_id}")
+                    print(f"✅ Supabase user created successfully: {supabase_user_id}")
+                    supabase_success = True
+                    
                 except Exception as e:
-                    print(f"Warning: Failed to create user in Supabase: {e}")
-                    # Continue with local database user
+                    logger.error(f"❌ Failed to create user in Supabase: {e}")
+                    print(f"❌ Supabase sync failed: {e}")
+                    print("⚠️  User will only exist in local database")
+                    # Don't fail the signup process - local database user is sufficient
+            else:
+                logger.warning("⚠️  Supabase client not available - user only in local database")
+                print("⚠️  Supabase not configured - user only in local database")
             
             # Generate tokens
             access_token = SupabaseAuthService.create_access_token(data={"sub": user.id})
             refresh_token = SupabaseAuthService.create_refresh_token(data={"sub": user.id})
             
-            return UserResponse(
+            response = UserResponse(
                 id=user.id,
                 email=user.email,
                 full_name=user.full_name,
@@ -140,25 +184,32 @@ class SupabaseAuthService:
                 year_of_study=user.year_of_study,
                 access_token=access_token,
                 refresh_token=refresh_token,
+                token_type="bearer",
                 expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60
             )
             
-        except HTTPException:
-            raise
+            logger.info(f"✅ Signup completed for: {req.email} (Supabase: {'Success' if supabase_success else 'Failed'})")
+            return response
+            
         except Exception as e:
             db.rollback()
+            logger.error(f"Signup failed for {req.email}: {e}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Error creating user: {str(e)}"
+                detail=f"Signup failed: {str(e)}"
             )
 
     @staticmethod
     async def login(req: LoginRequest, db: Session):
         """Authenticate user with fallback to local database"""
+        logger.info(f"Attempting login for: {req.email}")
+        print(f"🔑 Login attempt for: {req.email}")
+        
         try:
             # Try to find user in local database
             user = db.query(models.User).filter(models.User.email == req.email).first()
             if not user:
+                logger.warning(f"User not found: {req.email}")
                 raise HTTPException(
                     status_code=401,
                     detail="Invalid email or password"
@@ -166,28 +217,39 @@ class SupabaseAuthService:
             
             # Verify password
             if not SupabaseAuthService.verify_password(req.password, user.password_hash):
+                logger.warning(f"Password verification failed for: {req.email}")
                 raise HTTPException(
                     status_code=401,
                     detail="Invalid email or password"
                 )
             
             # Try to authenticate with Supabase if available
+            supabase_success = False
             if supabase:
                 try:
+                    logger.info(f"Attempting to authenticate with Supabase: {req.email}")
+                    print(f"🔄 Attempting Supabase authentication for: {req.email}")
+                    
                     supabase_response = supabase.auth.sign_in_with_password({
                         "email": req.email,
                         "password": req.password
                     })
-                    print(f"Supabase authentication successful: {supabase_response}")
+                    
+                    logger.info(f"✅ Supabase authentication successful: {supabase_response}")
+                    print(f"✅ Supabase authentication successful: {supabase_response}")
+                    supabase_success = True
+                    
                 except Exception as e:
-                    print(f"Warning: Failed to authenticate with Supabase: {e}")
+                    logger.error(f"❌ Failed to authenticate with Supabase: {e}")
+                    print(f"❌ Supabase authentication failed: {e}")
+                    print("⚠️  Falling back to local database authentication")
                     # Continue with local database authentication
             
             # Generate tokens
             access_token = SupabaseAuthService.create_access_token(data={"sub": user.id})
             refresh_token = SupabaseAuthService.create_refresh_token(data={"sub": user.id})
             
-            return UserResponse(
+            response = UserResponse(
                 id=user.id,
                 email=user.email,
                 full_name=user.full_name,
@@ -196,15 +258,18 @@ class SupabaseAuthService:
                 year_of_study=user.year_of_study,
                 access_token=access_token,
                 refresh_token=refresh_token,
+                token_type="bearer",
                 expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60
             )
             
-        except HTTPException:
-            raise
+            logger.info(f"✅ Login completed for: {req.email} (Supabase: {'Success' if supabase_success else 'Failed'})")
+            return response
+            
         except Exception as e:
+            logger.error(f"Login failed for {req.email}: {e}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Error during login: {str(e)}"
+                detail=f"Login failed: {str(e)}"
             )
 
     @staticmethod
@@ -214,7 +279,8 @@ class SupabaseAuthService:
             try:
                 supabase.auth.sign_out()
             except Exception as e:
-                print(f"Warning: Failed to logout from Supabase: {e}")
+                logger.error(f"❌ Failed to logout from Supabase: {e}")
+                print(f"❌ Failed to logout from Supabase: {e}")
         
         return {"message": "Successfully logged out"}
 
@@ -234,58 +300,3 @@ class SupabaseAuthService:
             return user
         except jwt.PyJWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
-
-    @staticmethod
-    def hash_password(password: str) -> str:
-        """Hash password with fallback mechanism"""
-        # Truncate password to 72 bytes if needed for bcrypt
-        if len(password.encode('utf-8')) > 72:
-            password = password[:72]
-            print("Password truncated to 72 bytes for bcrypt compatibility")
-        
-        try:
-            return pwd_context.hash(password)
-        except Exception as e:
-            print(f"Password hashing error: {e}")
-            # Fallback to simple hash if bcrypt fails
-            import hashlib
-            return hashlib.sha256(password.encode()).hexdigest()
-
-    @staticmethod
-    def verify_password(plain_password: str, hashed_password: str) -> bool:
-        """Verify password with fallback mechanism"""
-        # Truncate password to 72 bytes if needed for bcrypt
-        if len(plain_password.encode('utf-8')) > 72:
-            plain_password = plain_password[:72]
-        
-        try:
-            # Check if it's a bcrypt hash
-            if hashed_password.startswith('$2b$') or hashed_password.startswith('$2a$') or hashed_password.startswith('$2y$'):
-                return pwd_context.verify(plain_password, hashed_password)
-            else:
-                # It's likely our fallback SHA256 hash
-                import hashlib
-                return hashlib.sha256(plain_password.encode()).hexdigest() == hashed_password
-        except Exception as e:
-            print(f"Password verification error: {e}")
-            # Fallback to simple comparison
-            import hashlib
-            return hashlib.sha256(plain_password.encode()).hexdigest() == hashed_password
-
-    @staticmethod
-    def create_access_token(data: dict):
-        """Create JWT access token"""
-        to_encode = data.copy()
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        to_encode.update({"exp": expire})
-        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=JWT_ALGORITHM)
-        return encoded_jwt
-
-    @staticmethod
-    def create_refresh_token(data: dict):
-        """Create JWT refresh token"""
-        to_encode = data.copy()
-        expire = datetime.utcnow() + timedelta(minutes=REFRESH_TOKEN_EXPIRE_MINUTES)
-        to_encode.update({"exp": expire})
-        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=JWT_ALGORITHM)
-        return encoded_jwt

@@ -2,11 +2,22 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..database import get_db
 from .. import models, schemas
-from ..routers.auth import get_current_user
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# Import from the new Supabase-first auth service
+from services.supabase_first_auth import get_current_user_from_token
+
+# Dependency for protected routes
+async def get_current_user(authorization: str = None):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header required")
+    return await get_current_user_from_token(authorization)
 
 router = APIRouter(
     prefix="/tests",
@@ -39,7 +50,7 @@ def generate_mock_test(
         total_marks=100,  # Calculate based on question marks
         duration_minutes=test_request.time_limit_minutes,
         difficulty_level=test_request.difficulty,
-        start_time=datetime.utcnow()
+        start_time=datetime.now(timezone.utc)
     )
     db.add(mock_test)
     db.commit()
@@ -115,6 +126,30 @@ def submit_test(
             "skipped": test.skipped_count
         }
     }
+
+@router.get("/", response_model=List[schemas.MockTestResponse])
+def get_user_tests(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all tests for the current user"""
+    tests = db.query(models.MockTest).filter(
+        models.MockTest.user_id == current_user.id
+    ).all()
+    
+    return [
+        {
+            "test_id": test.id,
+            "total_questions": test.total_questions,
+            "total_marks": test.total_marks,
+            "time_limit_minutes": test.duration_minutes,
+            "start_time": test.start_time,
+            "is_completed": test.is_completed,
+            "score": test.score,
+            "percentage": test.percentage
+        }
+        for test in tests
+    ]
 
 @router.get("/{test_id}/results", response_model=schemas.TestResultsResponse)
 def get_test_results(

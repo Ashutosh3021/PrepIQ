@@ -5,7 +5,18 @@ from typing import List
 from ..database import get_db
 from .. import models, schemas
 from ..services import PrepIQService
-from ..routers.auth import get_current_user
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# Import from the new Supabase-first auth service
+from services.supabase_first_auth import get_current_user_from_token
+
+# Dependency for protected routes
+async def get_current_user(authorization: str = None):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header required")
+    return await get_current_user_from_token(authorization)
 
 router = APIRouter(
     prefix="/predictions",

@@ -1,7 +1,7 @@
 from typing import Dict, List, Any, Optional, Union
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
@@ -109,7 +109,7 @@ class ProgressForecaster(TimeSeriesModel):
         
         # Update model metadata
         self.is_trained = True
-        self.training_date = datetime.utcnow()
+        self.training_date = datetime.now(timezone.utc)
         self.metrics = metrics
         
         return metrics
@@ -175,7 +175,7 @@ class ProgressForecaster(TimeSeriesModel):
             prediction = self.predict(current_sequence.reshape(1, self.sequence_length, -1))
             
             # Add to forecasts
-            forecast_date = datetime.utcnow() + timedelta(days=day + 1)
+            forecast_date = datetime.now(timezone.utc) + timedelta(days=day + 1)
             forecast_data = {
                 'date': forecast_date.isoformat(),
                 'completion_percentage': float(prediction[0][0]),
@@ -280,7 +280,7 @@ class SimpleProgressRegressor(TimeSeriesModel):
         """Train the simple regressor."""
         self.model.fit(X, y)
         self.is_trained = True
-        self.training_date = datetime.utcnow()
+        self.training_date = datetime.now(timezone.utc)
         
         # Evaluate
         metrics = self.evaluate(X, y)

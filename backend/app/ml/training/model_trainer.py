@@ -40,7 +40,7 @@ class ModelTrainer:
         if training_config is None:
             training_config = self._get_default_training_config()
         
-        training_start = datetime.utcnow()
+        training_start = datetime.now(timezone.utc)
         
         try:
             # Load and preprocess data
@@ -111,7 +111,7 @@ class ModelTrainer:
             model_path = model.save_model()
             
             # Log results
-            training_end = datetime.utcnow()
+            training_end = datetime.now(timezone.utc)
             training_duration = (training_end - training_start).total_seconds()
             
             training_result = {
@@ -264,7 +264,7 @@ class ModelTrainer:
         # Check if retraining is needed
         if not force:
             last_training = datetime.fromisoformat(latest_training['training_end'])
-            if datetime.utcnow() - last_training < timedelta(days=7):
+            if datetime.now(timezone.utc) - last_training < timedelta(days=7):
                 self.logger.info(f"Model {model_name} trained recently, skipping retraining")
                 return latest_training
         

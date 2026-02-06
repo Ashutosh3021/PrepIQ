@@ -3,17 +3,26 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import List
 import os
+import sys
+import json
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from ..database import get_db
 from .. import models
-from services.supabase_auth import SupabaseAuthService
+# Use the new Supabase-first auth service
+from services.supabase_first_auth import get_current_user_from_token
 
 router = APIRouter(
     prefix="/api/dashboard",
     tags=["Dashboard"]
 )
 
+# Security setup
 security = HTTPBearer()
+
+# Dependency for protected routes
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    return await get_current_user_from_token(f"Bearer {credentials.credentials}")
 
 @router.get("/stats")
 async def get_dashboard_stats(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):

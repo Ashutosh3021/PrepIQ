@@ -87,7 +87,7 @@ const ProtectedPage = () => {
           </div>
           <div className="mt-4 md:mt-0 bg-white/20 p-4 rounded-lg">
             <div className="text-center">
-              <div className="text-3xl font-bold">{dashboardStats?.days_to_exam || userData?.exam_date ? 'Set' : '45'} days</div>
+              <div className="text-3xl font-bold">{dashboardStats?.days_to_exam || 'Set'}</div>
               <div className="text-sm">to your next exam</div>
             </div>
           </div>
@@ -129,27 +129,21 @@ const ProtectedPage = () => {
       <div className="bg-white rounded-lg shadow p-6 mb-8">
         <h2 className="text-xl font-semibold mb-4">Recent Activity</h2>
         <div className="space-y-3">
-          <div className="flex items-center p-3 border-b border-gray-100 last:border-0">
-            <div className="mr-3 text-indigo-600">•</div>
-            <div>
-              <p className="font-medium">Started Linear Algebra preparation</p>
-              <p className="text-sm text-gray-500">Today, 10:30 AM</p>
+          {dashboardStats?.recent_activity && dashboardStats.recent_activity.length > 0 ? (
+            dashboardStats.recent_activity.map((activity, index) => (
+              <div key={index} className="flex items-center p-3 border-b border-gray-100 last:border-0">
+                <div className="mr-3 text-indigo-600">•</div>
+                <div>
+                  <p className="font-medium">{activity.action}</p>
+                  <p className="text-sm text-gray-500">{new Date(activity.timestamp).toLocaleString()}</p>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="text-center py-8 text-gray-500">
+              <p>No recent activity yet. Start studying to see your progress here!</p>
             </div>
-          </div>
-          <div className="flex items-center p-3 border-b border-gray-100 last:border-0">
-            <div className="mr-3 text-indigo-600">•</div>
-            <div>
-              <p className="font-medium">Completed Calculus quiz</p>
-              <p className="text-sm text-gray-500">Yesterday, 4:15 PM</p>
-            </div>
-          </div>
-          <div className="flex items-center p-3 border-b border-gray-100 last:border-0">
-            <div className="mr-3 text-indigo-600">•</div>
-            <div>
-              <p className="font-medium">Uploaded Physics notes</p>
-              <p className="text-sm text-gray-500">Jan 5, 2026</p>
-            </div>
-          </div>
+          )}
         </div>
       </div>
 

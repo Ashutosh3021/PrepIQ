@@ -1,7 +1,7 @@
 from typing import Dict, List, Any, Optional, Tuple
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
@@ -137,7 +137,7 @@ class FocusAreaIdentifier(ClassificationModel):
         
         # Update model metadata
         self.is_trained = True
-        self.training_date = datetime.utcnow()
+        self.training_date = datetime.now(timezone.utc)
         self.metrics = metrics
         self.classes_ = np.unique(y_train)
         
