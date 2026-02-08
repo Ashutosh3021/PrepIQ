@@ -29,14 +29,15 @@ class Chatbot:
         try:
             genai.configure(api_key=api_key)
             # Test API connection with a simple request
-            test_model = genai.GenerativeModel('gemini-pro')
-            test_response = test_model.generate_content("Hello")
-            logger.info("Gemini API connection successful")
+            test_model = genai.GenerativeModel('gemini-1.5-flash')
+            # test_response = test_model.generate_content("Hello") # Skip actual call
+            logger.info("Gemini API connection configured")
+            self.model = test_model
         except Exception as e:
             logger.error(f"Gemini API connection failed: {str(e)}")
-            raise ValueError(f"Invalid GEMINI_API_KEY: {str(e)}")
-        
-        self.model = genai.GenerativeModel('gemini-pro')
+            # Don't raise, just log and set model to None
+            self.model = None
+            # raise ValueError(f"Invalid GEMINI_API_KEY: {str(e)}")
         self.conversation_memory = {}  # Store conversation history per user
         self.max_history_length = 10  # Keep last 10 messages
     

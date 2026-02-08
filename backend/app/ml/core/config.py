@@ -2,7 +2,7 @@
 
 import os
 from typing import Optional
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 
 
 class MLSettings(BaseSettings):
@@ -11,6 +11,7 @@ class MLSettings(BaseSettings):
     # Model paths
     ML_MODEL_PATH: str = os.getenv("ML_MODEL_PATH", "models/ml_models")
     ML_DATA_PATH: str = os.getenv("ML_DATA_PATH", "data/ml_data")
+    ML_TRAINING_DATA_PATH: str = os.getenv("ML_TRAINING_DATA_PATH", "data/ml_training")
     
     # Training configuration
     ML_TRAINING_EPOCHS: int = int(os.getenv("ML_TRAINING_EPOCHS", "100"))
@@ -32,6 +33,7 @@ class MLSettings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 # Global settings instance

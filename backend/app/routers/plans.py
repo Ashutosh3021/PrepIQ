@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from typing import Dict, Any
 from datetime import datetime, date, timedelta
@@ -13,7 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
-async def get_current_user(authorization: str = None):
+async def get_current_user(authorization: str = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization)
@@ -25,16 +25,16 @@ router = APIRouter(
 )
 
 @router.post("/generate", response_model=schemas.StudyPlanResponse)
-def generate_study_plan(
+async def generate_study_plan(
     plan_request: schemas.StudyPlanRequest,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     service = PrepIQService()
     try:
         result = service.generate_study_plan(
             db=db,
-            user_id=current_user.id,
+            user_id=current_user["id"],
             subject_id=plan_request.subject_id,
             start_date=plan_request.start_date,
             exam_date=plan_request.exam_date
@@ -63,12 +63,12 @@ def generate_study_plan(
 
 
 @router.get("/{user_id}", response_model=schemas.StudyPlanResponse)
-def get_current_study_plan(
+async def get_current_study_plan(
     user_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if current_user.id != user_id:
+    if current_user["id"] != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to access this study plan"
@@ -103,10 +103,10 @@ def get_current_study_plan(
 
 
 @router.put("/{plan_id}", response_model=schemas.StudyPlanUpdateResponse)
-def update_study_plan(
+async def update_study_plan(
     plan_id: str,
     plan_update: schemas.StudyPlanUpdate,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     service = PrepIQService()
@@ -114,13 +114,13 @@ def update_study_plan(
         result = service.update_study_plan_progress(
             db=db,
             plan_id=plan_id,
-            user_id=current_user.id,
+            user_id=current_user["id"],
             days_completed=plan_update.days_completed,
             on_track=plan_update.on_track
         )
         
         # Get the updated plan details
-        updated_plan = service.get_user_study_plan(db=db, user_id=current_user.id)
+        updated_plan = service.get_user_study_plan(db=db, user_id=current_user["id"])
         
         return {
             "message": result["message"],

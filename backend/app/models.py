@@ -6,7 +6,7 @@ from sqlalchemy.sql import func
 import uuid
 import os
 
-Base = declarative_base()
+from .database import Base
 
 # Check if we're using SQLite
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./prepiq_local.db")

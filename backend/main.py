@@ -88,12 +88,39 @@ def create_app() -> FastAPI:
         allowed_hosts=["*"]  # Configure properly for production
     )
     
+    # Import and add request size limiting middleware
+    from app.core.middleware import RequestSizeLimitMiddleware
+    app.add_middleware(
+        RequestSizeLimitMiddleware,
+        max_size=20 * 1024 * 1024  # 20MB max request size
+    )
+    
     # Add exception handlers
     app.add_exception_handler(Exception, prep_iq_exception_handler)
     app.add_exception_handler(422, validation_exception_handler)
     
-    # Include routers (to be implemented)
-    # app.include_router(api_router, prefix=settings.API_V1_STR)
+    # Include routers
+    from app.routers import auth, subjects, papers, predictions, chat, tests, analysis, plans, dashboard, questions, wizard
+    
+    # Create API router with version prefix
+    from fastapi import APIRouter
+    api_router = APIRouter()
+    
+    # Include all individual routers under the API v1 prefix
+    api_router.include_router(auth.router)
+    api_router.include_router(subjects.router)
+    api_router.include_router(papers.router)
+    api_router.include_router(predictions.router)
+    api_router.include_router(chat.router)
+    api_router.include_router(tests.router)
+    api_router.include_router(analysis.router)
+    api_router.include_router(plans.router)
+    api_router.include_router(dashboard.router)
+    api_router.include_router(questions.router)
+    api_router.include_router(wizard.router)
+    
+    # Include the main API router with version prefix
+    app.include_router(api_router, prefix=settings.API_V1_STR)
     
     # Health check endpoint
     @app.get("/health")

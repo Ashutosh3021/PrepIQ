@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import List
@@ -21,21 +21,23 @@ router = APIRouter(
 security = HTTPBearer()
 
 # Dependency for protected routes
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    return await get_current_user_from_token(f"Bearer {credentials.credentials}")
+async def get_current_user(authorization: str = Header(None)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header required")
+    return await get_current_user_from_token(authorization)
 
 @router.get("/stats")
-async def get_dashboard_stats(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+async def get_dashboard_stats(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get user dashboard statistics"""
     try:
-        # Get current user
-        user = await SupabaseAuthService.get_current_user(credentials.credentials, db)
+        # Get user's data
+        user = current_user
         
         # Get user's subjects count
-        subjects_count = db.query(models.Subject).filter(models.Subject.user_id == user.id).count()
+        subjects_count = db.query(models.Subject).filter(models.Subject.user_id == user["id"]).count()
         
         # Get predictions count
-        predictions_count = db.query(models.Prediction).filter(models.Prediction.user_id == user.id).count()
+        predictions_count = db.query(models.Prediction).filter(models.Prediction.user_id == user["id"]).count()
         
         # Mock data for other stats (would be calculated from actual data in production)
         completion_percentage = min(100, subjects_count * 25)  # Simple mock calculation
@@ -64,14 +66,23 @@ async def get_dashboard_stats(credentials: HTTPAuthorizationCredentials = Depend
             ]
         }
     except Exception as e:
+        import traceback
+        error_msg = f"Dashboard stats error: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        try:
+            with open("dashboard_error.log", "a") as f:
+                f.write(f"\n--- Error at {pd.Timestamp.now() if 'pd' in locals() else 'Unknown time'} ---\n")
+                f.write(error_msg)
+        except:
+            pass
         raise HTTPException(status_code=500, detail=f"Error fetching dashboard stats: {str(e)}")
 
 @router.get("/recent-activity")
-async def get_recent_activity(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+async def get_recent_activity(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get user's recent activity"""
     try:
-        # Get current user
-        user = await SupabaseAuthService.get_current_user(credentials.credentials, db)
+        # Get user's data
+        user = current_user
         
         # Mock recent activity data
         recent_activity = [
@@ -107,14 +118,17 @@ async def get_recent_activity(credentials: HTTPAuthorizationCredentials = Depend
         
         return recent_activity
     except Exception as e:
+        import traceback
+        print(f"Dashboard recent activity error: {str(e)}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error fetching recent activity: {str(e)}")
 
 @router.get("/progress")
-async def get_study_progress(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+async def get_study_progress(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get user's study progress data"""
     try:
-        # Get current user
-        user = await SupabaseAuthService.get_current_user(credentials.credentials, db)
+        # Get user's data
+        user = current_user
         
         # Mock progress data
         daily_progress = [
@@ -147,4 +161,7 @@ async def get_study_progress(credentials: HTTPAuthorizationCredentials = Depends
             "monthly": monthly_progress
         }
     except Exception as e:
+        import traceback
+        print(f"Dashboard progress error: {str(e)}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error fetching study progress: {str(e)}")

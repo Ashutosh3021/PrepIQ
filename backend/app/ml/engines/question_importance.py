@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timezone
 import re
 from collections import Counter
+import logging
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
@@ -11,14 +12,57 @@ from nltk.stem import WordNetLemmatizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.cluster import KMeans
-from transformers import AutoTokenizer, AutoModel
-import torch
-from sentence_transformers import SentenceTransformer
 import warnings
 warnings.filterwarnings('ignore')
 
 from ..core.base_model import BaseModel
 from ..core.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Lazy imports to prevent DLL errors
+_torch = None
+_transformers = None
+_sentence_transformers = None
+
+def _lazy_import_torch():
+    """Lazy import torch to prevent DLL errors on startup"""
+    global _torch
+    if _torch is None:
+        try:
+            import torch
+            _torch = torch
+            return torch
+        except Exception as e:
+            logger.warning(f"Failed to import torch: {e}")
+            return None
+    return _torch
+
+def _lazy_import_transformers():
+    """Lazy import transformers"""
+    global _transformers
+    if _transformers is None:
+        try:
+            from transformers import AutoTokenizer, AutoModel
+            _transformers = {'AutoTokenizer': AutoTokenizer, 'AutoModel': AutoModel}
+            return _transformers
+        except Exception as e:
+            logger.warning(f"Failed to import transformers: {e}")
+            return None
+    return _transformers
+
+def _lazy_import_sentence_transformers():
+    """Lazy import sentence_transformers"""
+    global _sentence_transformers
+    if _sentence_transformers is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            _sentence_transformers = SentenceTransformer
+            return SentenceTransformer
+        except Exception as e:
+            logger.warning(f"Failed to import sentence_transformers: {e}")
+            return None
+    return _sentence_transformers
 
 
 class EnhancedQuestionAnalyzer(BaseModel):
@@ -48,13 +92,21 @@ class EnhancedQuestionAnalyzer(BaseModel):
     def load_transformer_models(self):
         """Load transformer models for enhanced NLP capabilities."""
         try:
-            # Load sentence transformer for semantic similarity
-            self.sentence_transformer = SentenceTransformer('all-MiniLM-L6-v2')
+            # Load sentence transformer for semantic similarity (lazy)
+            SentenceTransformer = _lazy_import_sentence_transformers()
+            if SentenceTransformer:
+                self.sentence_transformer = SentenceTransformer('all-MiniLM-L6-v2')
+            else:
+                raise ImportError("SentenceTransformer not available")
             
-            # Load BERT tokenizer and model for advanced analysis
-            model_name = 'bert-base-uncased'
-            self.transformer_tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.transformer_model = AutoModel.from_pretrained(model_name)
+            # Load BERT tokenizer and model for advanced analysis (lazy)
+            transformers = _lazy_import_transformers()
+            if transformers:
+                model_name = 'bert-base-uncased'
+                self.transformer_tokenizer = transformers['AutoTokenizer'].from_pretrained(model_name)
+                self.transformer_model = transformers['AutoModel'].from_pretrained(model_name)
+            else:
+                raise ImportError("Transformers not available")
             
             self.is_transformer_loaded = True
             self.logger.info("Transformer models loaded successfully")

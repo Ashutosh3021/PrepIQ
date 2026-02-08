@@ -10,10 +10,10 @@ import mlflow
 from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
 from sklearn.metrics import make_scorer
 
-from .base_model import BaseModel
-from .config import settings
-from .logging import get_structured_logger
-from .training.data_pipeline import DataPipeline
+from ..core.base_model import BaseModel
+from ..core.config import settings
+from ...core.logging import get_structured_logger
+from .data_pipeline import DataPipeline
 
 
 class ModelTrainer:
@@ -23,7 +23,7 @@ class ModelTrainer:
         self.logger = get_structured_logger("ml.model_trainer")
         self.data_pipeline = DataPipeline()
         self.models_dir = Path(settings.ML_MODEL_PATH)
-        self.models_dir.mkdir(exist_ok=True)
+        self.models_dir.mkdir(parents=True, exist_ok=True)
         self.training_history = []
         
         # Initialize MLflow if available

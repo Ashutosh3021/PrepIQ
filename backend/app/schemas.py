@@ -57,6 +57,13 @@ class UserResponse(UserBase):
     class Config:
         from_attributes = True
 
+class WizardStepResponse(BaseModel):
+    """Response for wizard steps - doesn't require created_at"""
+    id: str
+    email: str
+    full_name: Optional[str] = None
+    access_token: Optional[str] = None
+
 class Token(BaseModel):
     access_token: str
     token_type: str

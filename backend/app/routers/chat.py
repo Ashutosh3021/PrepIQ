@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -13,7 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
-async def get_current_user(authorization: str = None):
+async def get_current_user(authorization: str = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization)
@@ -24,15 +24,15 @@ router = APIRouter(
 )
 
 @router.post("/message", response_model=schemas.ChatResponse)
-def send_message(
+async def send_message(
     chat_request: schemas.ChatRequest,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify subject belongs to user
     subject = db.query(models.Subject).filter(
         models.Subject.id == chat_request.subject_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not subject:
@@ -45,7 +45,7 @@ def send_message(
     service = PrepIQService()
     result = service.chat_with_bot(
         db=db,
-        user_id=current_user.id,
+        user_id=current_user["id"],
         subject_id=chat_request.subject_id,
         message=chat_request.message
     )
@@ -90,17 +90,17 @@ def send_message(
     }
 
 @router.get("/history/{subject_id}", response_model=List[schemas.ChatHistoryResponse])
-def get_chat_history(
+async def get_chat_history(
     subject_id: str,
     limit: int = 50,
     offset: int = 0,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify subject belongs to user
     subject = db.query(models.Subject).filter(
         models.Subject.id == subject_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not subject:
@@ -112,7 +112,7 @@ def get_chat_history(
     # Get chat history for the subject
     chat_history = db.query(models.ChatHistory).filter(
         models.ChatHistory.subject_id == subject_id,
-        models.ChatHistory.user_id == current_user.id
+        models.ChatHistory.user_id == current_user["id"]
     ).order_by(models.ChatHistory.created_at.desc()).offset(offset).limit(limit).all()
     
     # Format the response
@@ -128,15 +128,15 @@ def get_chat_history(
     return history_list
 
 @router.delete("/clear")
-def clear_chat_history(
+async def clear_chat_history(
     subject_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify subject belongs to user
     subject = db.query(models.Subject).filter(
         models.Subject.id == subject_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not subject:
@@ -148,7 +148,7 @@ def clear_chat_history(
     # Delete chat history for the subject
     db.query(models.ChatHistory).filter(
         models.ChatHistory.subject_id == subject_id,
-        models.ChatHistory.user_id == current_user.id
+        models.ChatHistory.user_id == current_user["id"]
     ).delete()
     
     db.commit()

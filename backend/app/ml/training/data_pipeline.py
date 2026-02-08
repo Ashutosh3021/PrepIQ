@@ -7,9 +7,9 @@ import json
 import logging
 from pathlib import Path
 
-from .base_model import BaseModel
-from .config import settings
-from .logging import get_structured_logger
+from ..core.base_model import BaseModel
+from ..core.config import settings
+from ...core.logging import get_structured_logger
 
 
 class DataPipeline:
@@ -18,7 +18,7 @@ class DataPipeline:
     def __init__(self):
         self.logger = get_structured_logger("ml.data_pipeline")
         self.data_dir = Path(settings.ML_TRAINING_DATA_PATH)
-        self.data_dir.mkdir(exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
     
     def load_data(self, data_source: str, data_type: str = "csv") -> pd.DataFrame:
         """Load data from various sources."""

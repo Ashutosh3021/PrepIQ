@@ -3,8 +3,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routers import auth, subjects, papers, predictions, chat, tests, analysis, plans, dashboard, questions, wizard
+from .database import create_tables
 
 app = FastAPI(title="PrepIQ Backend API", version="1.0.0")
+
+# Initialize database tables on startup
+create_tables()
 
 # Get allowed origins from environment variable, default to localhost for development
 allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000,http://localhost:3001,http://localhost:3002,http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:3002").split(",")

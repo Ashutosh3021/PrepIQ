@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Header
 from sqlalchemy.orm import Session
 from typing import List
 import os
@@ -22,7 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
-async def get_current_user(authorization: str = None):
+async def get_current_user(authorization: str = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization)
@@ -55,7 +55,7 @@ async def upload_paper(
     file: UploadFile = File(...),
     subject_id: str = None,
     exam_year: int = None,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Validate file type
@@ -100,7 +100,7 @@ async def upload_paper(
     # Validate subject exists and belongs to user
     subject = db.query(models.Subject).filter(
         models.Subject.id == subject_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not subject:
@@ -110,7 +110,7 @@ async def upload_paper(
         )
     
     # Generate unique filename to avoid conflicts
-    unique_filename = f"{uuid.uuid4()}_{current_user.id}_{subject_id}_{file.filename}"
+    unique_filename = f"{uuid.uuid4()}_{current_user['id']}_{subject_id}_{file.filename}"
     
     # Upload file to Supabase Storage
     try:
@@ -185,15 +185,15 @@ async def upload_paper(
         )
 
 @router.get("/{subject_id}", response_model=List[schemas.PaperResponse])
-def get_papers(
+async def get_papers(
     subject_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify subject belongs to user
     subject = db.query(models.Subject).filter(
         models.Subject.id == subject_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not subject:
@@ -215,15 +215,15 @@ def get_papers(
     return papers
 
 @router.get("/{paper_id}/preview", response_model=schemas.PaperPreviewResponse)
-def get_paper_preview(
+async def get_paper_preview(
     paper_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify paper belongs to user
     paper = db.query(models.QuestionPaper).join(models.Subject).filter(
         models.QuestionPaper.id == paper_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not paper:
@@ -252,15 +252,15 @@ def get_paper_preview(
     }
 
 @router.delete("/{paper_id}")
-def delete_paper(
+async def delete_paper(
     paper_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify paper belongs to user
     paper = db.query(models.QuestionPaper).join(models.Subject).filter(
         models.QuestionPaper.id == paper_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not paper:
@@ -285,15 +285,15 @@ def delete_paper(
 
 
 @router.get("/upload-progress/{paper_id}", response_model=schemas.UploadProgressResponse)
-def get_upload_progress(
+async def get_upload_progress(
     paper_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify paper belongs to user
     paper = db.query(models.QuestionPaper).join(models.Subject).filter(
         models.QuestionPaper.id == paper_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not paper:

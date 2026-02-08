@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -13,7 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
-async def get_current_user(authorization: str = None):
+async def get_current_user(authorization: str = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization)
@@ -24,15 +24,15 @@ router = APIRouter(
 )
 
 @router.post("/generate", response_model=schemas.PredictionGenerationResponse)
-def generate_prediction(
+async def generate_prediction(
     prediction_request: schemas.PredictionRequest,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify subject belongs to user
     subject = db.query(models.Subject).filter(
         models.Subject.id == prediction_request.subject_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not subject:
@@ -56,7 +56,7 @@ def generate_prediction(
     # Create prediction record
     prediction = models.Prediction(
         subject_id=prediction_request.subject_id,
-        user_id=current_user.id,
+        user_id=current_user["id"],
         total_questions=0,  # Will be updated after generation
         total_predicted_marks=0,  # Will be updated after generation
         processing_status="generating"
@@ -68,7 +68,7 @@ def generate_prediction(
     # Generate predictions using the service
     service = PrepIQService()
     try:
-        result = service.generate_predictions(db, prediction_request.subject_id, current_user.id)
+        result = service.generate_predictions(db, prediction_request.subject_id, current_user["id"])
         
         # Update the prediction record with results
         prediction.predicted_questions_json = str(result.get("predictions", []))
@@ -95,9 +95,9 @@ def generate_prediction(
         )
 
 @router.get("/{prediction_id}", response_model=schemas.PredictionResponse)
-def get_prediction(
+async def get_prediction(
     prediction_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     service = PrepIQService()
@@ -105,7 +105,7 @@ def get_prediction(
         result = service.get_prediction(
             db=db,
             prediction_id=prediction_id,
-            user_id=current_user.id
+            user_id=current_user["id"]
         )
         
         return {
@@ -133,9 +133,9 @@ def get_prediction(
         )
 
 @router.get("/{subject_id}/latest", response_model=schemas.PredictionResponse)
-def get_latest_prediction(
+async def get_latest_prediction(
     subject_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     service = PrepIQService()
@@ -143,7 +143,7 @@ def get_latest_prediction(
         result = service.get_latest_prediction(
             db=db,
             subject_id=subject_id,
-            user_id=current_user.id
+            user_id=current_user["id"]
         )
         
         return {
@@ -171,16 +171,16 @@ def get_latest_prediction(
         )
 
 @router.put("/{prediction_id}")
-def update_prediction(
+async def update_prediction(
     prediction_id: str,
     prediction_update: schemas.PredictionUpdate,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify prediction belongs to user
     prediction = db.query(models.Prediction).join(models.Subject).filter(
         models.Prediction.id == prediction_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not prediction:

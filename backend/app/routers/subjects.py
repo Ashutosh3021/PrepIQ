@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from typing import List
 import sys
@@ -16,22 +16,22 @@ router = APIRouter(
 )
 
 # Dependency for protected routes
-async def get_current_user(authorization: str = None):
+async def get_current_user(authorization: str = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization)
 
 @router.get("/", response_model=List[schemas.SubjectResponse])
-def get_subjects(
+async def get_subjects(
     skip: int = 0, 
     limit: int = 100, 
     semester: int = None,
     year: str = None,
     search: str = None,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    query = db.query(models.Subject).filter(models.Subject.user_id == current_user.id)
+    query = db.query(models.Subject).filter(models.Subject.user_id == current_user["id"])
     
     if semester:
         query = query.filter(models.Subject.semester == semester)
@@ -55,13 +55,13 @@ def get_subjects(
     return subjects
 
 @router.post("/", response_model=schemas.SubjectResponse)
-def create_subject(
+async def create_subject(
     subject: schemas.SubjectCreate, 
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     db_subject = models.Subject(
-        user_id=current_user.id,
+        user_id=current_user["id"],
         name=subject.name,
         code=subject.code,
         semester=subject.semester,
@@ -77,14 +77,14 @@ def create_subject(
     return db_subject
 
 @router.get("/{subject_id}", response_model=schemas.SubjectResponse)
-def get_subject(
+async def get_subject(
     subject_id: str, 
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     subject = db.query(models.Subject).filter(
         models.Subject.id == subject_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not subject:
@@ -105,15 +105,15 @@ def get_subject(
     return subject
 
 @router.put("/{subject_id}", response_model=schemas.SubjectResponse)
-def update_subject(
+async def update_subject(
     subject_id: str,
     subject_update: schemas.SubjectUpdate,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     subject = db.query(models.Subject).filter(
         models.Subject.id == subject_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not subject:
@@ -132,14 +132,14 @@ def update_subject(
     return subject
 
 @router.delete("/{subject_id}")
-def delete_subject(
+async def delete_subject(
     subject_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     subject = db.query(models.Subject).filter(
         models.Subject.id == subject_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not subject:

@@ -1,5 +1,5 @@
 # Core FastAPI and web framework
-fastapi==0.115.0
+fastapi==0.115.0  # Supports both Pydantic v1 and v2
 uvicorn[standard]==0.32.0
 python-multipart==0.0.12
 
@@ -11,22 +11,26 @@ supabase==2.6.0
 # Authentication and Security
 passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0
-pydantic-settings==2.6.1
+pydantic-settings==2.0.3  # Compatible version with Pydantic 2.x
 
-# Machine Learning and Data Science (lightweight)
-scikit-learn==1.5.0
-numpy==1.26.4
-pandas==2.2.3
-xgboost==2.1.2
-imbalanced-learn==0.12.4
+# Machine Learning and Data Science (minimal compatible set)
+scikit-learn==1.3.0
+numpy==1.24.3
+pandas==1.5.3
 
-# Natural Language Processing
-nltk==3.9.1
+# Natural Language Processing and ML Models
+nltk==3.8.1
+# Bytez API for all ML model inference (no local PyTorch required)
+bytez>=0.1.0
+# Optional: spaCy for local NLP (not required if using Bytez)
+spacy==3.7.5  # Compatible with Pydantic 2.0.3
+# PyTorch is now optional - only needed if not using Bytez
+# transformers, torch, sentence-transformers are optional when using Bytez
 
 # Data Processing and Utilities
-joblib==1.4.2
-pyyaml==6.0.2
-tenacity==8.5.0
+joblib==1.2.0
+pyyaml==6.0
+tenacity==8.2.2
 
 # Configuration and Environment
 python-dotenv==1.0.1

@@ -18,7 +18,16 @@ export default function LoginPage() {
     setError('');
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/login`, {
+      // Get API URL with fallback to default
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      
+      if (!apiUrl) {
+        setError('API URL not configured. Please set NEXT_PUBLIC_API_URL in your .env.local file.');
+        setLoading(false);
+        return;
+      }
+
+      const response = await fetch(`${apiUrl}/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -26,7 +35,14 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await response.json();
+      // Check if response is ok before parsing JSON
+      let data;
+      try {
+        data = await response.json();
+      } catch (jsonError) {
+        // If JSON parsing fails, it might be a network error
+        throw new Error('Invalid response from server. Please check if the backend is running.');
+      }
 
       if (response.ok) {
         // Store access token in localStorage or cookie
@@ -34,7 +50,8 @@ export default function LoginPage() {
         
         // Check if user has completed the wizard
         try {
-          const wizardResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/wizard/status`, {
+          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+          const wizardResponse = await fetch(`${apiUrl}/wizard/status`, {
             headers: {
               'Authorization': `Bearer ${data.access_token}`
             }
@@ -80,12 +97,19 @@ export default function LoginPage() {
       }
     } catch (err: any) {
       // Handle network errors and other exceptions
-      if (err.name === 'TypeError' && err.message.includes('fetch')) {
-        setError('Failed to connect to the server. Please check your internet connection and make sure the backend server is running.');
+      console.error('Login error:', err);
+      
+      if (err.name === 'TypeError' && (err.message.includes('fetch') || err.message.includes('Failed to fetch'))) {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        setError(`Failed to connect to the backend server at ${apiUrl}. Please ensure:
+1. The backend server is running (python backend/start_server.py)
+2. The API URL is correct in your .env.local file
+3. CORS is properly configured`);
+      } else if (err.message) {
+        setError(err.message);
       } else {
         setError('An unexpected error occurred. Please try again.');
       }
-      console.error('Login error:', err);
     } finally {
       setLoading(false);
     }

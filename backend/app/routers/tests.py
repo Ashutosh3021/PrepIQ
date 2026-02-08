@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from typing import List
 import uuid
@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
-async def get_current_user(authorization: str = None):
+async def get_current_user(authorization: str = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization)
@@ -25,15 +25,15 @@ router = APIRouter(
 )
 
 @router.post("/generate", response_model=schemas.MockTestResponse)
-def generate_mock_test(
+async def generate_mock_test(
     test_request: schemas.MockTestRequest,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify subject belongs to user
     subject = db.query(models.Subject).filter(
         models.Subject.id == test_request.subject_id,
-        models.Subject.user_id == current_user.id
+        models.Subject.user_id == current_user["id"]
     ).first()
     
     if not subject:
@@ -44,7 +44,7 @@ def generate_mock_test(
     
     # Create mock test record
     mock_test = models.MockTest(
-        user_id=current_user.id,
+        user_id=current_user["id"],
         subject_id=test_request.subject_id,
         total_questions=test_request.num_questions,
         total_marks=100,  # Calculate based on question marks
@@ -81,16 +81,16 @@ def generate_mock_test(
     }
 
 @router.post("/{test_id}/submit", response_model=schemas.TestSubmissionResponse)
-def submit_test(
+async def submit_test(
     test_id: str,
     submission: schemas.TestSubmission,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify test belongs to user
     test = db.query(models.MockTest).filter(
         models.MockTest.id == test_id,
-        models.MockTest.user_id == current_user.id
+        models.MockTest.user_id == current_user["id"]
     ).first()
     
     if not test:
@@ -128,13 +128,13 @@ def submit_test(
     }
 
 @router.get("/", response_model=List[schemas.MockTestResponse])
-def get_user_tests(
-    current_user: models.User = Depends(get_current_user),
+async def get_user_tests(
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all tests for the current user"""
     tests = db.query(models.MockTest).filter(
-        models.MockTest.user_id == current_user.id
+        models.MockTest.user_id == current_user["id"]
     ).all()
     
     return [
@@ -152,15 +152,15 @@ def get_user_tests(
     ]
 
 @router.get("/{test_id}/results", response_model=schemas.TestResultsResponse)
-def get_test_results(
+async def get_test_results(
     test_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Verify test belongs to user
     test = db.query(models.MockTest).filter(
         models.MockTest.id == test_id,
-        models.MockTest.user_id == current_user.id
+        models.MockTest.user_id == current_user["id"]
     ).first()
     
     if not test:

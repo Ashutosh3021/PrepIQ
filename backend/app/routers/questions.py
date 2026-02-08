@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from typing import List
 import uuid
@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
-async def get_current_user(authorization: str = None):
+async def get_current_user(authorization: str = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization)
@@ -25,15 +25,15 @@ router = APIRouter(
 )
 
 @router.get("/important", response_model=List[schemas.ImportantQuestion])
-def get_important_questions(
-    current_user: models.User = Depends(get_current_user),
+async def get_important_questions(
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get important/high-probability questions for the user's subjects"""
     try:
         # Get user's subjects
         subjects = db.query(models.Subject).filter(
-            models.Subject.user_id == current_user.id
+            models.Subject.user_id == current_user["id"]
         ).all()
         
         if not subjects:
@@ -106,12 +106,12 @@ def get_important_questions(
 
 
 @router.get("/search", response_model=List[schemas.Question])
-def search_questions(
+async def search_questions(
     subject: str = None,
     topic: str = None,
     difficulty: str = None,
     limit: int = 10,
-    current_user: models.User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Search questions based on filters"""

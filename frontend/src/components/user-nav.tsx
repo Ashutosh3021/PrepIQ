@@ -33,7 +33,9 @@ export function UserNav() {
       try {
         const token = localStorage.getItem('access_token');
         if (token) {
-          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/me`, {
+          // Get API URL with fallback to default
+          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+          const response = await fetch(`${apiUrl}/auth/me`, {
             headers: {
               'Authorization': `Bearer ${token}`
             }

@@ -35,7 +35,10 @@ export default function ProfilePage() {
           return;
         }
 
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/profile`, {
+        // Get API URL with fallback to default
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        
+        const response = await fetch(`${apiUrl}/auth/profile`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
