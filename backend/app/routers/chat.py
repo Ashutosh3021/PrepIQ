@@ -53,35 +53,68 @@ async def send_message(
     # Get the bot response
     bot_response = result["response"]
     
-    # Find related questions from the subject's papers using the service
-    # This part would need to be added to the service layer
+    # Find related questions from the subject's papers
     related_questions = db.query(models.Question).join(
         models.QuestionPaper
     ).filter(
         models.QuestionPaper.subject_id == chat_request.subject_id
-    ).limit(2).all()
+    ).limit(3).all()
     
     # Prepare response with related questions
     related_questions_list = []
     for q in related_questions:
+        # Get all years this question (or similar) appeared
+        appeared_years = []
+        if q.paper and q.paper.exam_year:
+            appeared_years.append(q.paper.exam_year)
+        
+        # Find similar questions and their years
+        if q.similar_question_ids:
+            similar_questions = db.query(models.Question).join(
+                models.QuestionPaper
+            ).filter(
+                models.Question.id.in_(q.similar_question_ids)
+            ).all()
+            
+            for sq in similar_questions:
+                if sq.paper and sq.paper.exam_year and sq.paper.exam_year not in appeared_years:
+                    appeared_years.append(sq.paper.exam_year)
+        
+        # Sort years
+        appeared_years.sort()
+        
         related_questions_list.append({
             "text": q.question_text[:100] + "..." if len(q.question_text) > 100 else q.question_text,
             "marks": q.marks,
-            "appeared_years": [2022, 2024],  # Mock data
-            "probability": "high"
+            "appeared_years": appeared_years,
+            "probability": "high" if q.is_repeated else "medium"
         })
+    
+    # Get real references from papers
+    references = []
+    recent_papers = db.query(models.QuestionPaper).filter(
+        models.QuestionPaper.subject_id == chat_request.subject_id
+    ).order_by(models.QuestionPaper.exam_year.desc()).limit(2).all()
+    
+    for paper in recent_papers:
+        if paper.exam_year:
+            # Get a sample question from this paper
+            sample_q = db.query(models.Question).filter(
+                models.Question.paper_id == paper.id
+            ).first()
+            
+            if sample_q:
+                references.append({
+                    "type": "paper",
+                    "paper_year": paper.exam_year,
+                    "question": sample_q.question_text[:100] + "..." if len(sample_q.question_text) > 100 else sample_q.question_text
+                })
     
     return {
         "message_id": result["message_id"],
         "response": bot_response,
         "related_questions": related_questions_list,
-        "references": [
-            {
-                "type": "paper",
-                "paper_year": 2024,
-                "question": "Sample related question from 2024 paper"
-            }
-        ],
+        "references": references,
         "suggested_actions": [
             "Add to revision",
             "Practice similar questions",

@@ -4,7 +4,7 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: false, // Set to true only if you have blocking type errors
   },
-  
+
   // Image optimization (unoptimized for static export, remove if using Next.js Image Optimization)
   images: {
     unoptimized: true,
@@ -16,12 +16,23 @@ const nextConfig = {
       },
     ],
   },
-  
+
   // External packages that need server-side execution
   serverExternalPackages: ['sharp'],
-  
+
   // Security headers for all routes
   async headers() {
+    const isDev = process.env.NODE_ENV === 'development';
+
+    // Development: Allow localhost for API calls
+    // Production: Only allow production domains
+    const connectSrc = isDev
+      ? "connect-src 'self' http://localhost:8000 http://127.0.0.1:8000 https://*.supabase.co https://*.onrender.com"
+      : "connect-src 'self' https://*.supabase.co https://*.onrender.com";
+
+    // Vercel Web Analytics script source
+    const scriptSrc = "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://va.vercel-scripts.com";
+
     return [
       {
         source: '/(.*)',
@@ -54,11 +65,11 @@ const nextConfig = {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
+              scriptSrc,
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' blob: data: https:",
               "font-src 'self'",
-              "connect-src 'self' https://*.supabase.co https://*.onrender.com",
+              connectSrc,
               "frame-ancestors 'none'",
               "form-action 'self'",
               "base-uri 'self'",
