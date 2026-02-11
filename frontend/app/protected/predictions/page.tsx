@@ -8,25 +8,11 @@ import { Brain, TrendingUp, AlertTriangle, CheckCircle2, Info, BarChart3 } from 
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, XAxis, YAxis, ResponsiveContainer } from "recharts"
 
-// Performance Trend Data (65% to 88%)
-const performanceData = [
-  { month: "Jan", score: 65 },
-  { month: "Feb", score: 68 },
-  { month: "Mar", score: 75 },
-  { month: "Apr", score: 72 },
-  { month: "May", score: 84 },
-  { month: "Jun", score: 88 },
-]
+// Performance Trend Data - will be populated from API
+const performanceData: Array<{ month: string; score: number }> = []
 
-// Topic Weightage Data (45% to 95% with dip)
-const topicWeightageData = [
-  { month: "Jan", probability: 55 },
-  { month: "Feb", probability: 58 },
-  { month: "Mar", probability: 62 },
-  { month: "Apr", probability: 55 }, // Dip
-  { month: "May", probability: 85 },
-  { month: "Jun", probability: 95 },
-]
+// Topic Weightage Data - will be populated from API
+const topicWeightageData: Array<{ month: string; probability: number }> = []
 
 const chartConfig = {
   score: {
@@ -39,12 +25,15 @@ const chartConfig = {
   },
 } satisfies ChartConfig
 
-const topics = [
-  { name: "Vector Calculus", probability: 95, weight: "High", status: "Focus Needed" },
-  { name: "Partial Derivatives", probability: 82, weight: "Medium", status: "Review" },
-  { name: "Multiple Integrals", probability: 78, weight: "High", status: "Mastered" },
-  { name: "Line Integrals", probability: 45, weight: "Low", status: "Optional" },
-]
+// Topics will be populated from API
+interface Topic {
+  name: string
+  probability: number
+  weight: "High" | "Medium" | "Low"
+  status: "Focus Needed" | "Review" | "Mastered" | "Optional"
+}
+
+const topics: Topic[] = []
 
 export default function PredictionsPage() {
   return (

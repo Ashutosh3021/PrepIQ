@@ -8,7 +8,7 @@ const ChatPage = () => {
     {
       id: 1,
       sender: 'bot',
-      text: 'Hi John! 👋 Ready to study smarter? I\'m your Study Buddy, here to help with Linear Algebra.',
+      text: 'Hi there! 👋 Ready to study smarter? I\'m your Study Buddy, here to help with your exam preparation.',
       timestamp: new Date().toISOString()
     },
     {
@@ -108,9 +108,8 @@ const ChatPage = () => {
           <div className="mt-auto">
             <h3 className="font-semibold mb-2">Saved from Chat</h3>
             <ul className="text-sm space-y-1">
-              <li className="text-gray-600">Jan 5, 10:30 AM - Study plan for 10 days</li>
-              <li className="text-gray-600">Jan 5, 9:15 AM - Concept explanation: Matrices</li>
-              <li className="text-blue-600 hover:underline cursor-pointer">View all</li>
+              <li className="text-gray-400">No saved conversations yet</li>
+              <li className="text-blue-600 hover:underline cursor-pointer">Start chatting to save</li>
             </ul>
           </div>
         </div>
@@ -126,8 +125,6 @@ const ChatPage = () => {
                 <div className="flex items-center text-sm text-gray-500">
                   <span className="w-2 h-2 bg-green-500 rounded-full mr-1"></span>
                   <span>Online • Ready to help</span>
-                  <span className="mx-2">•</span>
-                  <span>Linear Algebra</span>
                 </div>
               </div>
             </div>
@@ -199,7 +196,7 @@ const ChatPage = () => {
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   onKeyPress={handleKeyPress}
-                  placeholder="Ask me anything about Linear Algebra..."
+                  placeholder="Ask me anything about your subjects..."
                   className="w-full p-3 border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-teal-300"
                   rows={2}
                 />

@@ -35,9 +35,15 @@ export default function SignupPage() {
 
     try {
       // Get API URL with fallback to default
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      let apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      // Remove trailing slash if present to avoid double slashes
+      apiUrl = apiUrl.replace(/\/$/, '');
+      const fullUrl = `${apiUrl}/auth/signup`;
       
-      const response = await fetch(`${apiUrl}/auth/signup`, {
+      console.log('🚀 Attempting to connect to:', fullUrl);
+      console.log('📦 Form data:', formData);
+      
+      const response = await fetch(fullUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -45,7 +51,9 @@ export default function SignupPage() {
         body: JSON.stringify(formData),
       });
 
+      console.log('✅ Response received:', response.status);
       const data = await response.json();
+      console.log('📄 Response data:', data);
 
       if (response.ok) {
         setSuccess(true);
@@ -75,14 +83,21 @@ export default function SignupPage() {
         }
         setError(errorMessage);
       }
-    } catch (err: any) {
+    } catch (err) {
       // Handle network errors and other exceptions
-      if (err.name === 'TypeError' && err.message.includes('fetch')) {
-        setError('Failed to connect to the server. Please check your internet connection and make sure the backend server is running.');
+      console.error('❌ Signup error details:', err);
+      const error = err as Error;
+      console.error('Error name:', error.name);
+      console.error('Error message:', error.message);
+      
+      if (error.name === 'TypeError' && error.message?.includes('fetch')) {
+        setError(`Failed to connect to the server at ${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}. Please check:
+1. Backend server is running (python start_server.py)
+2. No firewall/antivirus blocking the connection
+3. Correct API URL in .env.local file`);
       } else {
-        setError('An unexpected error occurred. Please try again.');
+        setError(`Error: ${error.message || 'An unexpected error occurred'}`);
       }
-      console.error('Signup error:', err);
     } finally {
       setLoading(false);
     }

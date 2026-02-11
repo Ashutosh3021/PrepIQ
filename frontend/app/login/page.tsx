@@ -83,8 +83,8 @@ export default function LoginPage() {
             errorMessage = data.detail;
           } else if (Array.isArray(data.detail)) {
             // Handle validation errors array
-            errorMessage = data.detail.map((err: any) => err.msg).join(', ');
-          } else if (typeof data.detail === 'object' && data.detail.msg) {
+            errorMessage = data.detail.map((err: { msg?: string }) => err.msg).filter(Boolean).join(', ');
+          } else if (typeof data.detail === 'object' && data.detail?.msg) {
             // Handle single validation error object
             errorMessage = data.detail.msg;
           } else {
@@ -95,18 +95,19 @@ export default function LoginPage() {
         }
         setError(errorMessage);
       }
-    } catch (err: any) {
+    } catch (err) {
       // Handle network errors and other exceptions
       console.error('Login error:', err);
       
-      if (err.name === 'TypeError' && (err.message.includes('fetch') || err.message.includes('Failed to fetch'))) {
+      const error = err as Error;
+      if (error.name === 'TypeError' && (error.message?.includes('fetch') || error.message?.includes('Failed to fetch'))) {
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
         setError(`Failed to connect to the backend server at ${apiUrl}. Please ensure:
 1. The backend server is running (python backend/start_server.py)
 2. The API URL is correct in your .env.local file
 3. CORS is properly configured`);
-      } else if (err.message) {
-        setError(err.message);
+      } else if (error.message) {
+        setError(error.message);
       } else {
         setError('An unexpected error occurred. Please try again.');
       }

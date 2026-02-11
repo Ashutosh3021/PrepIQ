@@ -12,7 +12,7 @@ const initialMessages = [
   {
     id: "1",
     role: "assistant",
-    content: "Hi! I'm your PrepIQ AI Tutor. I've analyzed your Calculus III materials. How can I help you study today?",
+    content: "Hi! I'm your PrepIQ AI Tutor. I'm here to help you prepare for your exams. How can I assist you today?",
   },
 ]
 
@@ -73,8 +73,8 @@ export default function ChatPage() {
                     </>
                   ) : (
                     <>
-                      <AvatarImage src="/placeholder-user.jpg" />
-                      <AvatarFallback>JD</AvatarFallback>
+                      <AvatarImage src="" />
+                      <AvatarFallback>U</AvatarFallback>
                     </>
                   )}
                 </Avatar>

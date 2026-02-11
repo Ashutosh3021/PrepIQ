@@ -1,0 +1,53 @@
+# Render Blueprint for PrepIQ Backend
+# This file configures the Render deployment automatically
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: prepiq-backend
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: cd backend && pip install -r requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: false
+      # Database - Set in Render Dashboard (sensitive)
+      - key: DATABASE_URL
+        sync: false
+      # Supabase - Set in Render Dashboard (sensitive)
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      # Security - Set in Render Dashboard (sensitive)
+      - key: JWT_SECRET
+        generateValue: true  # Auto-generate if not set
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: 1440
+      # CORS - Set in Render Dashboard
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # AI - Set in Render Dashboard (sensitive)
+      - key: GEMINI_API_KEY
+        sync: false
+      # Logging
+      - key: LOG_LEVEL
+        value: INFO
+      # File Upload
+      - key: MAX_FILE_SIZE
+        value: 10485760
+      - key: UPLOAD_FOLDER
+        value: ./uploads
+    disk:
+      name: uploads
+      mountPath: /opt/render/project/src/backend/uploads
+      sizeGB: 1

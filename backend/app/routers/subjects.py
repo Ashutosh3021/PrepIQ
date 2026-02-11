@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List
 import sys
 import os
@@ -31,28 +32,63 @@ async def get_subjects(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    query = db.query(models.Subject).filter(models.Subject.user_id == current_user["id"])
-    
-    if semester:
-        query = query.filter(models.Subject.semester == semester)
-    if year:
-        query = query.filter(models.Subject.academic_year == year)
-    if search:
-        query = query.filter(models.Subject.name.contains(search))
-    
-    subjects = query.offset(skip).limit(limit).all()
-    
-    # Add paper counts to each subject
-    for subject in subjects:
-        subject.papers_uploaded = db.query(models.QuestionPaper).filter(
-            models.QuestionPaper.subject_id == subject.id
-        ).count()
+    """Get all subjects for the current user with counts (optimized query)"""
+    try:
+        # Use subqueries to count papers and predictions in a single query
+        papers_count = (
+            db.query(
+                models.QuestionPaper.subject_id,
+                func.count(models.QuestionPaper.id).label("count")
+            )
+            .group_by(models.QuestionPaper.subject_id)
+            .subquery()
+        )
         
-        subject.predictions_generated = db.query(models.Prediction).filter(
-            models.Prediction.subject_id == subject.id
-        ).count()
-    
-    return subjects
+        predictions_count = (
+            db.query(
+                models.Prediction.subject_id,
+                func.count(models.Prediction.id).label("count")
+            )
+            .group_by(models.Prediction.subject_id)
+            .subquery()
+        )
+        
+        # Main query with joined counts
+        query = (
+            db.query(
+                models.Subject,
+                func.coalesce(papers_count.c.count, 0).label("papers_count"),
+                func.coalesce(predictions_count.c.count, 0).label("predictions_count")
+            )
+            .outerjoin(papers_count, models.Subject.id == papers_count.c.subject_id)
+            .outerjoin(predictions_count, models.Subject.id == predictions_count.c.subject_id)
+            .filter(models.Subject.user_id == current_user["id"])
+        )
+        
+        # Apply filters
+        if semester:
+            query = query.filter(models.Subject.semester == semester)
+        if year:
+            query = query.filter(models.Subject.academic_year == year)
+        if search:
+            query = query.filter(models.Subject.name.ilike(f"%{search}%"))
+        
+        # Execute query
+        results = query.offset(skip).limit(limit).all()
+        
+        # Convert results to response model
+        subjects = []
+        for subject, papers_count_val, predictions_count_val in results:
+            subject.papers_uploaded = papers_count_val
+            subject.predictions_generated = predictions_count_val
+            subjects.append(subject)
+        
+        return subjects
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch subjects: {str(e)}"
+        )
 
 @router.post("/", response_model=schemas.SubjectResponse)
 async def create_subject(
@@ -60,21 +96,33 @@ async def create_subject(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    db_subject = models.Subject(
-        user_id=current_user["id"],
-        name=subject.name,
-        code=subject.code,
-        semester=subject.semester,
-        total_marks=subject.total_marks,
-        exam_date=subject.exam_date,
-        exam_duration_minutes=subject.exam_duration_minutes,
-        syllabus_json=subject.syllabus_json
-    )
-    db.add(db_subject)
-    db.commit()
-    db.refresh(db_subject)
-    
-    return db_subject
+    """Create a new subject"""
+    try:
+        db_subject = models.Subject(
+            user_id=current_user["id"],
+            name=subject.name,
+            code=subject.code,
+            semester=subject.semester,
+            total_marks=subject.total_marks,
+            exam_date=subject.exam_date,
+            exam_duration_minutes=subject.exam_duration_minutes,
+            syllabus_json=subject.syllabus_json
+        )
+        db.add(db_subject)
+        db.commit()
+        db.refresh(db_subject)
+        
+        # Initialize counts
+        db_subject.papers_uploaded = 0
+        db_subject.predictions_generated = 0
+        
+        return db_subject
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create subject: {str(e)}"
+        )
 
 @router.get("/{subject_id}", response_model=schemas.SubjectResponse)
 async def get_subject(
@@ -82,27 +130,53 @@ async def get_subject(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    subject = db.query(models.Subject).filter(
-        models.Subject.id == subject_id,
-        models.Subject.user_id == current_user["id"]
-    ).first()
-    
-    if not subject:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Subject not found"
+    """Get a specific subject by ID with counts"""
+    try:
+        # Use subqueries for efficient counting
+        papers_count = (
+            db.query(func.count(models.QuestionPaper.id))
+            .filter(models.QuestionPaper.subject_id == subject_id)
+            .scalar_subquery()
         )
-    
-    # Add paper counts
-    subject.papers_uploaded = db.query(models.QuestionPaper).filter(
-        models.QuestionPaper.subject_id == subject.id
-    ).count()
-    
-    subject.predictions_generated = db.query(models.Prediction).filter(
-        models.Prediction.subject_id == subject.id
-    ).count()
-    
-    return subject
+        
+        predictions_count = (
+            db.query(func.count(models.Prediction.id))
+            .filter(models.Prediction.subject_id == subject_id)
+            .scalar_subquery()
+        )
+        
+        subject = (
+            db.query(models.Subject)
+            .filter(
+                models.Subject.id == subject_id,
+                models.Subject.user_id == current_user["id"]
+            )
+            .first()
+        )
+        
+        if not subject:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Subject not found"
+            )
+        
+        # Add counts
+        subject.papers_uploaded = db.query(func.count(models.QuestionPaper.id)).filter(
+            models.QuestionPaper.subject_id == subject.id
+        ).scalar() or 0
+        
+        subject.predictions_generated = db.query(func.count(models.Prediction.id)).filter(
+            models.Prediction.subject_id == subject.id
+        ).scalar() or 0
+        
+        return subject
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch subject: {str(e)}"
+        )
 
 @router.put("/{subject_id}", response_model=schemas.SubjectResponse)
 async def update_subject(
@@ -111,25 +185,35 @@ async def update_subject(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    subject = db.query(models.Subject).filter(
-        models.Subject.id == subject_id,
-        models.Subject.user_id == current_user["id"]
-    ).first()
-    
-    if not subject:
+    """Update a subject"""
+    try:
+        subject = db.query(models.Subject).filter(
+            models.Subject.id == subject_id,
+            models.Subject.user_id == current_user["id"]
+        ).first()
+        
+        if not subject:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Subject not found"
+            )
+        
+        # Update fields
+        for var, value in vars(subject_update).items():
+            if value is not None:
+                setattr(subject, var, value)
+        
+        db.commit()
+        db.refresh(subject)
+        return subject
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Subject not found"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update subject: {str(e)}"
         )
-    
-    # Update fields
-    for var, value in vars(subject_update).items():
-        if value is not None:
-            setattr(subject, var, value)
-    
-    db.commit()
-    db.refresh(subject)
-    return subject
 
 @router.delete("/{subject_id}")
 async def delete_subject(
@@ -137,17 +221,27 @@ async def delete_subject(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    subject = db.query(models.Subject).filter(
-        models.Subject.id == subject_id,
-        models.Subject.user_id == current_user["id"]
-    ).first()
-    
-    if not subject:
+    """Delete a subject"""
+    try:
+        subject = db.query(models.Subject).filter(
+            models.Subject.id == subject_id,
+            models.Subject.user_id == current_user["id"]
+        ).first()
+        
+        if not subject:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Subject not found"
+            )
+        
+        db.delete(subject)
+        db.commit()
+        return {"message": "Subject deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Subject not found"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete subject: {str(e)}"
         )
-    
-    db.delete(subject)
-    db.commit()
-    return {"message": "Subject deleted successfully"}

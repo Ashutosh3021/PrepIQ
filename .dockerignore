@@ -1,0 +1,123 @@
+# ============================================
+# DOCKERIGNORE FOR PREPIQ
+# ============================================
+# This file ensures Docker builds are clean and secure
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+.ENV/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.coverage.xml
+*.cover
+.hypothesis/
+*.egg-info/
+*.egg
+
+# Node.js / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.next/
+.nuxt/
+.vercel/
+.vite/
+dist/
+build/
+out/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.production
+.env.example
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+*.log.*
+prepiq.db
+prepiq_local.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Local development
+uploads/*
+!uploads/.gitkeep
+ml_models/*
+!ml_models/.gitkeep
+mlruns/
+*.pkl
+*.joblib
+*.h5
+*.pb
+
+# Large files
+*.tar.gz
+*.zip
+*.rar
+*.7z
+*.iso
+*.dmg
+
+# Test files
+tests/
+test/
+*.test.js
+*.test.ts
+*.test.tsx
+*.spec.js
+*.spec.ts
+*.spec.tsx
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+.cache/

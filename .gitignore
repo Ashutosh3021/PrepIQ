@@ -14,13 +14,19 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# Environment variables
+# Environment variables - Security Best Practices
+# Never commit actual .env files containing secrets
 .env
-.env.example
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+.env*.local
+
+# Template/example files - SAFE to commit (no real secrets)
+!.env.example
+!.env.local.example
+!.env.production.example
 
 # Next.js and Vite
 /.next
@@ -56,10 +62,16 @@ htmlcov/
 # Backend specific
 /backend/venv/
 /backend/env/
-/backend/.env
 /backend/__pycache__/
 /backend/*.py[cod]
 /backend/*$py.class
+
+# Backend environment files - Security Best Practices
+/backend/.env
+/backend/.env.local
+/backend/.env.*.local
+!/backend/.env.example
+!/backend/.env.production.example
 
 # Frontend specific
 /frontend/node_modules
@@ -69,6 +81,11 @@ htmlcov/
 /frontend/dist
 /frontend/.vite
 /frontend/vite/src
+
+# Frontend environment files - Security Best Practices
+/frontend/.env*
+!/frontend/.env.local.example
+!/frontend/.env.production.example
 
 # API Keys and Sensitive Configuration
 /API/
@@ -81,10 +98,16 @@ htmlcov/
 # Database files
 /backend/*.db
 /backend/logs/
+*.db
+*.sqlite
+*.sqlite3
 *.log
 logs/
 *.log.*
 /prisma/dev.db
+# Root level database files (should not be in version control)
+/prepiq.db
+/prepiq_local.db
 
 # IDE
 .vscode

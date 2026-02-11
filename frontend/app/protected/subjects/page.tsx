@@ -4,12 +4,9 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 
-const subjects = [
-  { id: 1, name: "Calculus III", code: "MATH301", materials: 12, prediction: 88, color: "bg-teal-500" },
-  { id: 2, name: "Organic Chemistry", code: "CHEM202", materials: 8, prediction: 76, color: "bg-orange-500" },
-  { id: 3, name: "Modern History", code: "HIST101", materials: 15, prediction: 92, color: "bg-blue-500" },
-  { id: 4, name: "Macroeconomics", code: "ECON210", materials: 5, prediction: 82, color: "bg-green-500" },
-]
+// Subjects are now fetched from the API
+// This array serves as a fallback/loading state only
+const subjects: Subject[] = []
 
 export default function SubjectsPage() {
   return (

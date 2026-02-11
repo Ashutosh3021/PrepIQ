@@ -119,12 +119,10 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
               </div>
               
               <div className="flex items-center">
-                <img 
-                  src="/placeholder-user.jpg" 
-                  alt="User" 
-                  className="w-8 h-8 rounded-full"
-                />
-                <span className="ml-2 hidden md:inline">John Doe</span>
+                <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white font-semibold">
+                  U
+                </div>
+                <span className="ml-2 hidden md:inline">Welcome</span>
               </div>
               
               <button className="p-2 rounded-full hover:bg-gray-100">⚙️</button>
