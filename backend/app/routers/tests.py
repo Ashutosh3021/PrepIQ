@@ -14,10 +14,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
-async def get_current_user(authorization: str = Header(None)):
+async def get_current_user(
+    authorization: str = Header(None),
+    db: Session = Depends(get_db)
+):
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
-    return await get_current_user_from_token(authorization)
+    return await get_current_user_from_token(authorization, db)
 
 router = APIRouter(
     prefix="/tests",

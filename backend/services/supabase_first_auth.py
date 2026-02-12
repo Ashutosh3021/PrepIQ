@@ -1,13 +1,15 @@
 """
 Supabase-first authentication approach for PrepIQ
 This replaces local database auth with Supabase as the primary auth system
+Includes lazy user creation in application database
 """
 
 import os
-from fastapi import HTTPException
+from fastapi import HTTPException, Depends
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from supabase import create_client
+from sqlalchemy.orm import Session
 
 # Supabase setup (lazy initialization)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -243,13 +245,99 @@ class SupabaseFirstAuthService:
             raise HTTPException(status_code=401, detail="Invalid authentication token")
 
 
-# Dependency for protected routes
-async def get_current_user_from_token(authorization: str = None):
+# Dependency for protected routes with lazy user creation
+async def get_current_user_from_token(authorization: str = None, db: Session = None):
+    """
+    Validate JWT with Supabase and ensure user exists in application database.
+    If user doesn't exist in local DB, creates them (lazy creation).
+    
+    Args:
+        authorization: Bearer token from Authorization header
+        db: Database session (optional, for lazy creation)
+    
+    Returns:
+        dict: User data with all fields from application database
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header required")
+        raise HTTPException(
+            status_code=401, 
+            detail="Authorization header required",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
 
     try:
-        token = authorization.split(" ")[1]  # Bearer <token>
-        return await SupabaseFirstAuthService.get_current_user(token)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        # Extract token
+        if authorization.startswith("Bearer "):
+            token = authorization[7:].strip()
+        else:
+            token = authorization.strip()
+        
+        # Get user from Supabase
+        supabase_user = await SupabaseFirstAuthService.get_current_user(token)
+        
+        # If no database session provided, return Supabase user only
+        if db is None:
+            return supabase_user
+        
+        # Import models here to avoid circular imports
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from app.models import User
+        
+        # Check if user exists in application database
+        db_user = db.query(User).filter(User.id == supabase_user["id"]).first()
+        
+        if not db_user:
+            # LAZY CREATION: User exists in Supabase but not in app DB
+            logger.info(f"Lazy-creating user {supabase_user['id']} in application database")
+            
+            db_user = User(
+                id=supabase_user["id"],
+                email=supabase_user["email"],
+                full_name=supabase_user.get("full_name", "Unknown"),
+                college_name=supabase_user.get("college_name", "Unknown"),
+                password_hash="supabase_managed",  # Password managed by Supabase
+                program=supabase_user.get("program", "BTech"),
+                year_of_study=supabase_user.get("year_of_study", 1),
+                wizard_completed=False
+            )
+            
+            db.add(db_user)
+            db.commit()
+            db.refresh(db_user)
+            
+            logger.info(f"User {supabase_user['id']} created successfully in application database")
+        
+        # Return combined user data from database
+        return {
+            "id": str(db_user.id),
+            "email": db_user.email,
+            "full_name": db_user.full_name,
+            "college_name": db_user.college_name,
+            "program": db_user.program,
+            "year_of_study": db_user.year_of_study,
+            "wizard_completed": db_user.wizard_completed,
+            "exam_name": db_user.exam_name,
+            "days_until_exam": db_user.days_until_exam,
+            "focus_subjects": db_user.focus_subjects or [],
+            "study_hours_per_day": db_user.study_hours_per_day,
+            "target_score": db_user.target_score,
+            "preparation_level": db_user.preparation_level,
+            "exam_date": db_user.exam_date,
+            "supabase_user": supabase_user  # Include original Supabase data if needed
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions without modification
+        raise
+    except Exception as e:
+        logger.error(f"Auth error: {str(e)}")
+        raise HTTPException(
+            status_code=401, 
+            detail="Authentication failed",
+            headers={"WWW-Authenticate": "Bearer"}
+        )

@@ -25,8 +25,11 @@ def _lazy_import_bytez():
         try:
             from bytez import Bytez
             _bytez = Bytez
-            # Get API key from environment or use default
-            api_key = os.getenv("BYTEZ_API_KEY", "d02578a68c2621c9fdac702219d0722e")
+            # Get API key from environment variable only (no hardcoded fallback)
+            api_key = os.getenv("BYTEZ_API_KEY")
+            if not api_key:
+                logger.error("BYTEZ_API_KEY environment variable is not set. Please set it to use Bytez API.")
+                return None
             _bytez_sdk = Bytez(api_key)
             logger.info("Bytez SDK initialized successfully")
             return _bytez_sdk

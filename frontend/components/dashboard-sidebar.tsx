@@ -122,9 +122,12 @@ export function DashboardSidebar() {
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <SidebarMenuButton tooltip="Streak">
+            <SidebarMenuButton tooltip="Study Streak">
               <Flame className="h-4 w-4 text-orange-500" />
-              <span>Streak: 0 days</span>
+              <span className="flex items-center gap-1">
+                <span className="font-medium text-orange-600" id="sidebar-streak">0</span>
+                <span className="text-gray-500">days</span>
+              </span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

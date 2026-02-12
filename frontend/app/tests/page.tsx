@@ -1,82 +1,109 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import DashboardLayout from '@/src/components/dashboard/DashboardLayout';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
+import { apiClient, subjectService } from '@/src/lib/api';
+import type { Subject, MockTestResponse, MockTestQuestion } from '@/src/lib/api';
+
+// Types for test data
+interface TestConfig {
+  subjectId: string;
+  numQuestions: number;
+  difficulty: 'easy' | 'medium' | 'hard' | 'mixed';
+  timeLimit: number;
+  questionSource: 'high_probability' | 'previous_year' | 'weak_areas' | 'mixed';
+}
 
 const TestsPage = () => {
-  const [view, setView] = useState<'config' | 'test' | 'results'>('config');
-  const [testConfig, setTestConfig] = useState({
+  const router = useRouter();
+  const [view, setView] = useState<'list' | 'config' | 'test' | 'results'>('list');
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Test configuration
+  const [testConfig, setTestConfig] = useState<TestConfig>({
+    subjectId: '',
     numQuestions: 25,
     difficulty: 'medium',
     timeLimit: 90,
     questionSource: 'mixed'
   });
+  
+  // Active test state
+  const [activeTest, setActiveTest] = useState<MockTestResponse | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [answers, setAnswers] = useState<{[key: number]: string}>({});
-  const [testStarted, setTestStarted] = useState(false);
-  const [timeRemaining, setTimeRemaining] = useState(testConfig.timeLimit * 60); // in seconds
+  const [answers, setAnswers] = useState<{[key: string]: string}>({});
+  const [timeRemaining, setTimeRemaining] = useState(0);
+  const [testResults, setTestResults] = useState<any>(null);
 
-  // Mock test data
-  const mockTest = {
-    id: 'test-1',
-    subject: 'Linear Algebra',
-    totalQuestions: 25,
-    totalMarks: 100,
-    questions: [
-      {
-        id: 1,
-        number: 1,
-        text: "What is the determinant of the matrix [[2, 3], [1, 4]]?",
-        marks: 2,
-        unit: "Matrix Theory",
-        type: "mcq",
-        options: ["A) 5", "B) 8", "C) 11", "D) 6"],
-        correctAnswer: "A"
-      },
-      {
-        id: 2,
-        number: 2,
-        text: "Explain the concept of eigenvalues and eigenvectors.",
-        marks: 10,
-        unit: "Linear Transformations",
-        type: "descriptive",
-        correctAnswer: "Eigenvalues and eigenvectors are fundamental concepts..."
-      },
-      {
-        id: 3,
-        text: "Solve the system of linear equations: 2x + 3y = 7, x - y = 1",
-        marks: 5,
-        unit: "Systems of Equations",
-        type: "numerical",
-        correctAnswer: "x = 2, y = 1"
+  // Fetch subjects on mount
+  useEffect(() => {
+    const fetchSubjects = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await subjectService.getAll();
+        setSubjects(data);
+        
+        // Auto-select first subject if available
+        if (data.length > 0 && !testConfig.subjectId) {
+          setTestConfig(prev => ({ ...prev, subjectId: data[0].id }));
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load subjects';
+        setError(errorMessage);
+        toast.error(errorMessage);
+      } finally {
+        setLoading(false);
       }
-    ]
-  };
+    };
 
-  const handleConfigChange = (field: string, value: string | number) => {
+    fetchSubjects();
+  }, []);
+
+  const handleConfigChange = (field: keyof TestConfig, value: string | number) => {
     setTestConfig(prev => ({
       ...prev,
       [field]: value
     }));
   };
 
-  const startTest = () => {
-    setTestStarted(true);
-    setView('test');
-    // Start timer
-    const timer = setInterval(() => {
-      setTimeRemaining(prev => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          finishTest();
-          return 0;
-        }
-        return prev - 1;
+  const startTest = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Create test via API
+      const response = await apiClient.post<MockTestResponse>('/api/tests', {
+        subject_id: testConfig.subjectId,
+        num_questions: testConfig.numQuestions,
+        difficulty: testConfig.difficulty,
+        time_limit_minutes: testConfig.timeLimit,
+        question_source: testConfig.questionSource
       });
-    }, 1000);
+      
+      setActiveTest(response);
+      setTimeRemaining(response.time_limit_minutes * 60);
+      setView('test');
+      setCurrentQuestion(0);
+      setAnswers({});
+      
+      toast.success('Test created successfully!');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to create test';
+      setError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleAnswerChange = (questionId: number, answer: string) => {
+  const handleAnswerChange = (questionId: string, answer: string) => {
     setAnswers(prev => ({
       ...prev,
       [questionId]: answer
@@ -84,7 +111,7 @@ const TestsPage = () => {
   };
 
   const goToNextQuestion = () => {
-    if (currentQuestion < mockTest.questions.length - 1) {
+    if (activeTest && currentQuestion < activeTest.questions.length - 1) {
       setCurrentQuestion(prev => prev + 1);
     }
   };
@@ -95,12 +122,27 @@ const TestsPage = () => {
     }
   };
 
-  const finishTest = () => {
-    setView('results');
-  };
-
-  const submitTest = () => {
-    finishTest();
+  const finishTest = async () => {
+    if (!activeTest) return;
+    
+    try {
+      setLoading(true);
+      
+      // Submit test via API
+      const results = await apiClient.post(`/api/tests/${activeTest.test_id}/submit`, {
+        answers: answers,
+        end_time: new Date().toISOString()
+      });
+      
+      setTestResults(results);
+      setView('results');
+      toast.success('Test submitted successfully!');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to submit test';
+      toast.error(errorMessage);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const formatTime = (seconds: number) => {
@@ -111,249 +153,352 @@ const TestsPage = () => {
 
   const timeColor = timeRemaining > 300 ? 'text-green-600' : timeRemaining > 120 ? 'text-orange-600' : 'text-red-600';
 
+  // Loading state
+  if (loading && view === 'list') {
+    return (
+      <DashboardLayout>
+        <div className="max-w-7xl mx-auto p-6">
+          <div className="flex items-center justify-center h-64">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
+              <p className="mt-4 text-lg text-gray-600">Loading...</p>
+            </div>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  // Error state
+  if (error && view === 'list') {
+    return (
+      <DashboardLayout>
+        <div className="max-w-7xl mx-auto p-6">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+            <h3 className="text-lg font-medium text-red-800 mb-2">Error</h3>
+            <p className="text-red-700">{error}</p>
+            <Button 
+              onClick={() => window.location.reload()} 
+              className="mt-4"
+              variant="outline"
+            >
+              Retry
+            </Button>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
   return (
     <DashboardLayout>
       <div className="max-w-7xl mx-auto">
+        {/* Test List View */}
+        {view === 'list' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h1 className="text-2xl font-bold">Mock Tests</h1>
+              <Button 
+                onClick={() => setView('config')}
+                className="bg-indigo-600 hover:bg-indigo-700"
+                disabled={subjects.length === 0}
+              >
+                Create New Test
+              </Button>
+            </div>
+
+            {subjects.length === 0 ? (
+              <Card>
+                <CardContent className="p-8 text-center">
+                  <div className="text-4xl mb-4">📝</div>
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">No subjects found</h3>
+                  <p className="text-gray-600 mb-4">Add subjects first to create mock tests</p>
+                  <Button 
+                    onClick={() => router.push('/subjects')}
+                    className="bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    Add Subjects
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="p-8 text-center">
+                  <div className="text-4xl mb-4">📝</div>
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">Ready to practice?</h3>
+                  <p className="text-gray-600 mb-4">Create a mock test to assess your knowledge</p>
+                  <Button 
+                    onClick={() => setView('config')}
+                    className="bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    Start Mock Test
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* Configuration View */}
         {view === 'config' && (
-          <div className="bg-white rounded-lg shadow p-8">
-            <h1 className="text-2xl font-bold mb-6">Create Mock Test - {mockTest.subject}</h1>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div>
-                <div className="mb-6">
-                  <label className="block text-gray-700 mb-2">Number of Questions</label>
-                  <div className="flex items-center">
+          <Card>
+            <CardHeader>
+              <CardTitle>Create Mock Test</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-6">
+                  {/* Subject Selection */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Select Subject
+                    </label>
+                    <select
+                      value={testConfig.subjectId}
+                      onChange={(e) => handleConfigChange('subjectId', e.target.value)}
+                      className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {subjects.map((subject) => (
+                        <option key={subject.id} value={subject.id}>
+                          {subject.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  {/* Number of Questions */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Number of Questions: {testConfig.numQuestions}
+                    </label>
                     <input
                       type="range"
                       min="10"
                       max="50"
                       value={testConfig.numQuestions}
                       onChange={(e) => handleConfigChange('numQuestions', parseInt(e.target.value))}
-                      className="w-full mr-4"
+                      className="w-full"
                     />
-                    <span className="text-lg font-semibold w-12">{testConfig.numQuestions}</span>
+                    <div className="flex justify-between text-sm text-gray-500 mt-1">
+                      <span>10</span>
+                      <span>50</span>
+                    </div>
                   </div>
-                  <p className="text-sm text-gray-500 mt-1">Selected: {testConfig.numQuestions} questions</p>
-                </div>
-                
-                <div className="mb-6">
-                  <label className="block text-gray-700 mb-2">Difficulty Level</label>
-                  <div className="grid grid-cols-2 gap-4">
-                    {['Easy', 'Medium', 'Hard', 'Mixed'].map((level) => (
-                      <button
-                        key={level}
-                        onClick={() => handleConfigChange('difficulty', level.toLowerCase())}
-                        className={`p-3 border rounded-lg ${
-                          testConfig.difficulty === level.toLowerCase()
-                            ? 'border-teal-600 bg-teal-50 text-teal-700'
-                            : 'border-gray-300 hover:bg-gray-50'
-                        }`}
-                      >
-                        {level}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                
-                <div className="mb-6">
-                  <label className="block text-gray-700 mb-2">Time Limit</label>
-                  <div className="grid grid-cols-3 gap-4">
-                    {[30, 60, 90, 120].map((time) => (
-                      <button
-                        key={time}
-                        onClick={() => handleConfigChange('timeLimit', time)}
-                        className={`p-3 border rounded-lg ${
-                          testConfig.timeLimit === time
-                            ? 'border-teal-600 bg-teal-50 text-teal-700'
-                            : 'border-gray-300 hover:bg-gray-50'
-                        }`}
-                      >
-                        {time} minutes
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              
-              <div>
-                <div className="mb-6">
-                  <label className="block text-gray-700 mb-2">Question Source</label>
-                  <div className="space-y-3">
-                    {[
-                      { value: 'high_probability', label: '⭐ High-Probability (from predictions)' },
-                      { value: 'previous_year', label: '📚 Previous Year Papers' },
-                      { value: 'weak_areas', label: '🎯 Weak Areas (topics you scored low in)' },
-                      { value: 'mixed', label: '🔀 Mixed' }
-                    ].map((source) => (
-                      <div key={source.value} className="flex items-center">
-                        <input
-                          type="radio"
-                          id={source.value}
-                          name="questionSource"
-                          checked={testConfig.questionSource === source.value}
-                          onChange={() => handleConfigChange('questionSource', source.value)}
-                          className="mr-2"
-                        />
-                        <label htmlFor={source.value} className="text-gray-700">
-                          {source.label} {source.value === 'mixed' && '[default]'}
-                        </label>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                  <p className="text-blue-800">
-                    Questions generated based on your predictions and past performance
-                  </p>
-                </div>
-              </div>
-            </div>
-            
-            <div className="flex justify-end mt-8">
-              <button
-                onClick={startTest}
-                className="bg-teal-600 text-white px-8 py-3 rounded-lg hover:bg-teal-700 font-semibold"
-              >
-                Start Mock Test
-              </button>
-            </div>
-          </div>
-        )}
-        
-        {view === 'test' && (
-          <div className="bg-white rounded-lg shadow">
-            {/* Top Bar */}
-            <div className="bg-gray-800 text-white p-4 flex justify-between items-center">
-              <div>
-                <span className="font-semibold">Mock Test #5 - {mockTest.subject}</span>
-                <span className="ml-4">Question {currentQuestion + 1} of {mockTest.questions.length}</span>
-              </div>
-              <div className={`text-xl font-mono font-bold ${timeColor}`}>
-                {formatTime(timeRemaining)}
-              </div>
-              <div className="flex space-x-3">
-                <button className="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded">
-                  Save & Exit
-                </button>
-                <button className="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded">
-                  Settings
-                </button>
-              </div>
-            </div>
-            
-            <div className="flex">
-              {/* Question Section */}
-              <div className="w-2/3 p-6 border-r">
-                <div className="flex justify-between items-center mb-6">
-                  <div>
-                    <span className="text-lg font-semibold">
-                      Question {mockTest.questions[currentQuestion].number} [{mockTest.questions[currentQuestion].marks} marks]
-                    </span>
-                    <span className="ml-4 bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded">
-                      {mockTest.questions[currentQuestion].unit}
-                    </span>
-                  </div>
-                  <span className="bg-gray-100 text-gray-800 text-xs px-2 py-1 rounded">
-                    {currentQuestion + 1} of {mockTest.questions.length}
-                  </span>
-                </div>
-                
-                <div className="mb-8">
-                  <p className="text-lg mb-4">{mockTest.questions[currentQuestion].text}</p>
                   
-                  {mockTest.questions[currentQuestion].type === 'mcq' && (
-                    <div className="space-y-3">
-                      {(mockTest.questions[currentQuestion].options as string[]).map((option, idx) => (
-                        <div key={idx} className="flex items-center">
+                  {/* Difficulty */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Difficulty Level
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      {['easy', 'medium', 'hard', 'mixed'].map((level) => (
+                        <button
+                          key={level}
+                          onClick={() => handleConfigChange('difficulty', level)}
+                          className={`p-3 border rounded-lg capitalize transition-colors ${
+                            testConfig.difficulty === level
+                              ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                              : 'border-gray-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          {level}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="space-y-6">
+                  {/* Time Limit */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Time Limit
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      {[30, 60, 90, 120].map((time) => (
+                        <button
+                          key={time}
+                          onClick={() => handleConfigChange('timeLimit', time)}
+                          className={`p-3 border rounded-lg transition-colors ${
+                            testConfig.timeLimit === time
+                              ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                              : 'border-gray-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          {time} minutes
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  {/* Question Source */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Question Source
+                    </label>
+                    <div className="space-y-2">
+                      {[
+                        { value: 'high_probability', label: 'High-Probability Questions' },
+                        { value: 'previous_year', label: 'Previous Year Papers' },
+                        { value: 'weak_areas', label: 'Weak Areas Focus' },
+                        { value: 'mixed', label: 'Mixed (Recommended)' }
+                      ].map((source) => (
+                        <div key={source.value} className="flex items-center">
                           <input
                             type="radio"
-                            id={`option-${idx}`}
-                            name={`question-${mockTest.questions[currentQuestion].id}`}
-                            value={String.fromCharCode(65 + idx)} // A, B, C, D
-                            checked={answers[mockTest.questions[currentQuestion].id] === String.fromCharCode(65 + idx)}
-                            onChange={(e) => handleAnswerChange(mockTest.questions[currentQuestion].id, e.target.value)}
-                            className="mr-2"
+                            id={source.value}
+                            name="questionSource"
+                            checked={testConfig.questionSource === source.value}
+                            onChange={() => handleConfigChange('questionSource', source.value)}
+                            className="mr-3 h-4 w-4 text-indigo-600"
                           />
-                          <label htmlFor={`option-${idx}`} className="text-gray-700">
-                            {option}
+                          <label htmlFor={source.value} className="text-gray-700">
+                            {source.label}
                           </label>
                         </div>
                       ))}
                     </div>
-                  )}
-                  
-                  {mockTest.questions[currentQuestion].type === 'descriptive' && (
-                    <textarea
-                      value={answers[mockTest.questions[currentQuestion].id] || ''}
-                      onChange={(e) => handleAnswerChange(mockTest.questions[currentQuestion].id, e.target.value)}
-                      placeholder="Type your answer here..."
-                      className="w-full h-40 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-300"
-                    />
-                  )}
-                  
-                  {mockTest.questions[currentQuestion].type === 'numerical' && (
-                    <input
-                      type="text"
-                      value={answers[mockTest.questions[currentQuestion].id] || ''}
-                      onChange={(e) => handleAnswerChange(mockTest.questions[currentQuestion].id, e.target.value)}
-                      placeholder="Enter your answer..."
-                      className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-300"
-                    />
-                  )}
-                </div>
-                
-                <div className="flex justify-between">
-                  <button
-                    onClick={goToPrevQuestion}
-                    disabled={currentQuestion === 0}
-                    className={`px-4 py-2 rounded ${
-                      currentQuestion === 0
-                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                    }`}
-                  >
-                    &lt; Previous
-                  </button>
-                  
-                  <div className="flex space-x-2">
-                    <button className="px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
-                      Mark for Review
-                    </button>
-                    <button className="px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
-                      Clear Answer
-                    </button>
                   </div>
-                  
-                  <button
-                    onClick={goToNextQuestion}
-                    disabled={currentQuestion === mockTest.questions.length - 1}
-                    className={`px-4 py-2 rounded ${
-                      currentQuestion === mockTest.questions.length - 1
-                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                    }`}
-                  >
-                    Next &gt;
-                  </button>
                 </div>
               </div>
               
-              {/* Question Navigation */}
-              <div className="w-1/3 p-6">
-                <h3 className="text-lg font-semibold mb-4">Question Palette</h3>
-                
+              <div className="flex justify-end gap-4 mt-8">
+                <Button
+                  variant="outline"
+                  onClick={() => setView('list')}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={startTest}
+                  disabled={loading || !testConfig.subjectId}
+                  className="bg-indigo-600 hover:bg-indigo-700"
+                >
+                  {loading ? 'Creating...' : 'Start Test'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Test View */}
+        {view === 'test' && activeTest && (
+          <div className="bg-white rounded-lg shadow">
+            {/* Header */}
+            <div className="bg-gray-800 text-white p-4 flex justify-between items-center">
+              <div>
+                <span className="font-semibold">Mock Test</span>
+                <span className="ml-4">
+                  Question {currentQuestion + 1} of {activeTest.questions.length}
+                </span>
+              </div>
+              <div className={`text-xl font-mono font-bold ${timeColor}`}>
+                {formatTime(timeRemaining)}
+              </div>
+            </div>
+            
+            <div className="flex">
+              {/* Question */}
+              <div className="flex-1 p-6 border-r">
+                {activeTest.questions[currentQuestion] && (
+                  <>
+                    <div className="flex justify-between items-center mb-6">
+                      <div>
+                        <span className="text-lg font-semibold">
+                          Question {activeTest.questions[currentQuestion].number} 
+                          [{activeTest.questions[currentQuestion].marks} marks]
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div className="mb-8">
+                      <p className="text-lg mb-6">{activeTest.questions[currentQuestion].text}</p>
+                      
+                      {activeTest.questions[currentQuestion].type === 'mcq' && activeTest.questions[currentQuestion].options && (
+                        <div className="space-y-3">
+                          {activeTest.questions[currentQuestion].options.map((option, idx) => (
+                            <div key={idx} className="flex items-center">
+                              <input
+                                type="radio"
+                                id={`option-${idx}`}
+                                name={`question-${activeTest.questions[currentQuestion].id}`}
+                                value={String.fromCharCode(65 + idx)}
+                                checked={answers[activeTest.questions[currentQuestion].id] === String.fromCharCode(65 + idx)}
+                                onChange={(e) => handleAnswerChange(activeTest.questions[currentQuestion].id, e.target.value)}
+                                className="mr-3 h-4 w-4 text-indigo-600"
+                              />
+                              <label htmlFor={`option-${idx}`} className="text-gray-700">
+                                {option}
+                              </label>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      
+                      {activeTest.questions[currentQuestion].type === 'descriptive' && (
+                        <textarea
+                          value={answers[activeTest.questions[currentQuestion].id] || ''}
+                          onChange={(e) => handleAnswerChange(activeTest.questions[currentQuestion].id, e.target.value)}
+                          placeholder="Type your answer here..."
+                          className="w-full h-40 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      )}
+                      
+                      {activeTest.questions[currentQuestion].type === 'numerical' && (
+                        <input
+                          type="text"
+                          value={answers[activeTest.questions[currentQuestion].id] || ''}
+                          onChange={(e) => handleAnswerChange(activeTest.questions[currentQuestion].id, e.target.value)}
+                          placeholder="Enter your answer..."
+                          className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      )}
+                    </div>
+                    
+                    <div className="flex justify-between">
+                      <Button
+                        variant="outline"
+                        onClick={goToPrevQuestion}
+                        disabled={currentQuestion === 0}
+                      >
+                        Previous
+                      </Button>
+                      
+                      {currentQuestion === activeTest.questions.length - 1 ? (
+                        <Button
+                          onClick={finishTest}
+                          disabled={loading}
+                          className="bg-green-600 hover:bg-green-700"
+                        >
+                          {loading ? 'Submitting...' : 'Submit Test'}
+                        </Button>
+                      ) : (
+                        <Button
+                          onClick={goToNextQuestion}
+                          className="bg-indigo-600 hover:bg-indigo-700"
+                        >
+                          Next
+                        </Button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+              
+              {/* Question Palette */}
+              <div className="w-64 p-6 bg-gray-50">
+                <h3 className="font-semibold mb-4">Questions</h3>
                 <div className="grid grid-cols-5 gap-2 mb-6">
-                  {mockTest.questions.map((question, index) => (
+                  {activeTest.questions.map((question, index) => (
                     <button
                       key={question.id}
                       onClick={() => setCurrentQuestion(index)}
                       className={`p-2 rounded text-center text-sm ${
                         index === currentQuestion
-                          ? 'bg-teal-600 text-white border-2 border-teal-700'
+                          ? 'bg-indigo-600 text-white'
                           : answers[question.id]
-                            ? 'bg-blue-500 text-white'
-                            : 'bg-gray-200 text-gray-700'
+                            ? 'bg-green-500 text-white'
+                            : 'bg-white border border-gray-300'
                       }`}
                     >
                       {question.number}
@@ -361,224 +506,65 @@ const TestsPage = () => {
                   ))}
                 </div>
                 
-                <div className="text-sm text-gray-600 mb-4">
-                  <div className="flex items-center mb-1">
-                    <div className="w-4 h-4 bg-white border border-gray-300 mr-2"></div>
+                <div className="text-sm text-gray-600 space-y-2">
+                  <div className="flex items-center">
+                    <div className="w-4 h-4 bg-white border border-gray-300 mr-2 rounded"></div>
                     <span>Not answered</span>
                   </div>
-                  <div className="flex items-center mb-1">
-                    <div className="w-4 h-4 bg-blue-500 mr-2"></div>
+                  <div className="flex items-center">
+                    <div className="w-4 h-4 bg-green-500 mr-2 rounded"></div>
                     <span>Answered</span>
                   </div>
                   <div className="flex items-center">
-                    <div className="w-4 h-4 bg-orange-500 mr-2"></div>
-                    <span>Marked for Review</span>
+                    <div className="w-4 h-4 bg-indigo-600 mr-2 rounded"></div>
+                    <span>Current</span>
                   </div>
                 </div>
                 
-                <div className="border-t pt-4">
-                  <p className="font-medium">Summary:</p>
-                  <p>Answered: {Object.keys(answers).length} / {mockTest.questions.length}</p>
-                  <p>Not answered: {mockTest.questions.length - Object.keys(answers).length}</p>
-                  <p>Marked: 0</p>
-                  <p className="text-red-600 mt-2">Complete all questions before submitting</p>
+                <div className="border-t pt-4 mt-4">
+                  <p className="font-medium">Progress:</p>
+                  <p className="text-2xl font-bold text-indigo-600">
+                    {Object.keys(answers).length} / {activeTest.questions.length}
+                  </p>
                 </div>
-                
-                <button
-                  onClick={submitTest}
-                  className="w-full mt-6 bg-teal-600 text-white py-3 rounded-lg hover:bg-teal-700 font-semibold"
-                >
-                  Review & Submit
-                </button>
               </div>
             </div>
           </div>
         )}
-        
-        {view === 'results' && (
-          <div className="bg-white rounded-lg shadow p-8">
-            <div className="text-center mb-8">
-              <h1 className="text-3xl font-bold text-gray-800">Test Results</h1>
-              <div className="flex justify-center items-baseline mt-4">
-                <span className="text-5xl font-bold text-teal-600">72</span>
-                <span className="text-2xl text-gray-600 mx-2">/</span>
-                <span className="text-2xl text-gray-600">100</span>
-              </div>
-              <p className="text-xl text-gray-600 mt-2">72%</p>
-              <p className="text-lg text-gray-500">Grade: B+</p>
-              <p className="text-gray-500">Attempt #5 • Jan 5, 2025 • 45 mins</p>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-              <div className="border rounded-lg p-6">
-                <h3 className="text-lg font-semibold mb-4">Score Comparison</h3>
-                <div className="space-y-2">
-                  <p>Your score: <span className="font-semibold">72</span></p>
-                  <p>Class average: <span className="font-semibold">75</span></p>
-                  <p>Your best: <span className="font-semibold">85</span></p>
-                  <p>Previous: <span className="font-semibold text-green-600">68 (↑ +4 points!)</span></p>
-                </div>
-              </div>
-              
-              <div className="border rounded-lg p-6">
-                <h3 className="text-lg font-semibold mb-4">Performance vs Predicted</h3>
-                <div className="space-y-2">
-                  <p>Predictions Accuracy: <span className="font-semibold text-green-600">90%</span></p>
-                  <p>Of 25 predicted questions, <span className="font-semibold">22</span> were similar to actual</p>
-                  <p className="font-semibold text-green-600">Recommendation: 95% ready for exam!</p>
-                </div>
-              </div>
-            </div>
-            
-            <div className="mb-8">
-              <h2 className="text-xl font-semibold mb-4">Question Analysis</h2>
-              <div className="space-y-4">
-                {mockTest.questions.map((question, index) => (
-                  <div key={question.id} className="border rounded-lg p-4">
-                    <div className="flex justify-between items-center">
-                      <div className="flex items-center">
-                        <span className="font-semibold mr-3">Q{question.number} [{question.marks} marks]</span>
-                        {index % 3 === 0 ? (
-                          <span className="text-green-600 font-semibold">✅ Correct</span>
-                        ) : index % 3 === 1 ? (
-                          <span className="text-red-600 font-semibold">❌ Incorrect</span>
-                        ) : (
-                          <span className="text-yellow-600 font-semibold">⏭️ Skipped</span>
-                        )}
-                      </div>
-                      <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-sm">
-                        {question.unit}
-                      </span>
-                    </div>
-                    
-                    <div className="mt-3 pl-6">
-                      <p><strong>Your answer:</strong> {answers[question.id] || 'No answer provided'}</p>
-                      <p><strong>Correct answer:</strong> {question.correctAnswer}</p>
-                      <p className="text-sm text-gray-600 mt-2">Explanation: This question tests your understanding of fundamental concepts in {question.unit.toLowerCase()}.</p>
-                      <div className="mt-2">
-                        <button className="text-teal-600 hover:underline text-sm mr-4">🎯 Practice this topic</button>
-                        <button className="text-blue-600 hover:underline text-sm">📚 View in notes</button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            
-            <div className="mb-8">
-              <h2 className="text-xl font-semibold mb-4">Performance Insights</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="border rounded-lg p-4">
-                  <h3 className="font-semibold mb-3">Accuracy by topic</h3>
-                  <ul className="space-y-2">
-                    <li className="flex justify-between">
-                      <span>Matrix Theory:</span>
-                      <span className="font-semibold text-green-600">80% (4/5 correct)</span>
-                    </li>
-                    <li className="flex justify-between">
-                      <span>Linear Transformations:</span>
-                      <span className="font-semibold text-red-600">60% (3/5 correct) [Weak]</span>
-                    </li>
-                    <li className="flex justify-between">
-                      <span>Systems of Equations:</span>
-                      <span className="font-semibold text-green-600">100% (3/3 correct) [Strong]</span>
-                    </li>
-                  </ul>
-                </div>
-                
-                <div className="border rounded-lg p-4">
-                  <h3 className="font-semibold mb-3">Accuracy by question type</h3>
-                  <ul className="space-y-2">
-                    <li className="flex justify-between">
-                      <span>2-mark questions:</span>
-                      <span className="font-semibold">90% (9/10)</span>
-                    </li>
-                    <li className="flex justify-between">
-                      <span>5-mark questions:</span>
-                      <span className="font-semibold">70% (7/10)</span>
-                    </li>
-                    <li className="flex justify-between">
-                      <span>10-mark questions:</span>
-                      <span className="font-semibold text-red-600">50% (2/4) [Needs improvement]</span>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-              
-              <div className="border rounded-lg p-4 mt-4">
-                <h3 className="font-semibold mb-3">Weak areas identified</h3>
-                <div className="flex flex-wrap gap-2">
-                  <span className="bg-red-100 text-red-800 px-3 py-1 rounded-full flex items-center">
-                    🔴 Linear Transformations
+
+        {/* Results View */}
+        {view === 'results' && testResults && (
+          <div className="space-y-6">
+            <Card>
+              <CardContent className="p-8 text-center">
+                <h1 className="text-3xl font-bold mb-4">Test Results</h1>
+                <div className="flex justify-center items-baseline mb-2">
+                  <span className="text-5xl font-bold text-indigo-600">
+                    {testResults.score}
                   </span>
-                  <span className="bg-orange-100 text-orange-800 px-3 py-1 rounded-full flex items-center">
-                    🟠 Eigenvalues
-                  </span>
-                  <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full flex items-center">
-                    🟡 Complex Problems
-                  </span>
+                  <span className="text-2xl text-gray-600 mx-2">/</span>
+                  <span className="text-2xl text-gray-600">{testResults.total_marks}</span>
                 </div>
-                <p className="mt-2">Recommendation: Take targeted practice on these topics</p>
-              </div>
-            </div>
+                <p className="text-xl text-gray-600">{testResults.percentage}%</p>
+                <p className="text-gray-500 mt-2">
+                  Completed on {new Date().toLocaleDateString()}
+                </p>
+              </CardContent>
+            </Card>
             
-            <div className="mb-8">
-              <h2 className="text-xl font-semibold mb-4">What to do next?</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="border rounded-lg p-4">
-                  <h3 className="font-semibold flex items-center">
-                    <span className="text-2xl mr-2">🎯</span> Practice Weak Topics
-                  </h3>
-                  <button className="mt-2 w-full bg-red-100 text-red-700 py-2 rounded hover:bg-red-200">
-                    View weak-area questions
-                  </button>
-                </div>
-                <div className="border rounded-lg p-4">
-                  <h3 className="font-semibold flex items-center">
-                    <span className="text-2xl mr-2">💬</span> Chat with Study Buddy
-                  </h3>
-                  <button className="mt-2 w-full bg-blue-100 text-blue-700 py-2 rounded hover:bg-blue-200">
-                    Ask about Linear Transformations
-                  </button>
-                </div>
-                <div className="border rounded-lg p-4">
-                  <h3 className="font-semibold flex items-center">
-                    <span className="text-2xl mr-2">📝</span> Take targeted mock test
-                  </h3>
-                  <button className="mt-2 w-full bg-purple-100 text-purple-700 py-2 rounded hover:bg-purple-200">
-                    Create Linear Transformations-focused test
-                  </button>
-                </div>
-                <div className="border rounded-lg p-4">
-                  <h3 className="font-semibold flex items-center">
-                    <span className="text-2xl mr-2">📊</span> View trend analysis
-                  </h3>
-                  <button className="mt-2 w-full bg-yellow-100 text-yellow-700 py-2 rounded hover:bg-yellow-200">
-                    See difficulty distribution
-                  </button>
-                </div>
-              </div>
-            </div>
-            
-            <div className="flex flex-wrap gap-4">
-              <button className="px-6 py-3 bg-teal-600 text-white rounded-lg hover:bg-teal-700 font-medium">
+            <div className="flex flex-wrap gap-4 justify-center">
+              <Button
+                onClick={() => setView('list')}
+                className="bg-indigo-600 hover:bg-indigo-700"
+              >
                 Take Another Test
-              </button>
-              <button className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium">
-                Review Solutions
-              </button>
-              <button className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium">
-                Practice Weak Topics
-              </button>
-              <button className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium">
-                Download Report
-              </button>
-              <button className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium">
-                Share Results
-              </button>
-              <button className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium">
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => router.push('/protected')}
+              >
                 Back to Dashboard
-              </button>
+              </Button>
             </div>
           </div>
         )}

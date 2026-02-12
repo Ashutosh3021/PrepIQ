@@ -2,9 +2,14 @@
 
 import React from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { authService, dashboardService } from '@/src/lib/api';
 import type { UserProfile, DashboardStats } from '@/src/lib/api';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Calendar, BookOpen, Target, Flame, TrendingUp, ArrowRight, Sparkles } from 'lucide-react';
 
 const ProtectedPage = () => {
   const router = useRouter();
@@ -44,10 +49,24 @@ const ProtectedPage = () => {
   
   if (loading) {
     return (
-      <div className="max-w-7xl mx-auto p-6 flex items-center justify-center h-64">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
-          <p className="mt-4 text-lg text-gray-600">Loading dashboard...</p>
+      <div className="max-w-7xl mx-auto p-6">
+        {/* Hero Skeleton */}
+        <div className="bg-gradient-to-r from-indigo-500 to-indigo-600 rounded-xl p-6 mb-8">
+          <Skeleton className="h-8 w-64 bg-white/20 mb-2" />
+          <Skeleton className="h-4 w-96 bg-white/20" />
+        </div>
+        
+        {/* Stats Grid Skeleton */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {[1, 2, 3, 4].map((i) => (
+            <Card key={i}>
+              <CardContent className="p-6">
+                <Skeleton className="h-8 w-8 mb-4" />
+                <Skeleton className="h-4 w-24 mb-2" />
+                <Skeleton className="h-8 w-16" />
+              </CardContent>
+            </Card>
+          ))}
         </div>
       </div>
     );
@@ -55,115 +74,226 @@ const ProtectedPage = () => {
   
   if (!userData) {
     return (
-      <div className="max-w-7xl mx-auto p-6 text-center py-12">
-        <h2 className="text-2xl font-bold text-gray-800 mb-4">Welcome to PrepIQ</h2>
-        <p className="text-gray-600 mb-8">Get started by adding your first subject or uploading study materials.</p>
-        <div className="flex flex-col sm:flex-row gap-4 justify-center">
-          <button 
-            onClick={() => handleNavigate('/subjects')}
-            className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-indigo-700 transition"
-          >
-            Add Your First Subject
-          </button>
-          <button 
-            onClick={() => handleNavigate('/upload')}
-            className="bg-white text-indigo-600 px-6 py-3 rounded-lg font-semibold border border-indigo-600 hover:bg-indigo-50 transition"
-          >
-            Upload Study Materials
-          </button>
-        </div>
+      <div className="max-w-7xl mx-auto p-6">
+        <Card className="text-center py-12">
+          <CardContent>
+            <h2 className="text-2xl font-bold text-gray-800 mb-4">Welcome to PrepIQ</h2>
+            <p className="text-gray-600 mb-8">Get started by completing your setup or adding your first subject.</p>
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              <Button 
+                onClick={() => handleNavigate('/wizard')}
+                className="bg-indigo-600 hover:bg-indigo-700"
+              >
+                Complete Setup Wizard
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={() => handleNavigate('/subjects')}
+              >
+                Add Your First Subject
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
+
+  const hasExamData = dashboardStats?.days_to_exam !== null && dashboardStats?.days_to_exam !== undefined;
   
   return (
-    <div className="max-w-7xl mx-auto p-6">
+    <div className="max-w-7xl mx-auto p-6 space-y-8">
       {/* Hero Banner with Personalized Greeting */}
-      <div className="bg-gradient-to-r from-indigo-500 to-indigo-600 rounded-xl p-6 text-white mb-8">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center">
-          <div>
-            <h1 className="text-2xl md:text-3xl font-bold mb-2">Hi {userData.full_name || 'there'}!</h1>
-            <p className="text-lg">Your {userData.program || 'program'} studies continue in {userData.college_name || 'your college'}</p>
-          </div>
-          <div className="mt-4 md:mt-0 bg-white/20 p-4 rounded-lg">
-            <div className="text-center">
-              <div className="text-3xl font-bold">{dashboardStats?.days_to_exam || 'Set'}</div>
-              <div className="text-sm">to your next exam</div>
+      <Card className="bg-gradient-to-r from-indigo-500 to-indigo-600 border-0 text-white overflow-hidden">
+        <CardContent className="p-6">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="h-5 w-5 text-yellow-300" />
+                <h1 className="text-2xl md:text-3xl font-bold">
+                  Hi {userData.full_name || 'there'}!
+                </h1>
+              </div>
+              <p className="text-indigo-100">
+                Your {userData.program || 'program'} studies continue in {userData.college_name || 'your college'}
+              </p>
             </div>
+            
+            {hasExamData ? (
+              <div className="bg-white/20 backdrop-blur-sm p-4 rounded-lg text-center">
+                <div className="flex items-center justify-center gap-2 mb-1">
+                  <Calendar className="h-5 w-5" />
+                  <span className="text-3xl font-bold">{dashboardStats?.days_to_exam}</span>
+                </div>
+                <div className="text-sm text-indigo-100">
+                  {dashboardStats?.days_to_exam === 1 ? 'day' : 'days'} to your exam
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white/20 backdrop-blur-sm p-4 rounded-lg">
+                <p className="text-sm mb-2">No exam date set</p>
+                <Link href="/wizard">
+                  <Button 
+                    variant="secondary" 
+                    size="sm"
+                    className="bg-white text-indigo-600 hover:bg-indigo-50"
+                  >
+                    Set Exam Date <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </Link>
+              </div>
+            )}
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Quick Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="text-2xl mb-2 text-indigo-600">📚</div>
-          <h3 className="text-lg font-semibold mb-1">Subjects</h3>
-          <p className="text-2xl font-bold text-gray-800">{dashboardStats?.subjects_count || 0}</p>
-          <p className="text-sm text-gray-600">Active courses</p>
-        </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Subjects Card */}
+        <Card className="hover:shadow-lg transition-shadow">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 rounded-lg bg-blue-100">
+                <BookOpen className="h-6 w-6 text-blue-600" />
+              </div>
+              <span className="text-3xl font-bold text-gray-800">
+                {dashboardStats?.subjects_count || 0}
+              </span>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-700">Subjects</h3>
+            <p className="text-sm text-gray-500">Active courses</p>
+          </CardContent>
+        </Card>
         
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="text-2xl mb-2 text-indigo-600">📊</div>
-          <h3 className="text-lg font-semibold mb-1">Progress</h3>
-          <p className="text-2xl font-bold text-gray-800">{dashboardStats?.completion_percentage || 0}%</p>
-          <p className="text-sm text-gray-600">Overall completion</p>
-        </div>
+        {/* Progress Card */}
+        <Card className="hover:shadow-lg transition-shadow">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 rounded-lg bg-green-100">
+                <TrendingUp className="h-6 w-6 text-green-600" />
+              </div>
+              <span className="text-3xl font-bold text-gray-800">
+                {dashboardStats?.completion_percentage || 0}%
+              </span>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-700">Progress</h3>
+            <p className="text-sm text-gray-500">Overall completion</p>
+          </CardContent>
+        </Card>
         
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="text-2xl mb-2 text-indigo-600">🎯</div>
-          <h3 className="text-lg font-semibold mb-1">Focus Area</h3>
-          <p className="text-lg font-bold text-gray-800">{dashboardStats?.focus_area || 'N/A'}</p>
-          <p className="text-sm text-gray-600">Recommended topic</p>
-        </div>
+        {/* Focus Area Card */}
+        <Card className="hover:shadow-lg transition-shadow">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 rounded-lg bg-purple-100">
+                <Target className="h-6 w-6 text-purple-600" />
+              </div>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-700 mb-1">Focus Area</h3>
+            <p className="text-lg font-medium text-gray-800 truncate">
+              {dashboardStats?.focus_area || 'No subjects yet'}
+            </p>
+            <p className="text-sm text-gray-500">Recommended topic</p>
+          </CardContent>
+        </Card>
         
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="text-2xl mb-2 text-indigo-600">🔥</div>
-          <h3 className="text-lg font-semibold mb-1">Streak</h3>
-          <p className="text-2xl font-bold text-gray-800">{dashboardStats?.study_streak || 0} days</p>
-          <p className="text-sm text-gray-600">Active learning</p>
-        </div>
+        {/* Streak Card */}
+        <Card className="hover:shadow-lg transition-shadow">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 rounded-lg bg-orange-100">
+                <Flame className="h-6 w-6 text-orange-600" />
+              </div>
+              <span className="text-3xl font-bold text-gray-800">
+                {dashboardStats?.study_streak || 0}
+              </span>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-700">Streak</h3>
+            <p className="text-sm text-gray-500">
+              {dashboardStats?.study_streak === 1 ? 'day' : 'days'} of active learning
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Recent Activity */}
-      <div className="bg-white rounded-lg shadow p-6 mb-8">
-        <h2 className="text-xl font-semibold mb-4">Recent Activity</h2>
-        <div className="space-y-3">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5" />
+            Recent Activity
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
           {dashboardStats?.recent_activity && dashboardStats.recent_activity.length > 0 ? (
-            dashboardStats.recent_activity.map((activity, index) => (
-              <div key={index} className="flex items-center p-3 border-b border-gray-100 last:border-0">
-                <div className="mr-3 text-indigo-600">•</div>
-                <div>
-                  <p className="font-medium">{activity.action}</p>
-                  <p className="text-sm text-gray-500">{new Date(activity.timestamp).toLocaleString()}</p>
+            <div className="space-y-3">
+              {dashboardStats.recent_activity.map((activity, index) => (
+                <div 
+                  key={index} 
+                  className="flex items-center p-3 border-b border-gray-100 last:border-0 hover:bg-gray-50 rounded-lg transition-colors"
+                >
+                  <div className="mr-3 h-2 w-2 rounded-full bg-indigo-600"></div>
+                  <div className="flex-1">
+                    <p className="font-medium text-gray-800">{activity.action}</p>
+                    <p className="text-sm text-gray-500">
+                      {new Date(activity.timestamp).toLocaleString()}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+            </div>
           ) : (
-            <div className="text-center py-8 text-gray-500">
-              <p>No recent activity yet. Start studying to see your progress here!</p>
+            <div className="text-center py-12">
+              <div className="text-4xl mb-4">📚</div>
+              <h3 className="text-lg font-medium text-gray-800 mb-2">No recent activity yet</h3>
+              <p className="text-gray-500 mb-6">Start studying to see your progress here!</p>
+              <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                <Button 
+                  onClick={() => handleNavigate('/subjects')}
+                  className="bg-indigo-600 hover:bg-indigo-700"
+                >
+                  Add a Subject
+                </Button>
+                <Button 
+                  variant="outline"
+                  onClick={() => handleNavigate('/protected/upload')}
+                >
+                  Upload Papers
+                </Button>
+              </div>
             </div>
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Today's Focus */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold mb-4">Today's Focus</h2>
-        <div className="flex flex-col md:flex-row items-center justify-between">
-          <div>
-            <p className="text-gray-600 mb-1">Recommended Focus:</p>
-            <p className="text-lg font-semibold">{dashboardStats?.focus_area || 'Unit 3 - Linear Transformations'}</p>
-            <p className="text-green-600 text-sm">High probability topic</p>
+      <Card>
+        <CardHeader>
+          <CardTitle>Today&apos;s Focus</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div>
+              <p className="text-gray-600 mb-1">Recommended Focus:</p>
+              <p className="text-lg font-semibold text-gray-800">
+                {dashboardStats?.focus_area || 'Complete your setup to get recommendations'}
+              </p>
+              {dashboardStats?.focus_area && (
+                <p className="text-green-600 text-sm flex items-center gap-1 mt-1">
+                  <TrendingUp className="h-4 w-4" />
+                  High probability topic
+                </p>
+              )}
+            </div>
+            <Button 
+              onClick={() => handleNavigate('/subjects')}
+              className="bg-indigo-600 hover:bg-indigo-700"
+            >
+              Start Studying <ArrowRight className="ml-2 h-4 w-4" />
+            </Button>
           </div>
-          <button 
-            onClick={() => handleNavigate('/subjects')}
-            className="mt-4 md:mt-0 bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-indigo-700 transition"
-          >
-            Start Studying
-          </button>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 };

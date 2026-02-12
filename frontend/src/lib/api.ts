@@ -357,6 +357,26 @@ export const analysisService = {
   }
 };
 
+// Test services
+export const testService = {
+  async generateTest(data: GenerateTestRequest) {
+    return apiClient.post<MockTestResponse>('/tests/generate', data);
+  },
+
+  async submitTest(testId: string, data: SubmitTestRequest) {
+    return apiClient.post<TestResult>(`/tests/${testId}/submit`, data);
+  },
+
+  async getTestHistory(subjectId?: string) {
+    const url = subjectId ? `/tests/history?subject_id=${subjectId}` : '/tests/history';
+    return apiClient.get<MockTestHistory[]>(url);
+  },
+
+  async getTestResult(testId: string) {
+    return apiClient.get<TestResult>(`/tests/${testId}/results`);
+  }
+};
+
 // Types (these should be moved to a separate types file in production)
 export interface UserProfile {
   id: string;
@@ -518,6 +538,72 @@ export interface Question {
   subject_id: string;
   topic: string;
   created_at: string;
+}
+
+// Test Types
+export interface GenerateTestRequest {
+  subject_id: string;
+  num_questions: number;
+  difficulty: 'easy' | 'medium' | 'hard' | 'mixed';
+  time_limit_minutes: number;
+  question_source: 'high_probability' | 'previous_year' | 'weak_areas' | 'mixed';
+}
+
+export interface MockTestQuestion {
+  id: string;
+  number: number;
+  text: string;
+  marks: number;
+  unit: string;
+  type: 'mcq' | 'descriptive' | 'numerical';
+  options?: string[];
+  correctAnswer?: string;
+}
+
+export interface MockTestResponse {
+  test_id: string;
+  total_questions: number;
+  total_marks: number;
+  time_limit_minutes: number;
+  start_time: string;
+  questions: MockTestQuestion[];
+}
+
+export interface SubmitTestRequest {
+  answers: { [questionId: string]: string };
+  time_taken_seconds: number;
+}
+
+export interface TestResult {
+  test_id: string;
+  score: number;
+  total_marks: number;
+  percentage: number;
+  grade: string;
+  time_taken_minutes: number;
+  correct_count: number;
+  incorrect_count: number;
+  skipped_count: number;
+  question_results: {
+    question_id: string;
+    is_correct: boolean;
+    user_answer: string;
+    correct_answer: string;
+    marks_obtained: number;
+  }[];
+  weak_topics: string[];
+  strong_topics: string[];
+  recommendations: string[];
+}
+
+export interface MockTestHistory {
+  test_id: string;
+  subject_name: string;
+  score: number;
+  total_marks: number;
+  percentage: number;
+  completed_at: string;
+  duration_minutes: number;
 }
 
 // Wizard Types
