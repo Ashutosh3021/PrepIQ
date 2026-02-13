@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { authService, dashboardService } from '@/src/lib/api';
@@ -21,7 +21,25 @@ const ProtectedPage = () => {
   const [userData, setUserData] = React.useState<UserProfile | null>(null);
   const [dashboardStats, setDashboardStats] = React.useState<DashboardStats | null>(null);
   const [loading, setLoading] = React.useState(true);
-  
+  const [daysRemaining, setDaysRemaining] = React.useState<number | null>(null);
+
+  // Calculate days remaining dynamically
+  const calculateDaysRemaining = (examDate: string | null | undefined): number | null => {
+    if (!examDate) return null;
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Reset time to midnight for accurate day calculation
+    
+    const exam = new Date(examDate);
+    exam.setHours(0, 0, 0, 0);
+    
+    const diffTime = exam.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    // Return 0 if exam date has passed, otherwise return positive days
+    return Math.max(0, diffDays);
+  };
+   
   React.useEffect(() => {
     const fetchData = async () => {
       try {
@@ -35,6 +53,14 @@ const ProtectedPage = () => {
         const stats = await dashboardService.getStats();
         setDashboardStats(stats);
         
+        // Calculate dynamic days remaining from exam_date
+        if (stats?.exam_date) {
+          const days = calculateDaysRemaining(stats.exam_date);
+          setDaysRemaining(days);
+        } else {
+          setDaysRemaining(stats?.days_to_exam || null);
+        }
+        
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Failed to load dashboard data';
         toast.error(errorMessage);
@@ -45,7 +71,17 @@ const ProtectedPage = () => {
     };
     
     fetchData();
-  }, [router]);
+    
+    // Recalculate days remaining every hour to keep it up to date
+    const interval = setInterval(() => {
+      if (dashboardStats?.exam_date) {
+        const days = calculateDaysRemaining(dashboardStats.exam_date);
+        setDaysRemaining(days);
+      }
+    }, 3600000); // Update every hour
+    
+    return () => clearInterval(interval);
+  }, [router, dashboardStats?.exam_date]);
   
   if (loading) {
     return (
@@ -99,7 +135,7 @@ const ProtectedPage = () => {
     );
   }
 
-  const hasExamData = dashboardStats?.days_to_exam !== null && dashboardStats?.days_to_exam !== undefined;
+  const hasExamData = daysRemaining !== null && daysRemaining !== undefined;
   
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-8">
@@ -123,11 +159,16 @@ const ProtectedPage = () => {
               <div className="bg-white/20 backdrop-blur-sm p-4 rounded-lg text-center">
                 <div className="flex items-center justify-center gap-2 mb-1">
                   <Calendar className="h-5 w-5" />
-                  <span className="text-3xl font-bold">{dashboardStats?.days_to_exam}</span>
+                  <span className="text-3xl font-bold">{daysRemaining}</span>
                 </div>
                 <div className="text-sm text-indigo-100">
-                  {dashboardStats?.days_to_exam === 1 ? 'day' : 'days'} to your exam
+                  {daysRemaining === 1 ? 'day' : 'days'} to your exam
                 </div>
+                {daysRemaining === 0 && (
+                  <div className="text-xs text-yellow-200 mt-1 font-semibold">
+                    🎯 Exam is today!
+                  </div>
+                )}
               </div>
             ) : (
               <div className="bg-white/20 backdrop-blur-sm p-4 rounded-lg">

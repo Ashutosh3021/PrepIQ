@@ -4,6 +4,12 @@ Optimized for Render free tier deployment
 """
 import os
 import sys
+import asyncio
+
+# Fix for Windows asyncio ProactorEventLoop connection reset errors
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from datetime import datetime
 from pathlib import Path
 
@@ -120,6 +126,7 @@ def create_app() -> FastAPI:
         docs_url="/docs" if settings.DEBUG else None,
         redoc_url="/redoc" if settings.DEBUG else None,
         openapi_url="/openapi.json" if settings.DEBUG else None,
+        redirect_slashes=False,  # Disable trailing slash redirects to avoid 307
     )
     
     # ============================================
@@ -173,6 +180,17 @@ def create_app() -> FastAPI:
     # ============================================
     # EXCEPTION HANDLERS
     # ============================================
+    
+    @app.exception_handler(ConnectionResetError)
+    async def connection_reset_handler(request: Request, exc: ConnectionResetError):
+        """Handle ConnectionResetError to prevent log spam on Windows."""
+        # Log once at debug level but don't spam logs
+        logger.debug(f"Connection reset by client: {request.url}")
+        return JSONResponse(
+            status_code=499,  # Client Closed Request
+            content={"detail": "Connection reset by client"}
+        )
+    
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
         """Handle all unhandled exceptions."""

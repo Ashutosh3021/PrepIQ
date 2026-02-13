@@ -20,17 +20,15 @@ logger = logging.getLogger(__name__)
 from ..database import get_db
 from .. import models, schemas
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-# Import model coordinator
+# Import model coordinator using absolute imports
 try:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from services.model_coordinator import model_coordinator
-except ImportError as e:
-    # Fallback if import fails
-    model_coordinator = None
-    logger.warning(f"Model coordinator not available: {e}")
+    from app.services.model_coordinator import model_coordinator
+except ImportError:
+    try:
+        from services.model_coordinator import model_coordinator
+    except ImportError:
+        model_coordinator = None
+        logger.warning("Model coordinator not available - some features may be limited")
 
 # Import from the new Supabase-first auth service
 from services.supabase_first_auth import get_current_user_from_token
@@ -56,7 +54,7 @@ router = APIRouter(
 )
 
 
-@router.post("/")
+@router.post("")
 async def upload_and_analyze(
     subject_id: str = Form(...),
     files: List[UploadFile] = File(...),

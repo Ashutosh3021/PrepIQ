@@ -85,7 +85,10 @@ export default function RootLayout({
       <body className={`font-sans antialiased`}>
         {children}
         <Analytics />
-
+        {/* Version Stamp */}
+        <div className="fixed bottom-2 left-2 text-[10px] text-gray-400 font-mono select-none pointer-events-none z-50">
+          v1.2.20
+        </div>
       </body>
     </html>
   )

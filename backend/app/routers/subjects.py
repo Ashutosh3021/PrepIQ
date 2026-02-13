@@ -25,7 +25,7 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization, db)
 
-@router.get("/", response_model=List[schemas.SubjectResponse])
+@router.get("", response_model=List[schemas.SubjectResponse])
 async def get_subjects(
     skip: int = 0, 
     limit: int = 100, 
@@ -93,7 +93,7 @@ async def get_subjects(
             detail=f"Failed to fetch subjects: {str(e)}"
         )
 
-@router.post("/", response_model=schemas.SubjectResponse)
+@router.post("", response_model=schemas.SubjectResponse)
 async def create_subject(
     subject: schemas.SubjectCreate, 
     current_user: dict = Depends(get_current_user),

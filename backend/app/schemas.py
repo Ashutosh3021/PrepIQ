@@ -2,6 +2,7 @@ from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from uuid import UUID
+import uuid as uuid_module
 
 # User Schemas
 class UserBase(BaseModel):
@@ -54,6 +55,13 @@ class UserResponse(UserBase):
     id: str
     created_at: datetime
     
+    @field_validator('id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
+    
     class Config:
         from_attributes = True
 
@@ -63,6 +71,13 @@ class WizardStepResponse(BaseModel):
     email: str
     full_name: Optional[str] = None
     access_token: Optional[str] = None
+    
+    @field_validator('id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 class Token(BaseModel):
     access_token: str
@@ -113,6 +128,13 @@ class SubjectResponse(SubjectBase):
     predictions_generated: Optional[int] = 0
     created_at: datetime
     
+    @field_validator('id', 'user_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
+    
     class Config:
         from_attributes = True
 
@@ -125,6 +147,13 @@ class PaperUploadResponse(BaseModel):
     questions_count: Optional[int] = 0
     metadata: Optional[Dict[str, Any]] = None
     images_extracted: Optional[int] = 0
+    
+    @field_validator('paper_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 class PaperResponse(BaseModel):
     id: str
@@ -136,6 +165,13 @@ class PaperResponse(BaseModel):
     questions_extracted: Optional[int] = 0
     processed_at: Optional[datetime] = None
     created_at: datetime
+    
+    @field_validator('id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
     
     class Config:
         from_attributes = True
@@ -156,6 +192,13 @@ class PredictionGenerationResponse(BaseModel):
     status: str
     message: str
     progress: int
+    
+    @field_validator('prediction_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 class PredictedQuestion(BaseModel):
     question_number: int
@@ -173,6 +216,13 @@ class PredictionResponse(BaseModel):
     coverage_percentage: int
     unit_coverage: Dict[str, int]
     generated_at: datetime
+    
+    @field_validator('id', 'subject_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 class PredictionUpdate(BaseModel):
     notes: Optional[str] = None
@@ -190,12 +240,26 @@ class ChatResponse(BaseModel):
     related_questions: List[Dict[str, Any]]
     references: List[Dict[str, Any]]
     suggested_actions: List[str]
+    
+    @field_validator('message_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 class ChatHistoryResponse(BaseModel):
     id: str
     timestamp: datetime
     user_message: str
     bot_response: str
+    
+    @field_validator('id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 # Test Schemas
 class MockTestRequest(BaseModel):
@@ -213,6 +277,13 @@ class MockTestQuestion(BaseModel):
     unit: str
     options: Optional[List[str]] = None
     type: str
+    
+    @field_validator('id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 class MockTestResponse(BaseModel):
     test_id: str
@@ -221,6 +292,13 @@ class MockTestResponse(BaseModel):
     time_limit_minutes: int
     start_time: datetime
     questions: List[MockTestQuestion]
+    
+    @field_validator('test_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 class TestSubmission(BaseModel):
     answers: Dict[str, str]
@@ -233,6 +311,13 @@ class TestSubmissionResponse(BaseModel):
     percentage: float
     duration_minutes: int
     results: Dict[str, int]
+    
+    @field_validator('test_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 class QuestionAnalysis(BaseModel):
     question_id: str
@@ -241,6 +326,13 @@ class QuestionAnalysis(BaseModel):
     user_answer: str
     correct_answer: str
     explanation: str
+    
+    @field_validator('question_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 class TestResultsResponse(BaseModel):
     test_id: str
@@ -250,6 +342,13 @@ class TestResultsResponse(BaseModel):
     weak_topics: List[str]
     strong_topics: List[str]
     recommendations: List[str]
+    
+    @field_validator('test_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 
 # Study Plan Schemas
@@ -291,6 +390,13 @@ class StudyPlanResponse(BaseModel):
     total_days: int
     daily_schedule: List[StudyPlanDay]
 
+    @field_validator('plan_id', 'subject_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
+
 class StudyPlanUpdate(BaseModel):
     days_completed: Optional[int] = None
     on_track: Optional[bool] = None
@@ -306,6 +412,13 @@ class UploadProgressResponse(BaseModel):
     progress: int
     message: str
 
+    @field_validator('paper_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
+
 
 # Questions Schemas
 class ImportantQuestion(BaseModel):
@@ -316,6 +429,13 @@ class ImportantQuestion(BaseModel):
     difficulty: str
     importance: str
     last_asked: str
+    
+    @field_validator('id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 
 class Question(BaseModel):
@@ -326,6 +446,13 @@ class Question(BaseModel):
     subject_id: str
     topic: str
     created_at: datetime
+    
+    @field_validator('id', 'subject_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
 
 
 # Wizard Schemas

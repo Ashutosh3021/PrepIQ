@@ -305,24 +305,24 @@ export const subjectService = {
     if (params?.limit) searchParams.append('limit', params.limit.toString());
     
     const queryString = searchParams.toString();
-    const url = queryString ? `/api/subjects?${queryString}` : '/api/subjects';
+    const url = queryString ? `/subjects?${queryString}` : '/subjects';
     return apiClient.get<Subject[]>(url);
   },
 
   async getById(id: string) {
-    return apiClient.get<Subject>(`/api/subjects/${id}`);
+    return apiClient.get<Subject>(`/subjects/${id}`);
   },
 
   async create(data: CreateSubjectData) {
-    return apiClient.post<Subject>('/api/subjects', data);
+    return apiClient.post<Subject>('/subjects', data);
   },
 
   async update(id: string, data: Partial<Subject>) {
-    return apiClient.put<Subject>(`/api/subjects/${id}`, data);
+    return apiClient.put<Subject>(`/subjects/${id}`, data);
   },
 
   async delete(id: string) {
-    return apiClient.delete(`/api/subjects/${id}`);
+    return apiClient.delete(`/subjects/${id}`);
   }
 };
 
