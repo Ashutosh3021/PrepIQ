@@ -377,6 +377,26 @@ export const testService = {
   }
 };
 
+// Upload services
+export const uploadService = {
+  async uploadFiles(subjectId: string, files: File[], materialType: string = 'pyq') {
+    const formData = new FormData();
+    formData.append('subject_id', subjectId);
+    formData.append('material_type', materialType);
+    files.forEach(file => formData.append('files', file));
+    
+    return apiClient.post('/upload/', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+
+  async getUploadStatus(uploadId: string) {
+    return apiClient.get(`/upload/status/${uploadId}`);
+  }
+};
+
 // Types (these should be moved to a separate types file in production)
 export interface UserProfile {
   id: string;

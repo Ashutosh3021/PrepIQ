@@ -12,11 +12,25 @@ from pathlib import Path
 from datetime import datetime
 import logging
 import asyncio
+import sys
+
+# Setup logging first
+logger = logging.getLogger(__name__)
 
 from ..database import get_db
 from .. import models, schemas
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# Import model coordinator
+try:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from services.model_coordinator import model_coordinator
+except ImportError as e:
+    # Fallback if import fails
+    model_coordinator = None
+    logger.warning(f"Model coordinator not available: {e}")
 
 # Import from the new Supabase-first auth service
 from services.supabase_first_auth import get_current_user_from_token
@@ -96,11 +110,20 @@ async def upload_and_analyze(
             
             # Process based on file type
             if file.content_type and file.content_type.startswith("image"):
-                # Process image through ML pipeline
-                image_result = await process_image_pipeline(str(file_path))
-                extracted_data["text_content"].extend(image_result.get("text", []))
-                extracted_data["detected_objects"].extend(image_result.get("objects", []))
-                extracted_data["circuit_diagrams"].extend(image_result.get("circuits", []))
+                # Process image through coordinated ML pipeline
+                # Models: EasyOCR → YOLOv8 → GroundingDINO
+                if model_coordinator:
+                    image_result = await model_coordinator.process_image_pipeline(str(file_path))
+                    extracted_data["text_content"].extend(image_result.get("text", []))
+                    extracted_data["detected_objects"].extend(image_result.get("objects", []))
+                    extracted_data["circuit_diagrams"].extend(image_result.get("circuits", []))
+                    logger.info(f"Image pipeline status: {image_result.get('pipeline_status', [])}")
+                else:
+                    # Fallback to local function if coordinator not available
+                    image_result = await process_image_pipeline(str(file_path))
+                    extracted_data["text_content"].extend(image_result.get("text", []))
+                    extracted_data["detected_objects"].extend(image_result.get("objects", []))
+                    extracted_data["circuit_diagrams"].extend(image_result.get("circuits", []))
                 
             elif file.content_type and file.content_type.startswith("text"):
                 # Read text file
