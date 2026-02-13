@@ -16,8 +16,16 @@ yarn-error.log*
 
 # Environment variables - Security Best Practices
 # Never commit actual .env files containing secrets
+# backend\.env.production 
 .env
 .env.local
+# Environment files
+.env*
+.env.*
+backend/.env.production
+.env.production
+backend/.env.*
+backend/.env*
 .env.development.local
 .env.test.local
 .env.production.local
