@@ -233,7 +233,7 @@ def create_app() -> FastAPI:
     # ============================================
     # INCLUDE ROUTERS
     # ============================================
-    from app.routers import auth, subjects, papers, predictions, chat, tests, analysis, plans, dashboard, questions, wizard
+    from app.routers import auth, subjects, papers, predictions, chat, tests, analysis, plans, dashboard, questions, wizard, upload
     
     app.include_router(auth.router, tags=["Authentication"])
     app.include_router(subjects.router, tags=["Subjects"])
@@ -246,6 +246,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard.router, tags=["Dashboard"])
     app.include_router(questions.router, tags=["Questions"])
     app.include_router(wizard.router, tags=["Wizard"])
+    app.include_router(upload.router, tags=["Upload"])
     
     return app
 

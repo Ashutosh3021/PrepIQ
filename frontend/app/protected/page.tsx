@@ -245,22 +245,11 @@ const ProtectedPage = () => {
           ) : (
             <div className="text-center py-12">
               <div className="text-4xl mb-4">📚</div>
-              <h3 className="text-lg font-medium text-gray-800 mb-2">No recent activity yet</h3>
-              <p className="text-gray-500 mb-6">Start studying to see your progress here!</p>
-              <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                <Button 
-                  onClick={() => handleNavigate('/subjects')}
-                  className="bg-indigo-600 hover:bg-indigo-700"
-                >
-                  Add a Subject
-                </Button>
-                <Button 
-                  variant="outline"
-                  onClick={() => handleNavigate('/protected/upload')}
-                >
-                  Upload Papers
-                </Button>
-              </div>
+              <h3 className="text-lg font-medium text-gray-800 mb-2">Ready to Start Your Journey?</h3>
+              <p className="text-gray-500 mb-4">Set up your subjects, upload your resources, and start studying smart with AI-powered insights!</p>
+              <p className="text-sm text-indigo-600 font-medium">
+                💡 Tip: Upload previous year papers to get personalized predictions and study recommendations
+              </p>
             </div>
           )}
         </CardContent>

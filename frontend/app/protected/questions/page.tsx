@@ -32,6 +32,11 @@ const QuestionsPage = () => {
     fetchImportantQuestions();
   }, []);
 
+  // Calculate stats from actual data
+  const totalQuestions = importantQuestions.length;
+  const highPriorityCount = importantQuestions.filter(q => q.importance === 'Very High').length;
+  const practiceTime = Math.ceil(totalQuestions * 0.25); // Approx 15 min per question
+
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto p-6 flex items-center justify-center h-64">
@@ -75,7 +80,7 @@ const QuestionsPage = () => {
             <Star className="h-4 w-4 text-yellow-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">24</div>
+            <div className="text-2xl font-bold">{totalQuestions || 0}</div>
             <p className="text-xs text-muted-foreground">Across all subjects</p>
           </CardContent>
         </Card>
@@ -86,7 +91,7 @@ const QuestionsPage = () => {
             <TrendingUp className="h-4 w-4 text-green-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">12</div>
+            <div className="text-2xl font-bold">{highPriorityCount || 0}</div>
             <p className="text-xs text-muted-foreground">Very likely to appear</p>
           </CardContent>
         </Card>
@@ -97,7 +102,7 @@ const QuestionsPage = () => {
             <Clock className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">4.5h</div>
+            <div className="text-2xl font-bold">{practiceTime || 0}h</div>
             <p className="text-xs text-muted-foreground">Recommended study time</p>
           </CardContent>
         </Card>

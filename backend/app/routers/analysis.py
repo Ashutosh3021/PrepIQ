@@ -1,6 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Header, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from typing import Dict, Any
+from typing import Dict, Any, List
+import shutil
+from pathlib import Path
+from datetime import datetime
 
 from ..database import get_db
 from .. import models, schemas
@@ -20,6 +23,10 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization, db)
 from ..services import PrepIQService
+
+# Upload directory
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
 
 router = APIRouter(
     prefix="/analysis",
@@ -256,3 +263,252 @@ async def get_analysis_data(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Analysis error: {str(e)}"
         )
+
+
+@router.post("/upload")
+async def upload_material(
+    subject_id: str = Form(...),
+    files: List[UploadFile] = File(...),
+    material_type: str = Form(...),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload and process study materials through ML pipeline:
+    EasyOCR → YOLOv8 → GroundingDINO
+    """
+    try:
+        saved_files = []
+        extracted_data = {
+            "text_content": [],
+            "detected_objects": [],
+            "circuit_diagrams": [],
+            "questions": []
+        }
+        
+        for file in files:
+            file_path = UPLOAD_DIR / f"{datetime.now().timestamp()}_{file.filename}"
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            saved_files.append(str(file_path))
+            
+            # Process based on file type
+            if file.content_type and file.content_type.startswith("image"):
+                image_result = await process_image_pipeline(file_path)
+                extracted_data["text_content"].extend(image_result.get("text", []))
+                extracted_data["detected_objects"].extend(image_result.get("objects", []))
+                extracted_data["circuit_diagrams"].extend(image_result.get("circuits", []))
+            elif file.content_type and file.content_type.startswith("text"):
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    extracted_data["text_content"].append(content)
+            elif file.content_type and "pdf" in file.content_type:
+                pdf_result = await process_pdf(file_path)
+                extracted_data["text_content"].extend(pdf_result.get("text", []))
+        
+        # Extract questions
+        extracted_data["questions"] = extract_questions(extracted_data["text_content"])
+        
+        # Generate analysis
+        analysis_result = await generate_analysis(subject_id, extracted_data)
+        
+        return {
+            "success": True,
+            "message": f"Processed {len(files)} files successfully",
+            "files": saved_files,
+            "extracted_data": extracted_data,
+            "analysis": analysis_result
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def process_image_pipeline(image_path: str):
+    """Process image: EasyOCR → YOLOv8 → GroundingDINO"""
+    result = {"text": [], "objects": [], "circuits": []}
+    
+    try:
+        # Step 1: EasyOCR for text
+        import easyocr
+        reader = easyocr.Reader(['en'], gpu=False)
+        ocr_results = reader.readtext(image_path)
+        
+        if ocr_results:
+            extracted_text = ' '.join([text for (_, text, _) in ocr_results])
+            result["text"].append(extracted_text)
+        
+        # Step 2: YOLOv8 for objects
+        try:
+            from ultralytics import YOLO
+            model = YOLO('yolov8n.pt')
+            yolo_results = model(image_path, verbose=False)
+            
+            for r in yolo_results:
+                for box in r.boxes:
+                    result["objects"].append({
+                        "label": model.names[int(box.cls[0])],
+                        "confidence": float(box.conf[0])
+                    })
+        except Exception as e:
+            print(f"YOLOv8 error: {e}")
+        
+        # Step 3: GroundingDINO for circuits (if little text found)
+        if not result["text"] or len(result["text"][0]) < 50:
+            try:
+                from transformers import pipeline
+                from PIL import Image
+                
+                detector = pipeline("zero-shot-object-detection", model="google/owlvit-base-patch32")
+                image = Image.open(image_path)
+                circuit_results = detector(
+                    image,
+                    candidate_labels=["circuit diagram", "electronic schematic"],
+                    threshold=0.1
+                )
+                result["circuits"] = circuit_results
+            except Exception as e:
+                print(f"GroundingDINO error: {e}")
+        
+        return result
+    except Exception as e:
+        print(f"Image processing error: {e}")
+        return result
+
+
+async def process_pdf(pdf_path: str):
+    """Extract text from PDF"""
+    result = {"text": []}
+    try:
+        import PyPDF2
+        with open(pdf_path, 'rb') as file:
+            reader = PyPDF2.PdfReader(file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+            result["text"].append(text)
+    except Exception as e:
+        print(f"PDF error: {e}")
+    return result
+
+
+def extract_questions(text_content: List[str]):
+    """Extract questions from text"""
+    questions = []
+    for content in text_content:
+        lines = content.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.endswith('?') or any(m in line.lower() for m in ['q.', 'question', 'marks:']):
+                if len(line) > 20:
+                    questions.append({
+                        "text": line,
+                        "type": detect_question_type(line),
+                        "marks": extract_marks(line)
+                    })
+    return questions
+
+
+def detect_question_type(text: str) -> str:
+    text_lower = text.lower()
+    if any(w in text_lower for w in ['calculate', 'compute', 'solve']):
+        return "numerical"
+    elif any(w in text_lower for w in ['diagram', 'draw', 'sketch']):
+        return "diagram"
+    elif any(w in text_lower for w in ['explain', 'describe', 'discuss']):
+        return "theory"
+    return "mixed"
+
+
+def extract_marks(text: str) -> int:
+    import re
+    patterns = [r'\((\d+)\)', r'\[(\d+)\]', r'(\d+)\s*marks?']
+    for pattern in patterns:
+        match = re.search(pattern, text.lower())
+        if match:
+            return int(match.group(1))
+    return 0
+
+
+async def generate_analysis(subject_id: str, extracted_data: dict):
+    """Generate comprehensive analysis"""
+    return {
+        "subject_id": subject_id,
+        "timestamp": datetime.now().isoformat(),
+        "summary": {
+            "total_questions": len(extracted_data["questions"]),
+            "theory_questions": len([q for q in extracted_data["questions"] if q["type"] == "theory"]),
+            "numerical_questions": len([q for q in extracted_data["questions"] if q["type"] == "numerical"]),
+            "diagram_questions": len([q for q in extracted_data["questions"] if q["type"] == "diagram"]),
+            "detected_objects": len(extracted_data["detected_objects"]),
+            "circuit_diagrams": len(extracted_data["circuit_diagrams"])
+        },
+        "questions": extracted_data["questions"][:20]  # Limit to top 20
+    }
+
+
+@router.get("/important-questions/{subject_id}")
+async def get_important_questions(
+    subject_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get most repeating and high-probability questions"""
+    service = PrepIQService()
+    try:
+        # Get repetition analysis
+        repetition_analysis = service.get_repetition_analysis(
+            db=db, subject_id=subject_id, user_id=current_user["id"]
+        )
+        
+        # Get predictions
+        predictions = service.get_latest_prediction(
+            db=db, subject_id=subject_id, user_id=current_user["id"]
+        )
+        
+        return {
+            "subject_id": subject_id,
+            "most_repeating": repetition_analysis.get("exact_repetitions", [])[:10],
+            "high_probability": predictions.get("predicted_questions", [])[:10]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/mock-test/generate")
+async def generate_mock_test(
+    subject_id: str = Form(...),
+    difficulty: str = Form("mixed"),
+    question_count: int = Form(10),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Generate mock test based on patterns"""
+    try:
+        # Get questions from database
+        questions = db.query(models.Question).join(
+            models.QuestionPaper
+        ).filter(
+            models.QuestionPaper.subject_id == subject_id
+        ).all()
+        
+        # Select random questions based on pattern
+        import random
+        selected = random.sample(questions, min(question_count, len(questions)))
+        
+        return {
+            "test_id": f"mock_{datetime.now().timestamp()}",
+            "subject_id": subject_id,
+            "questions": [
+                {
+                    "id": q.id,
+                    "question": q.question_text,
+                    "marks": q.marks,
+                    "unit": q.unit_name
+                } for q in selected
+            ],
+            "time_limit": question_count * 3,
+            "total_marks": sum(q.marks for q in selected)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -1,16 +1,27 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
+import os
+import logging
 
 from ..database import get_db
 from .. import models, schemas
 from ..services import PrepIQService
 import sys
-import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Import from the new Supabase-first auth service
 from services.supabase_first_auth import get_current_user_from_token
+
+# Import Gemini for AI Tutor
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    logging.warning("Google Generative AI not installed. AI Tutor will use fallback responses.")
+
+logger = logging.getLogger(__name__)
 
 # Dependency for protected routes
 async def get_current_user(
@@ -25,6 +36,48 @@ router = APIRouter(
     prefix="/chat",
     tags=["Chat"]
 )
+
+# AI Tutor System Prompt
+TUTOR_SYSTEM_PROMPT = """Act as a highly intelligent, slightly sarcastic but supportive teacher. Your role is to guide the student through concepts using active questioning and structured reasoning.
+
+Rules you must follow strictly:
+
+Always ask at least one diagnostic question before giving any explanation.
+
+Do not reveal the full answer immediately.
+
+Teach through a step-by-step reasoning process.
+
+Make the student think. Ask guiding questions after each step.
+
+Only provide the complete answer if the student explicitly says: "Tell me the full answer."
+
+Use light, clever sarcasm (subtle, not rude) to keep the tone engaging.
+
+Break complex ideas into connected stages so each concept builds logically on the previous one.
+
+If the student gives a wrong answer, do not immediately correct it. Instead, ask a question that exposes the flaw and leads them to self-correct.
+
+Keep explanations clear, precise, and structured. No fluff.
+
+Teaching Style Guidelines:
+
+Start by assessing prior knowledge.
+
+Use analogies when helpful, but keep them tight.
+
+Encourage reasoning over memorization.
+
+Keep the student mentally involved at every step.
+
+Never dump information in one block.
+
+Example behavior:
+If asked a math question, first ask what they already know about the topic.
+If asked a programming question, first ask how they think the logic should flow.
+If asked a theory question, first ask for their interpretation.
+
+You are not a solution machine. You are a thinking trainer."""
 
 @router.post("/message", response_model=schemas.ChatResponse)
 async def send_message(
@@ -190,3 +243,97 @@ async def clear_chat_history(
     db.commit()
     
     return {"message": "Chat history cleared successfully"}
+
+
+@router.post("/tutor")
+async def ai_tutor_chat(
+    request: dict,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    AI Tutor endpoint using Gemini 2.5 Flash with teaching persona.
+    Provides Socratic teaching style with diagnostic questions.
+    """
+    try:
+        message = request.get("message", "")
+        conversation_history = request.get("conversation_history", [])
+        
+        if not message:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Message is required"
+            )
+        
+        # Check if Gemini is available
+        if not GEMINI_AVAILABLE:
+            # Fallback response if Gemini not installed
+            return {
+                "response": "I apologize, but the AI tutor is currently unavailable. Please ensure the Gemini API is configured correctly.",
+                "context": None
+            }
+        
+        # Configure Gemini
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            logger.error("GEMINI_API_KEY not found in environment variables")
+            return {
+                "response": "I'm having trouble accessing my teaching capabilities right now. Please try again later.",
+                "context": None
+            }
+        
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        
+        # Build conversation context from history
+        context = ""
+        if conversation_history:
+            context = "\n\nPrevious conversation:\n"
+            for msg in conversation_history[-5:]:  # Last 5 messages
+                role = "Student" if msg.get("role") == "user" else "Tutor"
+                context += f"{role}: {msg.get('content', '')}\n"
+        
+        # Create the full prompt with system instructions
+        full_prompt = f"""{TUTOR_SYSTEM_PROMPT}
+
+{context}
+
+Student's current question: {message}
+
+Respond as the AI Tutor:"""
+        
+        # Generate response
+        response = model.generate_content(full_prompt)
+        
+        # Extract the response text
+        tutor_response = response.text if hasattr(response, 'text') else str(response)
+        
+        # Save to chat history if subject_id provided
+        subject_id = request.get("subject_id")
+        if subject_id:
+            chat_entry = models.ChatHistory(
+                user_id=current_user["id"],
+                subject_id=subject_id,
+                user_message=message,
+                bot_response=tutor_response
+            )
+            db.add(chat_entry)
+            db.commit()
+        
+        return {
+            "response": tutor_response,
+            "context": {
+                "conversation_length": len(conversation_history) + 1,
+                "tutor_mode": "socratic",
+                "model": "gemini-2.5-flash"
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"AI Tutor error: {str(e)}")
+        return {
+            "response": "I apologize, but I'm having trouble formulating a response right now. Let me try a different approach - what specific aspect of this topic would you like to explore first?",
+            "context": None
+        }

@@ -1,29 +1,86 @@
 "use client"
 
-import { useState } from "react"
-import { Upload, FileText, CheckCircle2, AlertCircle, X } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Upload, FileText, CheckCircle2, AlertCircle, X, Loader2 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Progress } from "@/components/ui/progress"
+import { subjectService } from "@/src/lib/api"
+import { toast } from "sonner"
+
+interface Subject {
+  id: string
+  name: string
+}
 
 export default function UploadPage() {
   const [isUploading, setIsUploading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [file, setFile] = useState<File | null>(null)
+  const [subjects, setSubjects] = useState<Subject[]>([])
+  const [selectedSubject, setSelectedSubject] = useState<string>("")
+  const [loadingSubjects, setLoadingSubjects] = useState(true)
 
-  const handleUpload = () => {
-    if (!file) return
+  useEffect(() => {
+    fetchSubjects()
+  }, [])
+
+  const fetchSubjects = async () => {
+    try {
+      setLoadingSubjects(true)
+      const data = await subjectService.getAll()
+      setSubjects(data)
+    } catch (error) {
+      console.error("Error fetching subjects:", error)
+      toast.error("Failed to load subjects")
+    } finally {
+      setLoadingSubjects(false)
+    }
+  }
+
+  const handleUpload = async () => {
+    if (!file) {
+      toast.error("Please select a file to upload")
+      return
+    }
+    if (!selectedSubject) {
+      toast.error("Please select a subject")
+      return
+    }
+    
     setIsUploading(true)
-    let p = 0
-    const interval = setInterval(() => {
-      p += 10
-      setProgress(p)
-      if (p >= 100) {
-        clearInterval(interval)
-        setTimeout(() => setIsUploading(false), 500)
-      }
-    }, 200)
+    setProgress(0)
+    
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      formData.append("subject_id", selectedSubject)
+      
+      // Simulate progress
+      let p = 0
+      const interval = setInterval(() => {
+        p += 10
+        setProgress(p)
+        if (p >= 100) {
+          clearInterval(interval)
+        }
+      }, 300)
+      
+      // TODO: Replace with actual API call
+      // await api.post('/upload', formData)
+      
+      setTimeout(() => {
+        setIsUploading(false)
+        toast.success("File uploaded successfully!")
+        setFile(null)
+        setProgress(0)
+      }, 3500)
+    } catch (error) {
+      console.error("Upload error:", error)
+      toast.error("Failed to upload file")
+      setIsUploading(false)
+    }
   }
 
   return (
@@ -77,14 +134,33 @@ export default function UploadPage() {
         <CardContent className="grid gap-6">
           <div className="grid gap-2">
             <label className="text-sm font-medium">Assign to Subject</label>
-            <Select>
+            <Select 
+              value={selectedSubject} 
+              onValueChange={setSelectedSubject}
+              disabled={loadingSubjects}
+            >
               <SelectTrigger>
-                <SelectValue placeholder="Select subject" />
+                {loadingSubjects ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading subjects...
+                  </span>
+                ) : (
+                  <SelectValue placeholder="Select subject" />
+                )}
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="calc3">Calculus III</SelectItem>
-                <SelectItem value="chem202">Organic Chemistry</SelectItem>
-                <SelectItem value="hist101">Modern History</SelectItem>
+                {subjects.length === 0 ? (
+                  <SelectItem value="no-subjects" disabled>
+                    No subjects available. Add subjects first.
+                  </SelectItem>
+                ) : (
+                  subjects.map((subject) => (
+                    <SelectItem key={subject.id} value={subject.id}>
+                      {subject.name}
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
           </div>

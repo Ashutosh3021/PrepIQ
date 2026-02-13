@@ -192,11 +192,32 @@ async def complete_step2(
         db_user.focus_subjects = wizard_data.focus_subjects
         db_user.study_hours_per_day = wizard_data.study_hours_per_day
         
+        # Automatically create subjects from focus_subjects
+        created_subjects = []
+        for subject_name in wizard_data.focus_subjects:
+            # Check if subject already exists for this user
+            existing_subject = db.query(models.Subject).filter(
+                models.Subject.user_id == current_user["id"],
+                models.Subject.name.ilike(subject_name)
+            ).first()
+            
+            if not existing_subject:
+                # Create new subject
+                new_subject = models.Subject(
+                    user_id=current_user["id"],
+                    name=subject_name,
+                    code=f"SUB-{subject_name[:3].upper()}-{datetime.now().strftime('%Y')}",
+                    semester=1,
+                    academic_year=str(datetime.now().year)
+                )
+                db.add(new_subject)
+                created_subjects.append(subject_name)
+        
         # Commit changes
         db.commit()
         db.refresh(db_user)
         
-        logger.info(f"User {current_user['id']} completed wizard step 2 - Subjects: {len(wizard_data.focus_subjects)}, Hours: {wizard_data.study_hours_per_day}")
+        logger.info(f"User {current_user['id']} completed wizard step 2 - Subjects: {len(wizard_data.focus_subjects)}, Hours: {wizard_data.study_hours_per_day}, Created: {len(created_subjects)} new subjects")
         
         return {
             "id": str(current_user["id"]),

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Send, Bot, Sparkles, Paperclip } from "lucide-react"
+import { Send, Bot, Sparkles, Paperclip, Loader2 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -19,25 +19,57 @@ const initialMessages = [
 export default function ChatPage() {
   const [messages, setMessages] = useState(initialMessages)
   const [input, setInput] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim()) return
-    const newMessages = [...messages, { id: Date.now().toString(), role: "user", content: input }]
+    const userMessage = { id: Date.now().toString(), role: "user" as const, content: input }
+    const newMessages = [...messages, userMessage]
     setMessages(newMessages)
     setInput("")
+    setIsLoading(true)
 
-    // Simulate AI response
-    setTimeout(() => {
+    try {
+      // Call the backend AI tutor API
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/chat/tutor`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+        },
+        body: JSON.stringify({
+          message: input,
+          conversation_history: messages.slice(-5) // Send last 5 messages for context
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to get response from AI tutor')
+      }
+
+      const data = await response.json()
+      
       setMessages((prev) => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
           role: "assistant",
-          content:
-            "That's a great question about partial derivatives! Based on your uploaded notes, the most important thing to remember is the chain rule application for multivariable functions...",
+          content: data.response || "I apologize, but I'm having trouble processing your question right now. Please try again.",
         },
       ])
-    }, 1000)
+    } catch (error) {
+      console.error("AI Tutor error:", error)
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: "I apologize, but I'm having trouble connecting to the AI tutor right now. Please check your connection and try again.",
+        },
+      ])
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -106,8 +138,12 @@ export default function ChatPage() {
               onChange={(e) => setInput(e.target.value)}
               className="flex-1"
             />
-            <Button size="icon" type="submit" className="shrink-0" disabled={!input.trim()}>
-              <Send className="h-4 w-4" />
+            <Button size="icon" type="submit" className="shrink-0" disabled={!input.trim() || isLoading}>
+              {isLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
             </Button>
           </form>
         </div>
