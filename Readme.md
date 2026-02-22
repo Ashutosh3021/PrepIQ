@@ -1470,7 +1470,7 @@ Now stop reading and go study! (But use PrepIQ first)
 
 **PrepIQ** - *Predict. Prepare. Pass.*
 
-*Making exam prep less painful since 2025*
+*Making exam prep less painful since 2026*
 
 [⬆ Back to Top](#-prepiq)
 
