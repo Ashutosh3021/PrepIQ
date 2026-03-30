@@ -42,12 +42,55 @@ async def generate_mock_test(
             detail="Subject not found"
         )
     
-    # Create mock test record
+    # Get completed papers for this subject
+    papers = db.query(models.QuestionPaper).filter(
+        models.QuestionPaper.subject_id == test_request.subject_id,
+        models.QuestionPaper.processing_status == "completed"
+    ).all()
+    
+    if not papers:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No processed question papers found for this subject. Please upload papers first."
+        )
+    
+    # Get questions from these papers
+    query = db.query(models.Question).filter(
+        models.Question.paper_id.in_([p.id for p in papers])
+    )
+    
+    # Filter by difficulty if specified
+    if test_request.difficulty:
+        difficulty_map = {"easy": 1, "medium": 2, "hard": 3}
+        target_diff = difficulty_map.get(test_request.difficulty.lower(), 2)
+        # Allow ±1 difficulty level
+        query = query.filter(models.Question.difficulty.in_([target_diff - 1, target_diff, target_diff + 1]))
+    
+    # Get questions
+    all_questions = query.all()
+    
+    if not all_questions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No questions found in uploaded papers. Please upload more papers."
+        )
+    
+    # Shuffle and select required number of questions
+    import random
+    selected_questions = random.sample(
+        all_questions, 
+        min(test_request.num_questions, len(all_questions))
+    )
+    
+    # Calculate total marks
+    total_marks = sum(q.marks for q in selected_questions)
+    
+    # Create test record
     mock_test = models.MockTest(
         user_id=current_user["id"],
         subject_id=test_request.subject_id,
-        total_questions=test_request.num_questions,
-        total_marks=100,  # Calculate based on question marks
+        total_questions=len(selected_questions),
+        total_marks=total_marks,
         duration_minutes=test_request.time_limit_minutes,
         difficulty_level=test_request.difficulty,
         start_time=datetime.now(timezone.utc)
@@ -56,25 +99,23 @@ async def generate_mock_test(
     db.commit()
     db.refresh(mock_test)
     
-    # In a real implementation, we would select questions based on the criteria
-    # For now, return mock questions
+    # Format questions for response
     questions = []
-    for i in range(test_request.num_questions):
-        marks = 2 if i < test_request.num_questions//2 else 5 if i < test_request.num_questions*4//5 else 10
+    for i, q in enumerate(selected_questions):
         questions.append({
-            "id": str(uuid.uuid4()),
+            "id": str(q.id),
             "number": i+1,
-            "text": f"Sample question {i+1} for {subject.name}",
-            "marks": marks,
-            "unit": f"Unit {((i % 3) + 1)}",
-            "options": ["A) Option A", "B) Option B", "C) Option C", "D) Option D"] if marks == 2 else None,
-            "type": "mcq" if marks == 2 else "descriptive"
+            "text": q.question_text[:500] if q.question_text else "",
+            "marks": q.marks,
+            "unit": q.unit_name or "General",
+            "options": ["A) Option A", "B) Option B", "C) Option C", "D) Option D"] if q.marks <= 2 else None,
+            "type": "mcq" if q.marks <= 2 else "descriptive"
         })
     
     return {
         "test_id": mock_test.id,
-        "total_questions": test_request.num_questions,
-        "total_marks": 100,
+        "total_questions": len(selected_questions),
+        "total_marks": total_marks,
         "time_limit_minutes": test_request.time_limit_minutes,
         "start_time": mock_test.start_time,
         "questions": questions

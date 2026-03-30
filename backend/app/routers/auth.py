@@ -75,3 +75,33 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         }
     except HTTPException:
         return {"valid": False}
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+@router.post("/refresh")
+async def refresh_token(req: RefreshTokenRequest):
+    """Refresh access token using Supabase refresh token"""
+    try:
+        from supabase import create_client
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+        
+        if not supabase_url or not supabase_key:
+            raise HTTPException(status_code=500, detail="Supabase not configured")
+        
+        supabase = create_client(supabase_url, supabase_key)
+        
+        # Exchange refresh token for new session
+        response = supabase.auth.refresh_session(req.refresh_token)
+        
+        if response.session:
+            return {
+                "access_token": response.session.access_token,
+                "refresh_token": response.session.refresh_token,
+                "expires_in": response.session.expires_in
+            }
+        else:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Token refresh failed: {str(e)}")

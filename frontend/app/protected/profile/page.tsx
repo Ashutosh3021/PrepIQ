@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { apiClient } from '@/src/lib/api';
 import { 
   User, 
   Mail, 
@@ -28,34 +29,11 @@ export default function ProfilePage() {
         setLoading(true);
         setError(null);
         
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-          setError('No authentication token found. Please log in again.');
-          setLoading(false);
-          return;
-        }
-
-        // Get API URL with fallback to default
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-        
-        const response = await fetch(`${apiUrl}/auth/profile`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          setUserData(data);
-        } else {
-          const errorData = await response.json().catch(() => ({}));
-          setError(errorData.detail || 'Failed to fetch user data');
-        }
-      } catch (error) {
-        console.error('Error fetching user data:', error);
-        setError('Network error occurred while fetching user data');
+        const response = await apiClient.get<any>('/auth/profile');
+        setUserData(response);
+      } catch (err: any) {
+        console.error('Error fetching user data:', err);
+        setError(err.message || 'Failed to fetch user data');
       } finally {
         setLoading(false);
       }

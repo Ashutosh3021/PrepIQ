@@ -250,7 +250,7 @@ export default function SignupPage() {
               disabled={loading || success}
             />
             <label htmlFor="terms" className="ml-2 block text-sm text-gray-900">
-              I agree to the <a href="#" className="font-medium text-indigo-600 hover:text-indigo-500">Terms and Conditions</a>
+              I agree to the <span className="font-medium text-indigo-600">Terms and Conditions</span>
             </label>
           </div>
 

@@ -51,15 +51,17 @@ const WizardForm: React.FC<WizardFormProps> = ({ onComplete }) => {
   };
 
   const handleNext = () => {
-    if (step < 3) {
-      setStep(step + 1);
-    }
+    setStep(prev => {
+      if (prev < 3) return prev + 1;
+      return prev;
+    });
   };
 
   const handleBack = () => {
-    if (step > 1) {
-      setStep(step - 1);
-    }
+    setStep(prev => {
+      if (prev > 1) return prev - 1;
+      return prev;
+    });
   };
 
   const handleSubmit = async () => {

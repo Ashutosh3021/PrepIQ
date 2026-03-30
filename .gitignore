@@ -91,9 +91,6 @@ htmlcov/
 /frontend/vite/src
 
 # Frontend environment files - Security Best Practices
-/frontend/.env*
-!/frontend/.env.local.example
-!/frontend/.env.production.example
 
 # API Keys and Sensitive Configuration
 /API/

@@ -201,9 +201,12 @@ async def upload_and_analyze(
 async def process_image_pipeline(image_path: str):
     """
     Process image through the cascade:
-    1. EasyOCR (text extraction)
-    2. YOLOv8 (object detection)
-    3. GroundingDINO (circuit diagrams)
+    1. Lightweight text extraction (PIL + heuristics)
+    2. Lightweight object detection (PIL + heuristics)
+    3. Fallback: mark for manual review
+    
+    Note: For full ML capabilities (EasyOCR, YOLOv8, Transformers),
+    set ENABLE_HEAVY_ML=true and ensure packages are installed.
     """
     result = {
         "text": [],
@@ -211,81 +214,127 @@ async def process_image_pipeline(image_path: str):
         "circuits": []
     }
     
-    logger.info(f"Processing image: {image_path}")
+    enable_heavy_ml = os.getenv("ENABLE_HEAVY_ML", "false").lower() == "true"
+    logger.info(f"Processing image: {image_path} (Heavy ML: {enable_heavy_ml})")
     
     try:
-        # Step 1: Try EasyOCR for text
-        try:
-            import easyocr
-            reader = easyocr.Reader(['en'], gpu=False)
-            ocr_results = reader.readtext(image_path)
-            
-            if ocr_results:
-                extracted_text = ' '.join([text for (_, text, _) in ocr_results])
-                result["text"].append(extracted_text)
-                logger.info(f"✅ EasyOCR extracted {len(ocr_results)} text regions")
-            else:
-                logger.info("⚠️ EasyOCR found no text")
-        except ImportError:
-            logger.warning("EasyOCR not installed. Skipping text extraction.")
-        except Exception as e:
-            logger.warning(f"EasyOCR error: {e}")
-        
-        # Step 2: YOLOv8 for object detection
-        try:
-            from ultralytics import YOLO
-            model = YOLO('yolov8n.pt')
-            yolo_results = model(image_path, verbose=False)
-            
-            for r in yolo_results:
-                if len(r.boxes) > 0:
-                    for box in r.boxes:
-                        class_id = int(box.cls[0])
-                        confidence = float(box.conf[0])
-                        class_name = model.names[class_id]
-                        result["objects"].append({
-                            "label": class_name,
-                            "confidence": round(confidence, 2)
-                        })
-            
-            logger.info(f"✅ YOLOv8 detected {len(result['objects'])} objects")
-        except ImportError:
-            logger.warning("Ultralytics not installed. Skipping object detection.")
-        except Exception as e:
-            logger.warning(f"YOLOv8 error: {e}")
-        
-        # Step 3: GroundingDINO for circuit diagrams (if text detection failed or low confidence)
-        if not result["text"] or len(result["text"][0]) < 50:
+        # Step 1: Try heavy ML first if enabled, otherwise use lightweight
+        if enable_heavy_ml:
             try:
-                from transformers import pipeline
-                from PIL import Image
+                import easyocr
+                reader = easyocr.Reader(['en'], gpu=False)
+                ocr_results = reader.readtext(image_path)
                 
-                detector = pipeline(
-                    "zero-shot-object-detection",
-                    model="google/owlvit-base-patch32"
-                )
-                
-                image = Image.open(image_path)
-                circuit_results = detector(
-                    image,
-                    candidate_labels=["circuit diagram", "electronic schematic", "wiring diagram", "electrical circuit"],
-                    threshold=0.1
-                )
-                
-                if circuit_results:
-                    result["circuits"] = [
-                        {
-                            "label": r["label"],
-                            "score": round(r["score"], 2),
-                            "box": r["box"]
-                        }
-                        for r in circuit_results
-                    ]
-                    logger.info(f"✅ GroundingDINO found {len(result['circuits'])} circuit elements")
+                if ocr_results:
+                    extracted_text = ' '.join([text for (_, text, _) in ocr_results])
+                    result["text"].append(extracted_text)
+                    logger.info(f"✅ EasyOCR extracted {len(ocr_results)} text regions")
             except ImportError:
-                logger.warning("Transformers not installed. Skipping circuit detection.")
+                logger.warning("EasyOCR not installed. Using lightweight fallback.")
+                from ..ml_utils import extract_text_from_image
+                text_result = extract_text_from_image(image_path)
+                result["text"].extend(text_result.get("text", []))
             except Exception as e:
-                logger.warning(f"GroundingDINO error: {e}")
+                logger.warning(f"EasyOCR error: {e}")
+                from ..ml_utils import extract_text_from_image
+                text_result = extract_text_from_image(image_path)
+                result["text"].extend(text_result.get("text", []))
+        else:
+            # Use lightweight fallback
+            from ..ml_utils import extract_text_from_image
+            text_result = extract_text_from_image(image_path)
+            result["text"].extend(text_result.get("text", []))
+            logger.info(f"✅ Lightweight text extraction: {text_result.get('method', 'unknown')}")
+        
+        # Step 2: Try heavy ML object detection if enabled, otherwise use lightweight
+        if enable_heavy_ml:
+            try:
+                from ultralytics import YOLO
+                model = YOLO('yolov8n.pt')
+                yolo_results = model(image_path, verbose=False)
+                
+                for r in yolo_results:
+                    if len(r.boxes) > 0:
+                        for box in r.boxes:
+                            class_id = int(box.cls[0])
+                            confidence = float(box.conf[0])
+                            class_name = model.names[class_id]
+                            result["objects"].append({
+                                "label": class_name,
+                                "confidence": round(confidence, 2)
+                            })
+                
+                logger.info(f"✅ YOLOv8 detected {len(result['objects'])} objects")
+            except ImportError:
+                logger.warning("Ultralytics not installed. Using lightweight fallback.")
+                from ..ml_utils import detect_objects_in_image
+                obj_result = detect_objects_in_image(image_path)
+                result["objects"].extend(obj_result.get("objects", []))
+            except Exception as e:
+                logger.warning(f"YOLOv8 error: {e}")
+                from ..ml_utils import detect_objects_in_image
+                obj_result = detect_objects_in_image(image_path)
+                result["objects"].extend(obj_result.get("objects", []))
+        else:
+            # Use lightweight fallback
+            from ..ml_utils import detect_objects_in_image
+            obj_result = detect_objects_in_image(image_path)
+            result["objects"].extend(obj_result.get("objects", []))
+            logger.info(f"✅ Lightweight object detection: {obj_result.get('method', 'unknown')}")
+        
+        # Step 3: Circuit detection (if text detection failed or low confidence)
+        # Use lightweight analysis or try transformers if enabled
+        if not result["text"] or len(result["text"][0]) < 50:
+            if enable_heavy_ml:
+                try:
+                    from transformers import pipeline
+                    from PIL import Image
+                    
+                    detector = pipeline(
+                        "zero-shot-object-detection",
+                        model="google/owlvit-base-patch32"
+                    )
+                    
+                    image = Image.open(image_path)
+                    circuit_results = detector(
+                        image,
+                        candidate_labels=["circuit diagram", "electronic schematic", "wiring diagram", "electrical circuit"],
+                        threshold=0.1
+                    )
+                    
+                    if circuit_results:
+                        result["circuits"] = [
+                            {
+                                "label": r["label"],
+                                "score": round(r["score"], 2),
+                                "box": r["box"]
+                            }
+                            for r in circuit_results
+                        ]
+                        logger.info(f"✅ Transformers found {len(result['circuits'])} circuit elements")
+                except ImportError:
+                    logger.warning("Transformers not installed. Using lightweight circuit detection.")
+                    # Mark image for manual review
+                    result["circuits"].append({
+                        "label": "pending_review",
+                        "confidence": 0.3,
+                        "note": "Manual review recommended"
+                    })
+                except Exception as e:
+                    logger.warning(f"Transformers error: {e}")
+                    result["circuits"].append({
+                        "label": "pending_review",
+                        "confidence": 0.3,
+                        "note": "Processing error - manual review recommended"
+                    })
+            else:
+                # Use lightweight detection - mark for manual review
+                logger.info("Circuit detection: using lightweight mode, marking for review")
+                result["circuits"].append({
+                    "label": "pending_review",
+                    "confidence": 0.3,
+                    "note": "Enable ENABLE_HEAVY_ML for advanced detection"
+                })
         
         return result
         

@@ -48,6 +48,11 @@ export default function LoginPage() {
         // Store access token in localStorage or cookie
         localStorage.setItem('access_token', data.access_token);
         
+        // Store refresh token if available (for token refresh logic)
+        if (data.refresh_token) {
+          localStorage.setItem('refresh_token', data.refresh_token);
+        }
+        
         // Check if user has completed the wizard
         try {
           const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -184,9 +189,9 @@ export default function LoginPage() {
             </div>
 
             <div className="text-sm">
-              <a href="#" className="font-medium text-indigo-600 hover:text-indigo-500">
+              <button type="button" className="font-medium text-indigo-600 hover:text-indigo-500">
                 Forgot your password?
-              </a>
+              </button>
             </div>
           </div>
 
@@ -221,7 +226,7 @@ export default function LoginPage() {
           <div className="mt-6 grid grid-cols-2 gap-3">
             <div>
               <a
-                href="#"
+                href={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${typeof window !== 'undefined' ? window.location.origin : ''}/auth/callback`}
                 className="w-full inline-flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
               >
                 <span className="sr-only">Sign in with Google</span>
@@ -232,7 +237,7 @@ export default function LoginPage() {
             </div>
             <div>
               <a
-                href="#"
+                href={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/authorize?provider=github&redirect_to=${typeof window !== 'undefined' ? window.location.origin : ''}/auth/callback`}
                 className="w-full inline-flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
               >
                 <span className="sr-only">Sign in with GitHub</span>

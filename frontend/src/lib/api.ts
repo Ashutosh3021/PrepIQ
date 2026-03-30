@@ -33,6 +33,52 @@ const getAuthToken = (): string | null => {
   return null;
 };
 
+// Token refresh helper
+let isRefreshing = false;
+let refreshSubscribers: ((token: string) => void)[] = [];
+
+const subscribeTokenRefresh = (callback: (token: string) => void) => {
+  refreshSubscribers.push(callback);
+};
+
+const onTokenRefreshed = (token: string) => {
+  refreshSubscribers.forEach(callback => callback(token));
+  refreshSubscribers = [];
+};
+
+const refreshAccessToken = async (): Promise<string | null> => {
+  if (typeof window === 'undefined') return null;
+  
+  const refreshToken = localStorage.getItem('refresh_token');
+  if (!refreshToken) return null;
+  
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      localStorage.setItem('access_token', data.access_token);
+      if (data.refresh_token) {
+        localStorage.setItem('refresh_token', data.refresh_token);
+      }
+      return data.access_token;
+    }
+  } catch (error) {
+    console.error('Token refresh failed:', error);
+  }
+  
+  // Refresh failed - clear tokens
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('refresh_token');
+  localStorage.removeItem('supabase.auth.token');
+  window.location.href = '/login';
+  return null;
+};
+
 // Response handler with enhanced error handling
 const handleResponse = async <T>(response: Response): Promise<T> => {
   let data: any;
@@ -130,6 +176,15 @@ export const apiClient = {
           ...restConfig,
         });
 
+        // Handle 401 - attempt token refresh
+        if (response.status === 401 && requireAuth && attempt === 0) {
+          const newToken = await refreshAccessToken();
+          if (newToken) {
+            defaultHeaders['Authorization'] = `Bearer ${newToken}`;
+            continue; // Retry with new token
+          }
+        }
+
         const data = await handleResponse<T>(response);
         return data;
       } catch (error) {
@@ -137,8 +192,16 @@ export const apiClient = {
         
         // Don't retry on authentication errors or client errors
         if (error instanceof APIError) {
-          if (error.status === 401 || error.status === 403 || error.status === 404 || error.status === 422) {
-            if (toastErrors && error.status !== 401) {
+          if (error.status === 401) {
+            // Already tried refresh, redirect to login
+            if (typeof window !== 'undefined') {
+              window.location.href = '/login';
+            }
+            throw error;
+          }
+          
+          if (error.status === 403 || error.status === 404 || error.status === 422) {
+            if (toastErrors) {
               toast.error(error.message);
             }
             throw error;
@@ -146,7 +209,7 @@ export const apiClient = {
           
           // Don't retry on final attempt
           if (attempt === maxRetries) {
-            if (toastErrors && error.status !== 401) {
+            if (toastErrors) {
               toast.error(error.message);
             }
             throw error;
