@@ -6,12 +6,9 @@ from datetime import datetime, timedelta
 
 from ..database import get_db
 from .. import models, schemas
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Import from the new Supabase-first auth service
-from services.supabase_first_auth import get_current_user_from_token
+from ..services.supabase_first_auth import get_current_user_from_token
 
 router = APIRouter(
     prefix="/wizard",

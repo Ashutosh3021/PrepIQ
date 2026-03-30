@@ -63,8 +63,11 @@ class Chatbot:
         if len(self.conversation_memory[user_id]) > self.max_history_length:
             self.conversation_memory[user_id] = self.conversation_memory[user_id][-self.max_history_length:]
     
-    def get_response(self, user_message: str, context: str, db: Session, subject_id: str) -> str:
+    def get_response(self, user_message: str, context: str, db: Session, subject_id: str, user_id: str = None) -> str:
         """Generate response to user's question based on context and subject materials"""
+        # Get conversation history for context
+        history = self._get_user_conversation_history(user_id) if user_id else []
+        
         # Get relevant questions from the subject
         related_questions = db.query(models.Question).join(
             models.QuestionPaper

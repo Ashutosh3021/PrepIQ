@@ -1,5 +1,6 @@
 from typing import Optional, Dict, Any
 from fastapi import HTTPException, status
+from fastapi.responses import JSONResponse
 
 
 class PrepIQException(Exception):
@@ -78,27 +79,37 @@ class ExternalServiceError(PrepIQException):
         super().__init__(full_message, status_code=status.HTTP_503_SERVICE_UNAVAILABLE, error_code="EXTERNAL_SERVICE_ERROR")
 
 
-# Exception handlers for FastAPI
-async def prep_iq_exception_handler(request, exc: PrepIQException):
-    """Global exception handler for PrepIQ exceptions."""
-    return HTTPException(
-        status_code=exc.status_code,
-        detail={
-            "error": exc.message,
-            "error_code": exc.error_code,
-            "status_code": exc.status_code
+# Exception handlers for FastAPI — must return Response objects, NOT HTTPException
+async def prep_iq_exception_handler(request, exc):
+    """Global exception handler for PrepIQ and general exceptions."""
+    if isinstance(exc, PrepIQException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": exc.message,
+                "error_code": exc.error_code,
+                "status_code": exc.status_code
+            }
+        )
+    # Generic exception fallback
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "error_code": "INTERNAL_ERROR",
+            "status_code": 500
         }
     )
 
 
 async def validation_exception_handler(request, exc):
     """Handler for Pydantic validation errors."""
-    return HTTPException(
+    return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        detail={
+        content={
             "error": "Validation failed",
             "error_code": "VALIDATION_ERROR",
-            "details": exc.errors(),
+            "details": exc.errors() if hasattr(exc, 'errors') else str(exc),
             "status_code": status.HTTP_422_UNPROCESSABLE_ENTITY
         }
     )
@@ -106,9 +117,9 @@ async def validation_exception_handler(request, exc):
 
 async def http_exception_handler(request, exc: HTTPException):
     """Handler for HTTP exceptions."""
-    return HTTPException(
+    return JSONResponse(
         status_code=exc.status_code,
-        detail={
+        content={
             "error": exc.detail,
             "status_code": exc.status_code
         }

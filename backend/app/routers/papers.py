@@ -13,13 +13,10 @@ logger = logging.getLogger(__name__)
 
 from ..database import get_db
 from .. import models, schemas
-from ..services import PrepIQService
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from ..dependencies import get_prepiq_service
 
 # Import from the new Supabase-first auth service
-from services.supabase_first_auth import get_current_user_from_token
+from ..services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
 async def get_current_user(
@@ -30,11 +27,8 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization, db)
 
-# Import SupabaseStorageService using sys.path manipulation to handle import correctly
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
-from services.supabase_storage import SupabaseStorageService
+# Import SupabaseStorageService
+from ..services.supabase_storage import SupabaseStorageService
 
 router = APIRouter(
     prefix="/papers",
@@ -149,7 +143,7 @@ async def upload_paper(
     
     # Process the paper asynchronously
     try:
-        service = PrepIQService()
+        service = get_prepiq_service()
         result = await asyncio.get_event_loop().run_in_executor(
             ThreadPoolExecutor(),
             service.process_uploaded_paper,

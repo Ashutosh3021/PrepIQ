@@ -10,12 +10,9 @@ import os
 
 from ..database import get_db
 from .. import models, schemas
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Use the new Supabase-first auth service
-from services.supabase_first_auth import (
+from ..services.supabase_first_auth import (
     SupabaseFirstAuthService, 
     SignupRequest, 
     LoginRequest, 

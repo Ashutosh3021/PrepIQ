@@ -29,7 +29,7 @@ import {
   PieChart as PieChartIcon,
   Activity
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { apiClient } from '@/lib/api';
 
 interface TrendAnalysisProps {
   subjectId: string;
@@ -48,7 +48,7 @@ export default function TrendAnalysis({ subjectId, subjectName }: TrendAnalysisP
 
   const fetchTrendData = async () => {
     try {
-      const response = await api.get(`/analysis/trend-analysis/${subjectId}`);
+      const response = await apiClient.get<any>(`/analysis/trend-analysis/${subjectId}`);
       setTrendData(response.data);
     } catch (error) {
       console.error('Error fetching trend data:', error);

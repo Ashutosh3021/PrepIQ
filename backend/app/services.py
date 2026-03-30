@@ -85,8 +85,7 @@ class PrepIQService:
                     marks=q_data.get("marks", 0),
                     unit_name=q_data.get("unit", "Unknown"),
                     question_type=q_data.get("question_type", "unknown"),
-                    difficulty_level=q_data.get("difficulty", "medium"),
-                    keywords_json=json.dumps(q_data.get("keywords", [])),
+                    difficulty=q_data.get("difficulty", "medium"),
                     text_length=q_data.get("length", 0)
                 )
                 db.add(question)
@@ -180,8 +179,8 @@ class PrepIQService:
                     "marks": q.marks,
                     "unit": q.unit_name,
                     "type": q.question_type,
-                    "difficulty": q.difficulty_level,
-                    "keywords": json.loads(q.keywords_json) if q.keywords_json else [],
+                    "difficulty": q.difficulty,
+                    "keywords": [],
                     "length": q.text_length
                 })
         
@@ -306,7 +305,7 @@ class PrepIQService:
                 "text": q.question_text,
                 "marks": q.marks,
                 "unit": q.unit_name,
-                "difficulty": q.difficulty_level,
+                "difficulty": q.difficulty,
                 "year": getattr(q, 'year', datetime.now().year)  # Assuming year attribute exists
             })
         
@@ -360,45 +359,76 @@ class PrepIQService:
     
     def generate_mock_test(self, db: Session, subject_id: str, user_id: str, num_questions: int, difficulty: str) -> Dict[str, Any]:
         """Generate a mock test based on predictions and user history"""
+        import random
+        import json
+        
         # Get latest predictions for the subject
         latest_prediction = db.query(models.Prediction).filter(
-            models.Prediction.subject_id == subject_id
+            models.Prediction.subject_id == subject_id,
+            models.Prediction.user_id == user_id
         ).order_by(models.Prediction.created_at.desc()).first()
         
-        # Get user's performance history
-        user_tests = db.query(models.MockTest).filter(
-            models.MockTest.user_id == user_id
+        # Pull real questions from the database
+        db_questions = db.query(models.Question).join(
+            models.QuestionPaper, models.Question.paper_id == models.QuestionPaper.id
+        ).filter(
+            models.QuestionPaper.subject_id == subject_id
         ).all()
         
-        # Generate test based on predictions and user history
-        # This is a simplified implementation
-        questions = []
-        for i in range(num_questions):
-            marks = 2 if i < num_questions//2 else 5 if i < num_questions*4//5 else 10
-            questions.append({
-                "id": str(uuid.uuid4()),
-                "number": i+1,
-                "text": f"Sample question {i+1} for mock test",
-                "marks": marks,
-                "unit": f"Unit {((i % 3) + 1)}",
-                "type": "mcq" if marks == 2 else "descriptive"
-            })
+        if not db_questions:
+            # Fallback if no questions are available in DB to prevent breaking
+            questions = []
+            for i in range(num_questions):
+                marks = 2 if i < num_questions//2 else 5 if i < num_questions*4//5 else 10
+                questions.append({
+                    "id": str(uuid.uuid4()),
+                    "number": i+1,
+                    "text": f"Please upload question papers to generate targeted mock tests.",
+                    "marks": marks,
+                    "unit": "General",
+                    "type": "descriptive"
+                })
+        else:
+            # Filter by difficulty if not mixed
+            filtered = db_questions
+            if difficulty and difficulty.lower() != "mixed":
+                filtered = [q for q in db_questions if q.difficulty and q.difficulty.lower() == difficulty.lower()]
+                if not filtered:
+                    filtered = db_questions # fallback if no match
+                    
+            # Basic random selection weighting could be added here based on latest_prediction
+            selected_db_qs = random.sample(filtered, min(num_questions, len(filtered)))
+            
+            questions = []
+            for i, q in enumerate(selected_db_qs):
+                questions.append({
+                    "id": str(q.id),
+                    "number": i+1,
+                    "text": q.question_text,
+                    "marks": q.marks or 5,
+                    "unit": q.unit_name or "General",
+                    "type": "mcq" if (q.marks and q.marks <= 2) else "descriptive"
+                })
+        
+        total_marks = sum(q.get("marks", 5) for q in questions)
         
         # Create mock test record
         mock_test = models.MockTest(
             user_id=user_id,
             subject_id=subject_id,
-            total_questions=num_questions,
-            total_marks=100,
+            total_questions=len(questions),
+            total_marks=total_marks,
             difficulty_level=difficulty
         )
         db.add(mock_test)
         db.commit()
         
         return {
-            "test_id": mock_test.id,
-            "total_questions": num_questions,
-            "total_marks": 100,
+            "test_id": str(mock_test.id),
+            "total_questions": len(questions),
+            "total_marks": total_marks,
+            "time_limit_minutes": len(questions) * 3,
+            "start_time": datetime.now(timezone.utc).isoformat(),
             "questions": questions
         }
     
@@ -718,7 +748,7 @@ class PrepIQService:
             "subject_id": prediction.subject_id,
             "predicted_questions": predicted_questions,
             "total_marks": prediction.total_predicted_marks,
-            "coverage_percentage": prediction.coverage_percentage,
+            "coverage_percentage": prediction.topic_coverage_percentage,
             "unit_coverage": unit_coverage,
             "generated_at": prediction.created_at,
             "accuracy_score": prediction.prediction_accuracy_score,
@@ -769,7 +799,7 @@ class PrepIQService:
             "subject_id": prediction.subject_id,
             "predicted_questions": predicted_questions,
             "total_marks": prediction.total_predicted_marks,
-            "coverage_percentage": prediction.coverage_percentage,
+            "coverage_percentage": prediction.topic_coverage_percentage,
             "unit_coverage": unit_coverage,
             "generated_at": prediction.created_at,
             "accuracy_score": prediction.prediction_accuracy_score,

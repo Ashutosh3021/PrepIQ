@@ -2,14 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from ..database import get_db
 from .. import models, schemas
 # Import from the new Supabase-first auth service
-from services.supabase_first_auth import get_current_user_from_token
+from ..services.supabase_first_auth import get_current_user_from_token
 
 router = APIRouter(
     prefix="/subjects",

@@ -5,12 +5,9 @@ from datetime import datetime, date, timedelta
 
 from ..database import get_db
 from .. import models, schemas
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Import from the new Supabase-first auth service
-from services.supabase_first_auth import get_current_user_from_token
+from ..services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
 async def get_current_user(
@@ -20,7 +17,7 @@ async def get_current_user(
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization, db)
-from ..services import PrepIQService
+from ..dependencies import get_prepiq_service
 
 router = APIRouter(
     prefix="/plan",
@@ -33,7 +30,7 @@ async def generate_study_plan(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         result = service.generate_study_plan(
             db=db,
@@ -77,7 +74,7 @@ async def get_current_study_plan(
             detail="Not authorized to access this study plan"
         )
     
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         result = service.get_user_study_plan(
             db=db,
@@ -112,7 +109,7 @@ async def update_study_plan(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         result = service.update_study_plan_progress(
             db=db,

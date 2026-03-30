@@ -31,7 +31,7 @@ except ImportError:
         logger.warning("Model coordinator not available - some features may be limited")
 
 # Import from the new Supabase-first auth service
-from services.supabase_first_auth import get_current_user_from_token
+from ..services.supabase_first_auth import get_current_user_from_token
 
 logger = logging.getLogger(__name__)
 
@@ -142,12 +142,24 @@ async def upload_and_analyze(
         logger.info("Extracting questions from content...")
         extracted_data["questions"] = extract_questions(extracted_data["text_content"])
         
+        # Create a QuestionPaper record to associate questions with
+        question_paper = models.QuestionPaper(
+            subject_id=subject_id,
+            file_name=files[0].filename if files else "uploaded_material",
+            file_path=saved_files[0] if saved_files else None,
+            processing_status="completed",
+            processed_at=datetime.now(),
+        )
+        db.add(question_paper)
+        db.commit()
+        db.refresh(question_paper)
+        
         # Save questions to database
         logger.info(f"Saving {len(extracted_data['questions'])} questions to database...")
         saved_questions = []
         for q_data in extracted_data["questions"]:
             question = models.Question(
-                paper_id=None,  # Will be associated later
+                paper_id=question_paper.id,
                 question_text=q_data["text"],
                 marks=q_data.get("marks", 0),
                 unit_name=q_data.get("unit", "Unknown"),

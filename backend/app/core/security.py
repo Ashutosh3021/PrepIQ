@@ -9,7 +9,7 @@ import secrets
 
 from .config import settings
 from .exceptions import AuthenticationError, AuthorizationError
-from ..database import get_db_session
+from ..database import get_db
 from ..models import User
 
 
@@ -57,7 +57,7 @@ def decode_access_token(token: str) -> Dict[str, Any]:
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db = Depends(get_db_session)
+    db = Depends(get_db)
 ) -> User:
     """Get the current authenticated user from the token."""
     try:

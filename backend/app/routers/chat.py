@@ -6,12 +6,10 @@ import logging
 
 from ..database import get_db
 from .. import models, schemas
-from ..services import PrepIQService
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from ..dependencies import get_prepiq_service
 
 # Import from the new Supabase-first auth service
-from services.supabase_first_auth import get_current_user_from_token
+from ..services.supabase_first_auth import get_current_user_from_token
 
 # Import Gemini for AI Tutor
 try:
@@ -98,7 +96,7 @@ async def send_message(
         )
     
     # Process the message using the service
-    service = PrepIQService()
+    service = get_prepiq_service()
     result = service.chat_with_bot(
         db=db,
         user_id=current_user["id"],

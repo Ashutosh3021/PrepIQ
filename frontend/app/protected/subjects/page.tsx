@@ -13,13 +13,17 @@ import { subjectService, authService } from "@/src/lib/api"
 import { toast } from "sonner"
 
 interface Subject {
-  id: string
-  name: string
-  code: string
-  color: string
-  materials: number
-  prediction: number
-  progress?: number // Added for todo progress
+  id: string;
+  name: string;
+  code?: string;
+  color: string;
+  materials: number;
+  prediction: number;
+  progress?: number;
+  papers_uploaded?: number;
+  predictions_generated?: number;
+  mock_tests_created?: number;
+  created_at?: string;
 }
 
 export default function SubjectsPage() {
@@ -62,7 +66,7 @@ export default function SubjectsPage() {
       const data = await subjectService.getAll()
       
       // Fetch progress from localStorage for each subject
-      const subjectsWithProgress = data.map((subject: Subject) => {
+      const subjectsWithProgress = data.map((subject) => {
         const todosKey = `todos_${subject.id}`
         const todos = JSON.parse(localStorage.getItem(todosKey) || '[]')
         const completedTodos = todos.filter((todo: any) => todo.completed).length
@@ -70,7 +74,12 @@ export default function SubjectsPage() {
         const progress = totalTodos > 0 ? Math.round((completedTodos / totalTodos) * 100) : 0
         
         return {
-          ...subject,
+          id: subject.id,
+          name: subject.name,
+          code: subject.code || '',
+          color: 'blue',
+          materials: subject.papers_uploaded || 0,
+          prediction: subject.predictions_generated || 0,
           progress
         }
       })
@@ -100,7 +109,7 @@ export default function SubjectsPage() {
         
         // Get existing subjects
         const existingSubjects = await subjectService.getAll()
-        const existingNames = existingSubjects.map((s: Subject) => s.name.toLowerCase())
+        const existingNames = existingSubjects.map((s) => s.name.toLowerCase())
         
         // Add missing wizard subjects
         let addedCount = 0

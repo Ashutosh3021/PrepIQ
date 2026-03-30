@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # API settings
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "PrepIQ API"
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-here")
+    SECRET_KEY: str = os.getenv("JWT_SECRET", os.getenv("SECRET_KEY", ""))
     
     # Database settings
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/prepiq")

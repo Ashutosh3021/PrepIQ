@@ -4,13 +4,10 @@ from typing import List
 
 from ..database import get_db
 from .. import models, schemas
-from ..services import PrepIQService
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from ..dependencies import get_prepiq_service
 
 # Import from the new Supabase-first auth service
-from services.supabase_first_auth import get_current_user_from_token
+from ..services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
 async def get_current_user(
@@ -62,14 +59,13 @@ async def generate_prediction(
         user_id=current_user["id"],
         total_questions=0,  # Will be updated after generation
         total_predicted_marks=0,  # Will be updated after generation
-        processing_status="generating"
     )
     db.add(prediction)
     db.commit()
     db.refresh(prediction)
     
     # Generate predictions using the service
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         result = service.generate_predictions(db, prediction_request.subject_id, current_user["id"])
         
@@ -77,7 +73,6 @@ async def generate_prediction(
         prediction.predicted_questions_json = str(result.get("predictions", []))
         prediction.total_questions = len(result.get("predictions", []))
         prediction.total_predicted_marks = result.get("total_marks", 0)
-        prediction.processing_status = "completed"
         
         db.commit()
         db.refresh(prediction)
@@ -89,8 +84,7 @@ async def generate_prediction(
             "progress": 100
         }
     except Exception as e:
-        prediction.processing_status = "failed"
-        prediction.error_message = str(e)
+        db.delete(prediction)
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -103,7 +97,7 @@ async def get_prediction(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         result = service.get_prediction(
             db=db,
@@ -141,7 +135,7 @@ async def get_latest_prediction(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         result = service.get_latest_prediction(
             db=db,

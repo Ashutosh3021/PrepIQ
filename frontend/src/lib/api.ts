@@ -261,38 +261,38 @@ export const authService = {
 // Prediction services
 export const predictionService = {
   async getLatestPredictions() {
-    return apiClient.get<PredictionData>('/api/predictions/latest');
+    return apiClient.get<PredictionData>('/predictions/latest');
   },
   
   async getLatestPredictionsForSubject(subjectId: string) {
-    return apiClient.get<PredictionData>(`/api/predictions/${subjectId}/latest`);
+    return apiClient.get<PredictionData>(`/predictions/${subjectId}/latest`);
   },
 
   async getPredictionTrend() {
-    return apiClient.get<ChartDataPoint[]>('/api/predictions/trend');
+    return apiClient.get<ChartDataPoint[]>('/predictions/trend');
   },
 
   async getTopicProbabilities() {
-    return apiClient.get<TopicProbability[]>('/api/predictions/topics');
+    return apiClient.get<TopicProbability[]>('/predictions/topics');
   },
 
   async getStudyRecommendations() {
-    return apiClient.get<Recommendation[]>('/api/predictions/recommendations');
+    return apiClient.get<Recommendation[]>('/predictions/recommendations');
   }
 };
 
 // Dashboard services
 export const dashboardService = {
   async getStats() {
-    return apiClient.get<DashboardStats>('/api/dashboard/stats');
+    return apiClient.get<DashboardStats>('/dashboard/stats');
   },
 
   async getRecentActivity() {
-    return apiClient.get<ActivityItem[]>('/api/dashboard/recent-activity');
+    return apiClient.get<ActivityItem[]>('/dashboard/recent-activity');
   },
 
   async getStudyProgress() {
-    return apiClient.get<ProgressData>('/api/dashboard/progress');
+    return apiClient.get<ProgressData>('/dashboard/progress');
   }
 };
 
@@ -386,14 +386,32 @@ export const uploadService = {
     files.forEach(file => formData.append('files', file));
     
     return apiClient.post('/upload/', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
+      headers: {},  // Let browser auto-set Content-Type with boundary for FormData
     });
   },
 
   async getUploadStatus(uploadId: string) {
     return apiClient.get(`/upload/status/${uploadId}`);
+  }
+};
+
+// Wizard services
+export const wizardService = {
+  async completeWizard(wizardData: {
+    exam_name: string;
+    exam_date: string;
+    program: string;
+    year_of_study: number;
+    focus_subjects: string[];
+    study_hours_per_day: number;
+    target_score: number;
+    preparation_level: string;
+  }) {
+    return apiClient.post('/wizard/complete', wizardData);
+  },
+
+  async getWizardStatus() {
+    return apiClient.get('/wizard/status');
   }
 };
 
@@ -465,6 +483,7 @@ export interface DashboardStats {
   focus_area: string;
   study_streak: number;
   days_to_exam: number;
+  exam_date?: string | null;
   recent_activity: Array<{
     action: string;
     timestamp: string;
@@ -522,6 +541,10 @@ export interface Subject {
   predictions_generated: number;
   mock_tests_created: number;
   created_at: string;
+  progress?: number;
+  color?: string;
+  materials?: number;
+  prediction?: number;
 }
 
 export interface CreateSubjectData {
@@ -530,6 +553,7 @@ export interface CreateSubjectData {
   semester?: number;
   total_marks?: number;
   exam_date?: string;
+  academic_year?: string;
 }
 
 export interface ImportantQuestion {

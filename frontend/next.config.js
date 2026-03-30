@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Enable Turbopack (Next.js 16 default)
+  turbopack: {},
+  
   // Disable TypeScript errors during build (for production)
   typescript: {
     ignoreBuildErrors: false, // Set to true only if you have blocking type errors

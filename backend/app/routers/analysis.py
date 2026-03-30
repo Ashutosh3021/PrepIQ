@@ -7,12 +7,9 @@ from datetime import datetime
 
 from ..database import get_db
 from .. import models, schemas
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Import from the new Supabase-first auth service
-from services.supabase_first_auth import get_current_user_from_token
+from ..services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
 async def get_current_user(
@@ -22,7 +19,7 @@ async def get_current_user(
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization, db)
-from ..services import PrepIQService
+from ..dependencies import get_prepiq_service
 
 # Upload directory
 UPLOAD_DIR = Path("uploads")
@@ -39,7 +36,7 @@ async def get_frequency_analysis(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         result = service.get_frequency_analysis(
             db=db,
@@ -59,7 +56,7 @@ async def get_weightage_analysis(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         result = service.get_weightage_analysis(
             db=db,
@@ -79,7 +76,7 @@ async def get_repetition_analysis(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         result = service.get_repetition_analysis(
             db=db,
@@ -99,7 +96,7 @@ async def get_trend_analysis(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         result = service.get_trend_analysis(
             db=db,
@@ -119,7 +116,7 @@ async def get_analysis_data(
 ):
     from datetime import datetime
     import numpy as np
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         # Get all analysis data for the user
         # Get user's subjects
@@ -454,7 +451,7 @@ async def get_important_questions(
     db: Session = Depends(get_db)
 ):
     """Get most repeating and high-probability questions"""
-    service = PrepIQService()
+    service = get_prepiq_service()
     try:
         # Get repetition analysis
         repetition_analysis = service.get_repetition_analysis(
@@ -484,31 +481,15 @@ async def generate_mock_test(
     db: Session = Depends(get_db)
 ):
     """Generate mock test based on patterns"""
+    service = get_prepiq_service()
     try:
-        # Get questions from database
-        questions = db.query(models.Question).join(
-            models.QuestionPaper
-        ).filter(
-            models.QuestionPaper.subject_id == subject_id
-        ).all()
-        
-        # Select random questions based on pattern
-        import random
-        selected = random.sample(questions, min(question_count, len(questions)))
-        
-        return {
-            "test_id": f"mock_{datetime.now().timestamp()}",
-            "subject_id": subject_id,
-            "questions": [
-                {
-                    "id": q.id,
-                    "question": q.question_text,
-                    "marks": q.marks,
-                    "unit": q.unit_name
-                } for q in selected
-            ],
-            "time_limit": question_count * 3,
-            "total_marks": sum(q.marks for q in selected)
-        }
+        result = service.generate_mock_test(
+            db=db,
+            subject_id=subject_id,
+            user_id=current_user["id"],
+            num_questions=question_count,
+            difficulty=difficulty
+        )
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

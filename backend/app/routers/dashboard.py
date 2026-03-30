@@ -2,18 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import List
-import os
-import sys
 import json
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from ..database import get_db
 from .. import models
 # Use the new Supabase-first auth service
-from services.supabase_first_auth import get_current_user_from_token
+from ..services.supabase_first_auth import get_current_user_from_token
 
 router = APIRouter(
-    prefix="/api/dashboard",
+    prefix="/dashboard",
     tags=["Dashboard"]
 )
 
