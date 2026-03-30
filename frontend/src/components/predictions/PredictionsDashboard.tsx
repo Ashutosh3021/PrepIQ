@@ -19,7 +19,7 @@ import {
   Line
 } from 'recharts';
 import { Target, TrendingUp, AlertTriangle, CheckCircle2, BookOpen } from 'lucide-react';
-import { api } from '@/lib/api';
+import { apiClient } from '@/lib/api';
 
 interface PredictionsDashboardProps {
   subjectId: string;
@@ -37,7 +37,7 @@ export default function PredictionsDashboard({ subjectId }: PredictionsDashboard
 
   const fetchPredictions = async () => {
     try {
-      const response = await api.get(`/analysis/predictions/${subjectId}`);
+      const response = await apiClient.get<any>(`/analysis/predictions/${subjectId}`);
       setPredictions(response.data);
     } catch (error) {
       console.error('Error fetching predictions:', error);

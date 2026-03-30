@@ -6,19 +6,12 @@ pydantic==2.9.2
 pydantic-settings==2.6.1
 pydantic[email]==2.9.2
 python-dotenv==1.0.1
-PyJWT==2.8.0
+PyJWT==2.9.1
 passlib[bcrypt]==1.7.4
-python-multipart==0.0.9
+python-multipart==0.0.17
 google-generativeai==0.8.3
 httpx==0.27.2
 tenacity==8.3.0
-PyPDF2==3.0.1
 python-dateutil==2.9.0
 supabase==2.10.0
-# Heavy ML dependencies
-easyocr==1.7.2
-ultralytics==8.2.102
-transformers==4.46.3
 Pillow==11.1.0
-torch==2.5.1
-torchvision==0.20.1

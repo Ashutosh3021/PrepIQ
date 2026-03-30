@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Send, BookOpen, Brain, MessageCircle, Lightbulb, MoreHorizontal } from 'lucide-react';
-import { api } from '@/lib/api';
+import { apiClient } from '@/lib/api';
 
 interface Message {
   id: string;
@@ -66,7 +66,7 @@ export default function AITutor({ subjectId, subjectName, uploadedContext }: AIT
 
     try {
       // Get response from AI tutor
-      const response = await api.post('/chat/tutor', {
+      const response = await apiClient.post<any>('/chat/tutor', {
         message: inputMessage,
         subject_id: subjectId,
         context: uploadedContext,

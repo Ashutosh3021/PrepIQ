@@ -17,7 +17,7 @@ import {
   BarChart3,
   Loader2
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { apiClient } from '@/lib/api';
 
 interface MockTestGeneratorProps {
   subjectId: string;
@@ -48,7 +48,7 @@ export default function MockTestGenerator({
   const generateTest = async () => {
     setGenerating(true);
     try {
-      const response = await api.post('/analysis/mock-test/generate', {
+      const response = await apiClient.post<any>('/analysis/mock-test/generate', {
         subject_id: subjectId,
         difficulty: config.difficulty,
         question_count: config.questionCount,

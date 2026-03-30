@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { api } from '@/lib/api';
+import { apiClient } from '@/lib/api';
 
 interface UploadInterfaceProps {
   subjects: Array<{ id: string; name: string }>;
@@ -92,7 +92,7 @@ export default function UploadInterface({ subjects, onAnalysisComplete }: Upload
       
       setAnalysisStage('Analyzing patterns and generating insights...');
 
-      const response = await api.post('/analysis/upload', formData, {
+      const response = await apiClient.post<any>('/analysis/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 

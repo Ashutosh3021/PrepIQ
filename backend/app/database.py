@@ -20,12 +20,12 @@ if not DATABASE_URL:
         "Please set it to your Supabase PostgreSQL connection string."
     )
 
-# Create engine with connection pooling optimized for Supabase
+# Create engine with connection pooling optimized for Supabase/Render free tier
 # Use connection pool pre-ping to handle stale connections
 engine = create_engine(
     DATABASE_URL,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=1,
+    max_overflow=2,
     pool_pre_ping=True,
     pool_recycle=300,  # Recycle connections after 5 minutes
     connect_args={

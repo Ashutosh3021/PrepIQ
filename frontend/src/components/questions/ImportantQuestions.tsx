@@ -15,7 +15,7 @@ import {
   Filter,
   Loader2
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { apiClient } from '@/lib/api';
 
 interface ImportantQuestionsProps {
   subjectId: string;
@@ -33,7 +33,7 @@ export default function ImportantQuestions({ subjectId, subjectName }: Important
 
   const fetchImportantQuestions = async () => {
     try {
-      const response = await api.get(`/analysis/important-questions/${subjectId}`);
+      const response = await apiClient.get<any>(`/analysis/important-questions/${subjectId}`);
       setQuestions(response.data);
     } catch (error) {
       console.error('Error fetching questions:', error);
