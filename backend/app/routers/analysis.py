@@ -4,9 +4,12 @@ from typing import Dict, Any, List
 import shutil
 from pathlib import Path
 from datetime import datetime
+import logging
 
 from ..database import get_db
 from .. import models, schemas
+
+logger = logging.getLogger(__name__)
 
 # Import from the new Supabase-first auth service
 from ..services.supabase_first_auth import get_current_user_from_token
@@ -322,55 +325,28 @@ async def upload_material(
 
 
 async def process_image_pipeline(image_path: str):
-    """Process image: EasyOCR → YOLOv8 → GroundingDINO"""
+    """Process image using lightweight ML utilities"""
     result = {"text": [], "objects": [], "circuits": []}
     
     try:
-        # Step 1: EasyOCR for text
-        import easyocr
-        reader = easyocr.Reader(['en'], gpu=False)
-        ocr_results = reader.readtext(image_path)
+        # Import lightweight ML utilities
+        from ..ml_utils import extract_text_from_image, detect_objects_in_image
         
-        if ocr_results:
-            extracted_text = ' '.join([text for (_, text, _) in ocr_results])
-            result["text"].append(extracted_text)
+        # Step 1: Lightweight text extraction (pytesseract or PIL)
+        text_result = extract_text_from_image(image_path)
+        result["text"] = text_result.get("text", [])
         
-        # Step 2: YOLOv8 for objects
-        try:
-            from ultralytics import YOLO
-            model = YOLO('yolov8n.pt')
-            yolo_results = model(image_path, verbose=False)
-            
-            for r in yolo_results:
-                for box in r.boxes:
-                    result["objects"].append({
-                        "label": model.names[int(box.cls[0])],
-                        "confidence": float(box.conf[0])
-                    })
-        except Exception as e:
-            print(f"YOLOv8 error: {e}")
+        # Step 2: Lightweight object detection
+        obj_result = detect_objects_in_image(image_path)
+        result["objects"] = obj_result.get("objects", [])
         
-        # Step 3: GroundingDINO for circuits (if little text found)
-        if not result["text"] or len(result["text"][0]) < 50:
-            try:
-                from transformers import pipeline
-                from PIL import Image
-                
-                detector = pipeline("zero-shot-object-detection", model="google/owlvit-base-patch32")
-                image = Image.open(image_path)
-                circuit_results = detector(
-                    image,
-                    candidate_labels=["circuit diagram", "electronic schematic"],
-                    threshold=0.1
-                )
-                result["circuits"] = circuit_results
-            except Exception as e:
-                print(f"GroundingDINO error: {e}")
+        logger.info(f"✅ Image processed: {len(result['text'])} text regions, {len(result['objects'])} objects")
         
-        return result
     except Exception as e:
-        print(f"Image processing error: {e}")
-        return result
+        logger.error(f"Image processing error: {e}")
+        raise HTTPException(status_code=500, detail=f"Image processing failed: {str(e)}")
+    
+    return result
 
 
 async def process_pdf(pdf_path: str):

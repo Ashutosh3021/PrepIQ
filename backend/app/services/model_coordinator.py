@@ -148,7 +148,7 @@ class ModelCoordinator:
         enabled = sum(1 for m in self.models.values() if m.enabled)
         logger.info(f"Models enabled: {enabled}/{len(self.models)}")
         for name, config in self.models.items():
-            status = "✅" if config.enabled else "❌"
+            status = "[OK]" if config.enabled else "[FAIL]"
             logger.info(f"  {status} {name}: {config.provider}")
     
     # ==================== IMAGE PROCESSING PIPELINE ====================
@@ -175,12 +175,12 @@ class ModelCoordinator:
                 if ocr_results:
                     extracted_text = ' '.join([text for (_, text, _) in ocr_results])
                     result["text"].append(extracted_text)
-                    result["pipeline_status"].append("✅ EasyOCR: Text extracted")
+                    result["pipeline_status"].append("[OK] EasyOCR: Text extracted")
                     logger.info(f"EasyOCR extracted {len(ocr_results)} regions")
                 else:
-                    result["pipeline_status"].append("⚠️ EasyOCR: No text found")
+                    result["pipeline_status"].append("[WARN] EasyOCR: No text found")
             except Exception as e:
-                result["pipeline_status"].append(f"❌ EasyOCR: {str(e)}")
+                result["pipeline_status"].append(f"[ERROR] EasyOCR: {str(e)}")
                 logger.error(f"EasyOCR error: {e}")
         
         # Step 2: YOLOv8 (always run for object detection)
@@ -197,10 +197,10 @@ class ModelCoordinator:
                             "confidence": float(box.conf[0])
                         })
                 
-                result["pipeline_status"].append(f"✅ YOLOv8: {len(result['objects'])} objects")
+                result["pipeline_status"].append(f"[OK] YOLOv8: {len(result['objects'])} objects")
                 logger.info(f"YOLOv8 detected {len(result['objects'])} objects")
             except Exception as e:
-                result["pipeline_status"].append(f"❌ YOLOv8: {str(e)}")
+                result["pipeline_status"].append(f"[ERROR] YOLOv8: {str(e)}")
                 logger.error(f"YOLOv8 error: {e}")
         
         # Step 3: GroundingDINO (run if low text detected)
@@ -223,10 +223,10 @@ class ModelCoordinator:
                 )
                 
                 result["circuits"] = circuit_results
-                result["pipeline_status"].append(f"✅ GroundingDINO: {len(circuit_results)} circuits")
+                result["pipeline_status"].append(f"[OK] GroundingDINO: {len(circuit_results)} circuits")
                 logger.info(f"GroundingDINO found {len(circuit_results)} circuits")
             except Exception as e:
-                result["pipeline_status"].append(f"❌ GroundingDINO: {str(e)}")
+                result["pipeline_status"].append(f"[ERROR] GroundingDINO: {str(e)}")
                 logger.error(f"GroundingDINO error: {e}")
         
         return result

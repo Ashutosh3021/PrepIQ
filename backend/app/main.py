@@ -22,15 +22,15 @@ from dotenv import load_dotenv
 env_path = backend_path / '.env'
 if env_path.exists():
     load_dotenv(dotenv_path=env_path, override=True)
-    print(f"✅ Loaded environment from {env_path}")
+    print(f"[OK] Loaded environment from {env_path}")
 else:
     # Try .env.production as fallback
     env_prod_path = backend_path / '.env.production'
     if env_prod_path.exists():
         load_dotenv(dotenv_path=env_prod_path, override=True)
-        print(f"✅ Loaded environment from {env_prod_path}")
+        print(f"[OK] Loaded environment from {env_prod_path}")
     else:
-        print("⚠️  No .env file found. Using system environment variables.")
+        print("[WARN] No .env file found. Using system environment variables.")
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -70,14 +70,14 @@ def validate_environment():
             missing_vars.append(f"  - {var}: {description}")
     
     if missing_vars:
-        logger.error("❌ Missing required environment variables:")
+        logger.error("[ERROR] Missing required environment variables:")
         for var in missing_vars:
             logger.error(var)
-        logger.error("\n📝 Please set these variables in your .env.production file")
+        logger.error("\n[INFO] Please set these variables in your .env.production file")
         logger.error("   or configure them in your deployment platform dashboard.")
         sys.exit(1)
     
-    logger.info("✅ All required environment variables are set")
+    logger.info("[OK] All required environment variables are set")
 
 # Run validation on startup
 validate_environment()
@@ -94,7 +94,7 @@ from sqlalchemy import text
 async def lifespan(app: FastAPI):
     """Manage application lifespan events."""
     # Startup
-    logger.info("🚀 Starting PrepIQ Backend Application")
+    logger.info("Starting PrepIQ Backend Application")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Debug Mode: {settings.DEBUG}")
     
@@ -102,15 +102,15 @@ async def lifespan(app: FastAPI):
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        logger.info("✅ Database connection verified")
+        logger.info("[OK] Database connection verified")
     except Exception as e:
-        logger.error(f"❌ Database connection failed: {e}")
+        logger.error(f"[ERROR] Database connection failed: {e}")
         raise RuntimeError("Cannot start without database connection")
     
     yield
     
     # Shutdown
-    logger.info("🛑 Shutting down PrepIQ Backend Application")
+    logger.info("[INFO] Shutting down PrepIQ Backend Application")
 
 # ============================================
 # APPLICATION FACTORY
@@ -141,7 +141,7 @@ def create_app() -> FastAPI:
     
     if is_development:
         # In development, allow all origins for easier testing
-        logger.info("🔓 Development mode: Allowing all CORS origins")
+        logger.info("[DEV] Development mode: Allowing all CORS origins")
         app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -153,10 +153,10 @@ def create_app() -> FastAPI:
     else:
         # In production, use strict origins
         if not allowed_origins:
-            logger.warning("⚠️  No CORS origins configured! Using safe defaults.")
+            logger.warning("[WARN] No CORS origins configured! Using safe defaults.")
             allowed_origins = ["https://prepiq.vercel.app"]
         
-        logger.info(f"🔒 CORS configured for origins: {allowed_origins}")
+        logger.info(f"[SECURE] CORS configured for origins: {allowed_origins}")
         
         app.add_middleware(
             CORSMiddleware,

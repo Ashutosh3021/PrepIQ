@@ -36,9 +36,9 @@ class SignupRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: str
-    college_name: str
+    college_name: str = ""
     program: str = "BTech"
-    year_of_study: int
+    year_of_study: str = "1st Year"
 
 
 class LoginRequest(BaseModel):
@@ -52,7 +52,7 @@ class UserResponse(BaseModel):
     full_name: str
     college_name: str
     program: str
-    year_of_study: int
+    year_of_study: str
     access_token: Optional[str] = None
     refresh_token: Optional[str] = None
     token_type: Optional[str] = "bearer"
@@ -83,15 +83,31 @@ class SupabaseFirstAuthService:
 
             # Extract user object from possible response shapes
             user_data = None
-            if hasattr(response, "data") and isinstance(response.data, dict) and "user" in response.data:
-                user_data = response.data["user"]
-            elif hasattr(response, "user"):
+            session = None
+            
+            # Debug: Log the actual response
+            print(f"[DEBUG] Supabase signup response type: {type(response)}")
+            print(f"[DEBUG] Supabase response dir: {[x for x in dir(response) if not x.startswith('_')]}")
+            
+            # Try different response formats
+            # The response is gotrue.types.AuthResponse with .user and .session directly
+            if hasattr(response, "user"):
                 user_data = response.user
             elif hasattr(response, "data") and hasattr(response.data, "user"):
-                # pydantic model with attribute access
                 user_data = response.data.user
+            
+            # Also try if response itself is the user object (some Supabase versions)
+            if not user_data and hasattr(response, "id"):
+                user_data = response
+                
+            # Get session if present
+            if hasattr(response, "session"):
+                session = response.session
+            elif hasattr(response, "data") and hasattr(response.data, "session"):
+                session = response.data.session
 
             if not user_data:
+                print(f"[DEBUG] Full response: {response}")
                 raise Exception("Unexpected response format from Supabase during signup")
 
             # Determine id and email safely
@@ -102,14 +118,9 @@ class SupabaseFirstAuthService:
                 user_id = user_data.get("id") or (user_data.get("user", {}) or {}).get("id")
                 user_email = user_data.get("email") or (user_data.get("user", {}) or {}).get("email")
             else:
+                print(f"[DEBUG] user_data type: {type(user_data)}")
+                print(f"[DEBUG] user_data: {user_data}")
                 raise Exception("Unexpected user data format from Supabase")
-
-            # Try to read session if present
-            session = None
-            if hasattr(response, "data") and isinstance(response.data, dict) and "session" in response.data:
-                session = response.data.get("session")
-            elif hasattr(response, "session"):
-                session = response.session
 
             # Detect whether confirmation is required
             needs_confirmation = False
@@ -161,19 +172,38 @@ class SupabaseFirstAuthService:
         try:
             supabase = get_supabase_client()
 
-            response = supabase.auth.sign_in_with_password({
-                "email": req.email,
-                "password": req.password,
-            })
+            try:
+                response = supabase.auth.sign_in_with_password({
+                    "email": req.email,
+                    "password": req.password,
+                })
+            except Exception as auth_error:
+                # Supabase library throws on auth failure
+                error_msg = str(auth_error)
+                if "Invalid login credentials" in error_msg or "401" in error_msg:
+                    raise HTTPException(status_code=401, detail="Invalid email or password")
+                elif "Email not confirmed" in error_msg:
+                    raise HTTPException(status_code=401, detail="Please confirm your email address")
+                else:
+                    raise HTTPException(status_code=401, detail=f"Login failed: {error_msg}")
 
-            session = None
+            # AuthResponse has .session and .user directly
+            print(f"[DEBUG] Login response type: {type(response)}")
+            print(f"[DEBUG] Login response user: {response.user}")
+            print(f"[DEBUG] Login response session: {response.session}")
+            
             user = None
-            if hasattr(response, "data") and isinstance(response.data, dict):
-                session = response.data.get("session")
-                user = response.data.get("user")
-            elif hasattr(response, "session") and hasattr(response, "user"):
-                session = response.session
+            session = None
+            
+            if hasattr(response, "user"):
                 user = response.user
+            elif hasattr(response, "data") and hasattr(response.data, "user"):
+                user = response.data.user
+                
+            if hasattr(response, "session"):
+                session = response.session
+            elif hasattr(response, "data") and hasattr(response.data, "session"):
+                session = response.data.session
 
             if not session or not user:
                 # Could be invalid credentials or email not confirmed
@@ -181,27 +211,32 @@ class SupabaseFirstAuthService:
 
             metadata = {}
             try:
-                metadata = user.get("user_metadata", {}) if isinstance(user, dict) else getattr(user, "user_metadata", {}) or {}
+                # user_metadata is directly on the user object
+                if hasattr(user, "user_metadata"):
+                    metadata = getattr(user, "user_metadata", {}) or {}
+                elif isinstance(user, dict):
+                    metadata = user.get("user_metadata", {})
+                
+                # Fallback: try app_metadata
+                if not metadata and hasattr(user, "app_metadata"):
+                    metadata = getattr(user, "app_metadata", {}) or {}
+                elif not metadata and isinstance(user, dict):
+                    metadata = user.get("app_metadata", {})
             except Exception:
                 metadata = {}
 
             # Extract tokens
-            if isinstance(session, dict):
-                access = session.get("access_token")
-                refresh = session.get("refresh_token")
-                expires = session.get("expires_in")
-            else:
-                access = getattr(session, "access_token", None)
-                refresh = getattr(session, "refresh_token", None)
-                expires = getattr(session, "expires_in", None)
+            access = getattr(session, "access_token", None) or (session.get("access_token") if isinstance(session, dict) else None)
+            refresh = getattr(session, "refresh_token", None) or (session.get("refresh_token") if isinstance(session, dict) else None)
+            expires = getattr(session, "expires_in", None) or (session.get("expires_in") if isinstance(session, dict) else None)
 
             return UserResponse(
-                id=user.get("id") if isinstance(user, dict) else getattr(user, "id"),
-                email=user.get("email") if isinstance(user, dict) else getattr(user, "email"),
+                id=getattr(user, "id", "") or (user.get("id") if isinstance(user, dict) else ""),
+                email=getattr(user, "email", "") or (user.get("email") if isinstance(user, dict) else ""),
                 full_name=metadata.get("full_name", "") if isinstance(metadata, dict) else getattr(metadata, "full_name", ""),
                 college_name=metadata.get("college_name", "") if isinstance(metadata, dict) else getattr(metadata, "college_name", ""),
-                program=metadata.get("program", "") if isinstance(metadata, dict) else getattr(metadata, "program", ""),
-                year_of_study=metadata.get("year_of_study", 1) if isinstance(metadata, dict) else getattr(metadata, "year_of_study", 1),
+                program=metadata.get("program", "BTech") if isinstance(metadata, dict) else getattr(metadata, "program", "BTech"),
+                year_of_study=str(metadata.get("year_of_study", "1st Year")) if isinstance(metadata, dict) else str(getattr(metadata, "year_of_study", "1st Year")),
                 access_token=access,
                 refresh_token=refresh,
                 expires_in=expires,
@@ -211,7 +246,7 @@ class SupabaseFirstAuthService:
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Login failed due to server error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
     @staticmethod
     async def get_current_user(token: str):

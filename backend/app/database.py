@@ -14,6 +14,12 @@ load_dotenv()
 # Database configuration - PostgreSQL only (via Supabase)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Fix: Remove pgbouncer option from Supabase connection string
+if DATABASE_URL and "pgbouncer" in DATABASE_URL:
+    # Remove the ?pgbouncer=true part
+    DATABASE_URL = DATABASE_URL.split("?")[0]
+    print("[OK] Removed pgbouncer option from DATABASE_URL")
+
 if not DATABASE_URL:
     raise ValueError(
         "DATABASE_URL environment variable is required. "

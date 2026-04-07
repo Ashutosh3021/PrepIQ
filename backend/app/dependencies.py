@@ -1,6 +1,7 @@
 from functools import lru_cache
-from .services import PrepIQService
+from app.database import get_db
 
 @lru_cache()
-def get_prepiq_service() -> PrepIQService:
+def get_prepiq_service():
+    from app.services import PrepIQService
     return PrepIQService()

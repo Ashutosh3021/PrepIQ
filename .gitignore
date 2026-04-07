@@ -89,7 +89,7 @@ htmlcov/
 /frontend/dist
 /frontend/.vite
 /frontend/vite/src
-
+UI_DOCUMENTATION.md
 # Frontend environment files - Security Best Practices
 
 # API Keys and Sensitive Configuration
@@ -140,3 +140,9 @@ coverage/
 Updates.txt
 PrepIQ_–_Complete_Project_Diagnosis_Report.md
 bugs.md
+frontend/.swc
+frontend/test-results/
+frontend/tests/
+protected/
+test/
+WIRING_GUIDE.md
