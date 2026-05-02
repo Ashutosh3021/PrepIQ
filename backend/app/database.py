@@ -56,6 +56,11 @@ def get_db():
         db.close()
 
 
+def get_new_db_session():
+    """Create a new database session for background processing (e.g., ThreadPoolExecutor)"""
+    return SessionLocal()
+
+
 def create_tables():
     """Create all database tables"""
     from .models import Base as ModelsBase

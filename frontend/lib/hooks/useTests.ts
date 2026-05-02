@@ -1,27 +1,28 @@
 import useSWR, { mutate } from 'swr';
-import { testsService } from '../services/tests.service';
-import type { Test, TestResult, Question } from '../types/test.types';
+import { testsService, BackendTest, BackendTestResult, BackendTestResults } from '../services/tests.service';
 
 export function useTests() {
-  const { data, error, isLoading } = useSWR<Test[]>('tests', testsService.getAll);
+  const { data, error, isLoading } = useSWR<BackendTest[]>('tests', testsService.getAll);
 
-  const startTest = async (id: string) => {
-    const result = await testsService.startTest(id);
-    mutate('tests');
-    return result;
-  };
-
-  const submitTest = async (id: string, answers: { questionId: string; selected: number }[]) => {
+  /**
+   * M-17 / FE-05: submitTest now accepts a Record<string, string> (questionId → answer)
+   * and sends it directly to the backend. No local scoring.
+   */
+  const submitTest = async (id: string, answers: Record<string, string>): Promise<BackendTestResult> => {
     const result = await testsService.submitTest(id, answers);
     mutate('tests');
     return result;
   };
 
-  return { tests: data ?? [], isLoading, error, startTest, submitTest };
+  const getResults = async (id: string): Promise<BackendTestResults> => {
+    return testsService.getResults(id);
+  };
+
+  return { tests: data ?? [], isLoading, error, submitTest, getResults };
 }
 
 export function useTestQuestions(testId: string) {
-  const { data, error, isLoading } = useSWR<Question[]>(
+  const { data, error, isLoading } = useSWR(
     testId ? `tests/${testId}/questions` : null,
     () => testsService.getQuestions(testId)
   );

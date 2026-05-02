@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { MobileLayout } from '@/components/mobile';
 import { Skeleton } from '@/components/common';
 import { useSubjects } from '@/lib/hooks/useSubjects';
+import { deriveSubjectProgress } from '@/lib/types/subject.types';
 
 interface SubjectCardProps {
   code: string;
@@ -118,9 +119,10 @@ export default function MobileSubjects() {
               subjects.map((subject) => (
                 <SubjectCard
                   key={subject.id}
-                  code={subject.id}
+                  // H-19: use code from backend, derive progress from activity counts
+                  code={subject.code ?? subject.id.slice(0, 8).toUpperCase()}
                   name={subject.name}
-                  progress={subject.progress}
+                  progress={deriveSubjectProgress(subject)}
                 />
               ))
             )}

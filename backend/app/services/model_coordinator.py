@@ -69,15 +69,15 @@ class ModelCoordinator:
             enabled=True
         )
         
-        # Bytez Models
-        bytez_key = os.getenv('BYTEZ_API_KEY', 'd02578a68c2621c9fdac702219d0722e')
+        # Bytez Models - use environment variable with no fallback for security
+        bytez_key = os.getenv('BYTEZ_API_KEY')
         
         self.models['qa'] = ModelConfig(
             name='RoBERTa QA',
             provider='bytez',
             api_key=bytez_key,
             model_id='deepset/roberta-base-squad2',
-            enabled=True
+            enabled=bool(bytez_key)  # Only enable if API key is set
         )
         
         self.models['similarity'] = ModelConfig(
@@ -85,7 +85,7 @@ class ModelCoordinator:
             provider='bytez',
             api_key=bytez_key,
             model_id='sentence-transformers/all-MiniLM-L6-v2',
-            enabled=True
+            enabled=bool(bytez_key)
         )
         
         self.models['classification'] = ModelConfig(
@@ -93,7 +93,7 @@ class ModelCoordinator:
             provider='bytez',
             api_key=bytez_key,
             model_id='distilbert/distilbert-base-uncased-finetuned-sst-2-english',
-            enabled=True
+            enabled=bool(bytez_key)
         )
         
         # Gemini Models

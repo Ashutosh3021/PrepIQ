@@ -33,8 +33,6 @@ except ImportError:
 # Import from the new Supabase-first auth service
 from ..services.supabase_first_auth import get_current_user_from_token
 
-logger = logging.getLogger(__name__)
-
 # Upload directory
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)

@@ -2,11 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List
+import logging
 
 from ..database import get_db
 from .. import models, schemas
 # Import from the new Supabase-first auth service
 from ..services.supabase_first_auth import get_current_user_from_token
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/subjects",
@@ -19,7 +22,9 @@ async def get_current_user(
     db: Session = Depends(get_db)
 ):
     if not authorization:
+        logger.warning("[SUBJECTS] No authorization header provided")
         raise HTTPException(status_code=401, detail="Authorization header required")
+    logger.debug("[SUBJECTS] Authorizing request...")
     return await get_current_user_from_token(authorization, db)
 
 @router.get("", response_model=List[schemas.SubjectResponse])

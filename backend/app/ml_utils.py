@@ -113,7 +113,8 @@ def detect_objects_in_image(image_path: str) -> Dict[str, Any]:
             })
             
         # Check for circular patterns (circuits, etc.)
-        if 'numpy' in dir():
+        # np is already imported above — use it directly
+        if 'np' in dir():
             # Simple circular Hough transform proxy
             circles = np.sum(
                 (gray > 200) & (gray < 255)

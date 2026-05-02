@@ -178,7 +178,7 @@ class Question(Base):
     unit_name = Column(String(255), nullable=True)
     topics_json = Column(JSON, nullable=True)  # ["Binary Search", "Complexity Analysis"]
     question_type = Column(String(50), nullable=True)  # mcq, short_answer, numerical, essay
-    difficulty = Column(String(20), nullable=True)  # easy, medium, hard
+    difficulty = Column(String(20), nullable=True, name='difficulty_level')  # easy, medium, hard
 
     # Metadata
     section_name = Column(String(100), nullable=True)  # Part A, Part B, Section I
@@ -199,7 +199,7 @@ class Question(Base):
     # Indexes
     __table_args__ = (
         Index('idx_questions_paper_id', 'paper_id'),
-        Index('idx_questions_difficulty', 'difficulty'),
+        Index('idx_questions_difficulty', 'difficulty_level'),
         Index('idx_questions_unit', 'unit_id'),
     )
 

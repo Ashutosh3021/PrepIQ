@@ -108,40 +108,48 @@ async def send_message(
     bot_response = result["response"]
     
     # Find related questions from the subject's papers
-    related_questions = db.query(models.Question).join(
-        models.QuestionPaper
-    ).filter(
-        models.QuestionPaper.subject_id == chat_request.subject_id
-    ).limit(3).all()
-    
+    # H-09: eager-load the paper relationship to avoid N+1 lazy loads
+    from sqlalchemy.orm import joinedload
+    related_questions = (
+        db.query(models.Question)
+        .options(joinedload(models.Question.paper))
+        .join(models.QuestionPaper)
+        .filter(models.QuestionPaper.subject_id == chat_request.subject_id)
+        .limit(3)
+        .all()
+    )
+
     # Prepare response with related questions
     related_questions_list = []
     for q in related_questions:
-        # Get all years this question (or similar) appeared
         appeared_years = []
         if q.paper and q.paper.exam_year:
             appeared_years.append(q.paper.exam_year)
-        
-        # Find similar questions and their years
+
+        # H-10: similar_question_ids may contain strings; cast to str for .in_() safety
         if q.similar_question_ids:
-            similar_questions = db.query(models.Question).join(
-                models.QuestionPaper
-            ).filter(
-                models.Question.id.in_(q.similar_question_ids)
-            ).all()
-            
-            for sq in similar_questions:
-                if sq.paper and sq.paper.exam_year and sq.paper.exam_year not in appeared_years:
-                    appeared_years.append(sq.paper.exam_year)
-        
-        # Sort years
+            try:
+                similar_ids = [str(sid) for sid in q.similar_question_ids]
+                similar_questions = (
+                    db.query(models.Question)
+                    .options(joinedload(models.Question.paper))
+                    .join(models.QuestionPaper)
+                    .filter(models.Question.id.in_(similar_ids))
+                    .all()
+                )
+                for sq in similar_questions:
+                    if sq.paper and sq.paper.exam_year and sq.paper.exam_year not in appeared_years:
+                        appeared_years.append(sq.paper.exam_year)
+            except Exception:
+                pass  # non-fatal — just skip similar question years
+
         appeared_years.sort()
-        
+
         related_questions_list.append({
             "text": q.question_text[:100] + "..." if len(q.question_text) > 100 else q.question_text,
             "marks": q.marks,
             "appeared_years": appeared_years,
-            "probability": "high" if q.is_repeated else "medium"
+            "probability": "high" if q.is_repeated else "medium",
         })
     
     # Get real references from papers
@@ -245,7 +253,7 @@ async def clear_chat_history(
 
 @router.post("/tutor")
 async def ai_tutor_chat(
-    request: dict,
+    request: schemas.TutorChatRequest,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -254,8 +262,8 @@ async def ai_tutor_chat(
     Provides Socratic teaching style with diagnostic questions.
     """
     try:
-        message = request.get("message", "")
-        conversation_history = request.get("conversation_history", [])
+        message = request.message
+        conversation_history = request.conversation_history or []
         
         if not message:
             raise HTTPException(
@@ -306,17 +314,25 @@ Respond as the AI Tutor:"""
         # Extract the response text
         tutor_response = response.text if hasattr(response, 'text') else str(response)
         
-        # Save to chat history if subject_id provided
-        subject_id = request.get("subject_id")
+        # Only save to chat history if subject_id provided (deduplicated - don't also save via chat_with_bot)
+        subject_id = request.subject_id
         if subject_id:
-            chat_entry = models.ChatHistory(
-                user_id=current_user["id"],
-                subject_id=subject_id,
-                user_message=message,
-                bot_response=tutor_response
-            )
-            db.add(chat_entry)
-            db.commit()
+            # Check if this message was already saved (avoid duplicate)
+            existing_count = db.query(models.ChatHistory).filter(
+                models.ChatHistory.user_id == current_user["id"],
+                models.ChatHistory.user_message == message,
+                models.ChatHistory.bot_response == tutor_response
+            ).count()
+            
+            if existing_count == 0:
+                chat_entry = models.ChatHistory(
+                    user_id=current_user["id"],
+                    subject_id=subject_id,
+                    user_message=message,
+                    bot_response=tutor_response
+                )
+                db.add(chat_entry)
+                db.commit()
         
         return {
             "response": tutor_response,

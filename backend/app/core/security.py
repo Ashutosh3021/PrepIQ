@@ -59,21 +59,20 @@ async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db = Depends(get_db)
 ) -> User:
-    """Get the current authenticated user from the token."""
+    """
+    Get the current authenticated user via Supabase token validation.
+    The app uses Supabase JWTs — local JWT decoding with SECRET_KEY is not used.
+    """
+    from ..services.supabase_first_auth import get_current_user_from_token
     try:
-        payload = decode_access_token(credentials.credentials)
-        user_id: str = payload.get("sub")
-        
-        if user_id is None:
-            raise AuthenticationError("Invalid authentication credentials")
-            
-        # Get user from database
-        user = await db.get(User, user_id)
+        user_data = await get_current_user_from_token(
+            f"Bearer {credentials.credentials}", db
+        )
+        # Return the ORM User object so callers that expect a User model still work
+        user = db.query(User).filter(User.id == user_data["id"]).first()
         if user is None:
             raise AuthenticationError("User not found")
-            
         return user
-        
     except Exception as e:
         if isinstance(e, AuthenticationError):
             raise e
@@ -90,8 +89,8 @@ def verify_user_role(user: User, required_role: str) -> bool:
 
 async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
     """Get the current active user."""
-    if not current_user.is_active:
-        raise AuthorizationError("Inactive user")
+    # User model does not have an is_active field — all users from Supabase are considered active.
+    # If you need to deactivate users, add a `is_active` Boolean column to the User model.
     return current_user
 
 

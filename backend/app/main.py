@@ -79,8 +79,29 @@ def validate_environment():
     
     logger.info("[OK] All required environment variables are set")
 
-# Run validation on startup
-validate_environment()
+# Run validation on startup (moved from module import time)
+# Now called inside lifespan to avoid sys.exit during import
+def get_missing_environment_vars():
+    """Get list of missing required environment variables.
+    
+    Returns:
+        list: List of missing variable descriptions
+    """
+    required_vars = {
+        'DATABASE_URL': 'Supabase PostgreSQL connection pooler URL',
+        'SUPABASE_URL': 'Supabase project URL',
+        'SUPABASE_SERVICE_KEY': 'Supabase service role key',
+        'JWT_SECRET': 'JWT secret key (generate with: openssl rand -base64 32)',
+        'ALLOWED_ORIGINS': 'Comma-separated list of allowed CORS origins',
+        'GEMINI_API_KEY': 'Google Gemini API key',
+    }
+    
+    missing_vars = []
+    for var, description in required_vars.items():
+        if not os.getenv(var):
+            missing_vars.append(f"  - {var}: {description}")
+    
+    return missing_vars
 
 # Now import application modules (after validation)
 from app.core.config import settings
@@ -97,6 +118,14 @@ async def lifespan(app: FastAPI):
     logger.info("Starting PrepIQ Backend Application")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Debug Mode: {settings.DEBUG}")
+    
+    # Validate environment variables (non-blocking)
+    missing_vars = get_missing_environment_vars()
+    if missing_vars:
+        logger.warning("[WARN] Missing optional environment variables:")
+        for var in missing_vars:
+            logger.warning(var)
+        logger.warning("[INFO] Application will run with limited functionality")
     
     # Verify database connection
     try:
@@ -253,18 +282,18 @@ def create_app() -> FastAPI:
     # ============================================
     from app.routers import auth, subjects, papers, predictions, chat, tests, analysis, plans, dashboard, questions, wizard, upload
     
-    app.include_router(auth.router, tags=["Authentication"])
-    app.include_router(subjects.router, tags=["Subjects"])
-    app.include_router(papers.router, tags=["Papers"])
-    app.include_router(predictions.router, tags=["Predictions"])
-    app.include_router(chat.router, tags=["Chat"])
-    app.include_router(tests.router, tags=["Tests"])
-    app.include_router(analysis.router, tags=["Analysis"])
-    app.include_router(plans.router, tags=["Study Plans"])
-    app.include_router(dashboard.router, tags=["Dashboard"])
-    app.include_router(questions.router, tags=["Questions"])
-    app.include_router(wizard.router, tags=["Wizard"])
-    app.include_router(upload.router, tags=["Upload"])
+    app.include_router(auth.router, prefix=settings.API_V1_STR, tags=["Authentication"])
+    app.include_router(subjects.router, prefix=settings.API_V1_STR, tags=["Subjects"])
+    app.include_router(papers.router, prefix=settings.API_V1_STR, tags=["Papers"])
+    app.include_router(predictions.router, prefix=settings.API_V1_STR, tags=["Predictions"])
+    app.include_router(chat.router, prefix=settings.API_V1_STR, tags=["Chat"])
+    app.include_router(tests.router, prefix=settings.API_V1_STR, tags=["Tests"])
+    app.include_router(analysis.router, prefix=settings.API_V1_STR, tags=["Analysis"])
+    app.include_router(plans.router, prefix=settings.API_V1_STR, tags=["Study Plans"])
+    app.include_router(dashboard.router, prefix=settings.API_V1_STR, tags=["Dashboard"])
+    app.include_router(questions.router, prefix=settings.API_V1_STR, tags=["Questions"])
+    app.include_router(wizard.router, prefix=settings.API_V1_STR, tags=["Wizard"])
+    app.include_router(upload.router, prefix=settings.API_V1_STR, tags=["Upload"])
     
     return app
 

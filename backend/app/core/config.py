@@ -19,7 +19,8 @@ class Settings(BaseSettings):
     # Database settings
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/prepiq")
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
-    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+    # BUG-B04 FIX: Read SUPABASE_KEY from actual env var SUPABASE_SERVICE_KEY
+    SUPABASE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY", "")
     
     # Security settings
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
@@ -62,7 +63,7 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
     
     # Google AI settings
-    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     
     class Config:
         case_sensitive = True

@@ -234,6 +234,29 @@ class ChatRequest(BaseModel):
     message: str
     context: Optional[Dict[str, Any]] = None
 
+
+class TutorChatRequest(BaseModel):
+    """Pydantic model for AI tutor chat with validation"""
+    message: str
+    conversation_history: Optional[List[Dict[str, Any]]] = []
+    subject_id: Optional[str] = None
+    
+    @field_validator('message')
+    @classmethod
+    def validate_message(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Message cannot be empty')
+        if len(v) > 5000:
+            raise ValueError('Message cannot exceed 5000 characters')
+        return v.strip()
+    
+    @field_validator('conversation_history')
+    @classmethod
+    def validate_conversation_history(cls, v):
+        if v is not None and len(v) > 50:
+            raise ValueError('Conversation history cannot exceed 50 messages')
+        return v
+
 class ChatResponse(BaseModel):
     message_id: str
     response: str

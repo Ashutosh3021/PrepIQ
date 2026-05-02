@@ -1,16 +1,18 @@
 import logging
+import json
+import warnings
+from typing import List, Dict, Any, Tuple
+from datetime import datetime
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Any, Tuple
-import json
-from datetime import datetime
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from scipy.stats import pearsonr, spearmanr
-from collections import defaultdict
-import warnings
+
 warnings.filterwarnings('ignore')
 
 logger = logging.getLogger(__name__)
@@ -83,36 +85,51 @@ class CorrelationAnalyzer:
         """Calculate correlation matrix between various features"""
         if df.empty:
             return {}
-        
-        # Select numeric columns for correlation analysis
+
         numeric_cols = ['text_length', 'marks', 'difficulty_numeric', 'type_numeric', 'syllabus_relevance', 'marks_per_word']
-        numeric_df = df[numeric_cols].copy()
-        
-        # Fill NaN values
-        numeric_df = numeric_df.fillna(0)
-        
-        # Calculate Pearson correlation
+        # Only keep columns that actually exist in the dataframe
+        numeric_cols = [c for c in numeric_cols if c in df.columns]
+        if not numeric_cols:
+            return {}
+
+        numeric_df = df[numeric_cols].fillna(0)
+
         pearson_corr = numeric_df.corr(method='pearson')
-        
-        # Calculate Spearman correlation (rank-based)
         spearman_corr = numeric_df.corr(method='spearman')
-        
-        # Calculate significance for correlations
+
+        # M-13: guard against zero-variance columns before calling pearsonr
         significance = {}
         for col1 in numeric_cols:
             for col2 in numeric_cols:
-                if col1 != col2:
-                    corr_val, p_val = pearsonr(numeric_df[col1], numeric_df[col2])
+                if col1 == col2:
+                    continue
+                s1, s2 = numeric_df[col1], numeric_df[col2]
+                # pearsonr requires at least 2 points and non-zero variance in both series
+                if len(s1) < 2 or s1.std() == 0 or s2.std() == 0:
+                    significance[f"{col1}_{col2}"] = {
+                        'correlation': float('nan'),
+                        'p_value': float('nan'),
+                        'significant': False,
+                    }
+                    continue
+                try:
+                    corr_val, p_val = pearsonr(s1, s2)
                     significance[f"{col1}_{col2}"] = {
                         'correlation': corr_val,
                         'p_value': p_val,
-                        'significant': p_val < 0.05
+                        'significant': p_val < 0.05,
                     }
-        
+                except Exception:
+                    significance[f"{col1}_{col2}"] = {
+                        'correlation': float('nan'),
+                        'p_value': float('nan'),
+                        'significant': False,
+                    }
+
         return {
             'pearson_correlation': pearson_corr.to_dict(),
             'spearman_correlation': spearman_corr.to_dict(),
-            'significance': significance
+            'significance': significance,
         }
     
     def analyze_syllabus_question_correlation(self, questions: List[Dict[str, Any]], 
@@ -191,38 +208,35 @@ class CorrelationAnalyzer:
         
         # Convert to datetime for time series analysis
         df['date'] = pd.to_datetime(df[['year', 'month']].assign(day=1))
-        
-        # Group by time periods and analyze trends
-        monthly_trends = df.groupby(['year', 'month']).agg({
-            'marks': ['mean', 'std', 'count'],
-            'difficulty': lambda x: (x == 'hard').sum() / len(x) if len(x) > 0 else 0  # Hard question ratio
-        }).round(2)
-        
-        # Unit popularity over time
+
+        # M-12: use named aggregation so column names are stable strings, not fragile tuples
+        monthly_trends = df.groupby(['year', 'month']).agg(
+            marks_mean=('marks', 'mean'),
+            marks_std=('marks', 'std'),
+            marks_count=('marks', 'count'),
+            hard_ratio=('difficulty', lambda x: (x == 'hard').sum() / len(x) if len(x) > 0 else 0),
+        ).round(2)
+
         unit_popularity = df.groupby(['year', 'month', 'unit']).size().reset_index(name='question_count')
-        
-        # Question type trends
         type_trends = df.groupby(['year', 'month', 'question_type']).size().reset_index(name='count')
-        
-        # Identify trends
+
         trends = {
-            'monthly_average_marks': monthly_trends[('marks', 'mean')].to_dict() if ('marks', 'mean') in monthly_trends.columns else {},
-            'monthly_hard_question_ratio': monthly_trends[('difficulty', '<lambda>')] if ('difficulty', '<lambda>') in monthly_trends.columns else {},
+            'monthly_average_marks': monthly_trends['marks_mean'].to_dict() if 'marks_mean' in monthly_trends.columns else {},
+            'monthly_hard_question_ratio': monthly_trends['hard_ratio'].to_dict() if 'hard_ratio' in monthly_trends.columns else {},
             'unit_popularity': unit_popularity.to_dict('records'),
             'question_type_trends': type_trends.to_dict('records'),
-            'total_questions_by_period': monthly_trends[('marks', 'count')].to_dict() if ('marks', 'count') in monthly_trends.columns else {}
+            'total_questions_by_period': monthly_trends['marks_count'].to_dict() if 'marks_count' in monthly_trends.columns else {},
         }
-        
-        # Detect increasing/decreasing trends
-        if len(monthly_trends) > 1:
-            marks_values = monthly_trends[('marks', 'mean')].dropna().values if ('marks', 'mean') in monthly_trends.columns else []
+
+        if len(monthly_trends) > 1 and 'marks_mean' in monthly_trends.columns:
+            marks_values = monthly_trends['marks_mean'].dropna().values
             if len(marks_values) > 1:
-                # Simple linear regression to detect trend
                 x = np.arange(len(marks_values))
-                if len(x) == len(marks_values):
-                    slope, _ = np.polyfit(x, marks_values, 1)
-                    trends['marks_trend_direction'] = 'increasing' if slope > 0.1 else 'decreasing' if slope < -0.1 else 'stable'
-                    trends['marks_trend_slope'] = slope
+                slope, _ = np.polyfit(x, marks_values, 1)
+                trends['marks_trend_direction'] = (
+                    'increasing' if slope > 0.1 else 'decreasing' if slope < -0.1 else 'stable'
+                )
+                trends['marks_trend_slope'] = float(slope)
         
         return trends
     

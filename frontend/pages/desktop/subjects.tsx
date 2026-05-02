@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { DesktopLayout, SubjectCard } from '@/components/desktop';
 import { Skeleton } from '@/components/common';
 import { useSubjects } from '@/lib/hooks/useSubjects';
+import { deriveSubjectProgress } from '@/lib/types/subject.types';
 
 export default function DesktopSubjects() {
   const { subjects, isLoading, error } = useSubjects();
@@ -74,10 +75,14 @@ export default function DesktopSubjects() {
               <SubjectCard
                 key={subject.id}
                 subject={{
-                  code: subject.id,
+                  // H-19: backend has no `description` or `progress` fields.
+                  // Use `code` as the card code, derive progress from activity counts.
+                  code: subject.code ?? subject.id.slice(0, 8).toUpperCase(),
                   name: subject.name,
-                  description: subject.description,
-                  progress: subject.progress,
+                  description: subject.syllabus_json
+                    ? `Semester ${subject.semester ?? '—'} · ${subject.academic_year ?? ''}`
+                    : `${subject.papers_uploaded} paper${subject.papers_uploaded !== 1 ? 's' : ''} uploaded`,
+                  progress: deriveSubjectProgress(subject),
                 }}
                 onTrackProgress={() => {
                   // Future: navigate to subject detail page

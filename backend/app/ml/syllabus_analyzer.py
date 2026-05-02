@@ -3,17 +3,30 @@ import re
 from typing import List, Dict, Any, Tuple
 import json
 from datetime import datetime
-from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-import nltk
-from nltk.tokenize import sent_tokenize
-from nltk.corpus import stopwords
-import pandas as pd
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
-# Lazy imports to prevent DLL errors
+# sklearn — required; will raise ImportError at startup if missing (caught by services.py wrapper)
+from sklearn.metrics.pairwise import cosine_similarity
+
+# pandas — required for correlation analysis
+import pandas as pd
+
+# NLTK — download data with safe fallback
+import nltk
+try:
+    nltk.download('punkt', quiet=True)
+    nltk.download('punkt_tab', quiet=True)
+    nltk.download('stopwords', quiet=True)
+except Exception as _nltk_err:
+    logger.warning(f"NLTK data download failed (non-fatal): {_nltk_err}")
+
+from nltk.tokenize import sent_tokenize
+from nltk.corpus import stopwords
+
+# Lazy imports to prevent DLL / heavy-dependency errors on startup
 _spacy = None
 _sentence_transformers = None
 
@@ -84,11 +97,11 @@ class SyllabusAnalyzer:
             logger.warning(f"Sentence transformers not available: {e}. Using fallback similarity.")
             self.sentence_model = None
             
-        # Initialize NLTK components
+        # Initialize NLTK components with safe fallback
         try:
             self.stop_words = set(stopwords.words('english'))
-        except LookupError:
-            logger.warning("NLTK data not found. Please install NLTK data.")
+        except Exception:
+            logger.warning("NLTK stopwords not available — using empty set as fallback")
             self.stop_words = set()
         
         # Predefined weights for different syllabus elements

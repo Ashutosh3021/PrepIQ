@@ -1,29 +1,53 @@
-import useSWR, { mutate } from 'swr';
-import { tutorService } from '../services/tutor.service';
-import type { TutorMessage } from '../mocks/tutor.mock';
+import { useState, useCallback } from 'react';
+import { tutorService, TutorMessage } from '../services/tutor.service';
 
-export function useTutor() {
-  const { data, error, isLoading } = useSWR<TutorMessage[]>('tutor/messages', tutorService.getMessages);
+/**
+ * H-17: useTutor no longer uses SWR for getMessages (there is no GET endpoint).
+ * Instead it manages local state and calls POST /chat/tutor for each message.
+ */
+export function useTutor(subjectId?: string) {
+  const [messages, setMessages] = useState<TutorMessage[]>(() =>
+    tutorService.getHistory()
+  );
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
 
-  const sendMessage = async (content: string) => {
-    // Optimistic update: add user message immediately
-    const optimisticMsg: TutorMessage = {
-      id: Date.now().toString(),
-      sender: 'user',
-      content,
-      timestamp: new Date().toLocaleTimeString(),
-    };
-    mutate('tutor/messages', [...(data ?? []), optimisticMsg], false);
+  const sendMessage = useCallback(
+    async (content: string) => {
+      setError(null);
 
-    try {
-      const result = await tutorService.sendMessage(content);
-      mutate('tutor/messages'); // Revalidate after server response
-      return result;
-    } catch (err) {
-      mutate('tutor/messages'); // Revert on error
-      throw err;
-    }
-  };
+      // Optimistic: add user message immediately
+      const userMsg: TutorMessage = {
+        id: Date.now().toString(),
+        sender: 'user',
+        content,
+        timestamp: new Date().toLocaleTimeString(),
+      };
+      setMessages((prev) => [...prev, userMsg]);
+      setIsLoading(true);
 
-  return { messages: data ?? [], isLoading, error, sendMessage };
+      try {
+        const aiMsg = await tutorService.sendMessage(content, subjectId);
+        // tutorService already appended both messages to its internal history;
+        // sync local state from the service's history to stay consistent.
+        setMessages(tutorService.getHistory());
+        return aiMsg;
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error(String(err)));
+        // Revert optimistic update on error
+        setMessages(tutorService.getHistory());
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [subjectId]
+  );
+
+  const clearHistory = useCallback(() => {
+    tutorService.clearHistory();
+    setMessages([]);
+  }, []);
+
+  return { messages, isLoading, error, sendMessage, clearHistory };
 }

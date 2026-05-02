@@ -2,12 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from typing import List
 import uuid
+import json
+import random
 from datetime import datetime, timezone
 
 from ..database import get_db
 from .. import models, schemas
-
-# Import from the new Supabase-first auth service
 from ..services.supabase_first_auth import get_current_user_from_token
 
 # Dependency for protected routes
@@ -24,68 +24,55 @@ router = APIRouter(
     tags=["Tests"]
 )
 
+
 @router.post("/generate", response_model=schemas.MockTestResponse)
 async def generate_mock_test(
     test_request: schemas.MockTestRequest,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify subject belongs to user
     subject = db.query(models.Subject).filter(
         models.Subject.id == test_request.subject_id,
         models.Subject.user_id == current_user["id"]
     ).first()
-    
+
     if not subject:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Subject not found"
-        )
-    
-    # Get completed papers for this subject
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
+
     papers = db.query(models.QuestionPaper).filter(
         models.QuestionPaper.subject_id == test_request.subject_id,
         models.QuestionPaper.processing_status == "completed"
     ).all()
-    
+
     if not papers:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No processed question papers found for this subject. Please upload papers first."
         )
-    
-    # Get questions from these papers
+
     query = db.query(models.Question).filter(
         models.Question.paper_id.in_([p.id for p in papers])
     )
-    
-    # Filter by difficulty if specified
+
     if test_request.difficulty:
-        difficulty_map = {"easy": 1, "medium": 2, "hard": 3}
-        target_diff = difficulty_map.get(test_request.difficulty.lower(), 2)
-        # Allow ±1 difficulty level
-        query = query.filter(models.Question.difficulty.in_([target_diff - 1, target_diff, target_diff + 1]))
-    
-    # Get questions
+        query = query.filter(models.Question.difficulty == test_request.difficulty.lower())
+
     all_questions = query.all()
-    
+
     if not all_questions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No questions found in uploaded papers. Please upload more papers."
         )
-    
-    # Shuffle and select required number of questions
-    import random
+
     selected_questions = random.sample(
-        all_questions, 
+        all_questions,
         min(test_request.num_questions, len(all_questions))
     )
-    
-    # Calculate total marks
-    total_marks = sum(q.marks for q in selected_questions)
-    
-    # Create test record
+
+    # M-02: guard against None marks
+    total_marks = sum((q.marks or 0) for q in selected_questions)
+
     mock_test = models.MockTest(
         user_id=current_user["id"],
         subject_id=test_request.subject_id,
@@ -95,23 +82,42 @@ async def generate_mock_test(
         difficulty_level=test_request.difficulty,
         start_time=datetime.now(timezone.utc)
     )
+
+    questions_for_storage = []
+    for q in selected_questions:
+        marks = q.marks or 0
+        # M-01: guard against None marks before comparison
+        is_mcq = (marks <= 2)
+        questions_for_storage.append({
+            "id": str(q.id),
+            "number": q.question_number,
+            "text": q.question_text[:500] if q.question_text else "",
+            "marks": marks,
+            "unit": q.unit_name or "General",
+            "type": "mcq" if is_mcq else "descriptive",
+            "correct_answer": "A",
+            "explanation": f"Question from {q.unit_name or 'the paper'}"
+        })
+    mock_test.questions_json = json.dumps(questions_for_storage)
+
     db.add(mock_test)
     db.commit()
     db.refresh(mock_test)
-    
-    # Format questions for response
+
     questions = []
     for i, q in enumerate(selected_questions):
+        marks = q.marks or 0
+        is_mcq = (marks <= 2)
         questions.append({
             "id": str(q.id),
-            "number": i+1,
+            "number": i + 1,
             "text": q.question_text[:500] if q.question_text else "",
-            "marks": q.marks,
+            "marks": marks,
             "unit": q.unit_name or "General",
-            "options": ["A) Option A", "B) Option B", "C) Option C", "D) Option D"] if q.marks <= 2 else None,
-            "type": "mcq" if q.marks <= 2 else "descriptive"
+            "options": ["A) Option A", "B) Option B", "C) Option C", "D) Option D"] if is_mcq else None,
+            "type": "mcq" if is_mcq else "descriptive"
         })
-    
+
     return {
         "test_id": mock_test.id,
         "total_questions": len(selected_questions),
@@ -121,6 +127,7 @@ async def generate_mock_test(
         "questions": questions
     }
 
+
 @router.post("/{test_id}/submit", response_model=schemas.TestSubmissionResponse)
 async def submit_test(
     test_id: str,
@@ -128,45 +135,94 @@ async def submit_test(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify test belongs to user
     test = db.query(models.MockTest).filter(
         models.MockTest.id == test_id,
         models.MockTest.user_id == current_user["id"]
     ).first()
-    
+
     if not test:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Test not found"
-        )
-    
-    # Update test with submission
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+
     test.user_answers_json = submission.answers
     test.end_time = submission.end_time
     test.is_completed = True
-    
-    # Calculate score (mock implementation)
-    test.score = 72  # Mock score
-    test.percentage = 72.0
-    test.correct_count = 18
-    test.incorrect_count = 5
-    test.skipped_count = 2
-    
+
+    questions_data = []
+    if test.questions_json:
+        try:
+            questions_data = (
+                json.loads(test.questions_json)
+                if isinstance(test.questions_json, str)
+                else test.questions_json
+            )
+        except Exception:
+            questions_data = []
+
+    if questions_data and submission.answers:
+        correct_count = 0
+        incorrect_count = 0
+        skipped_count = 0
+        total_marks_obtained = 0
+
+        for q in questions_data:
+            q_id = str(q.get("id", ""))
+            user_answer = (
+                submission.answers.get(q_id, "").strip().upper()
+                if submission.answers.get(q_id)
+                else ""
+            )
+            correct_answer = (
+                str(q.get("correct_answer", "")).strip().upper()
+                if q.get("correct_answer")
+                else ""
+            )
+
+            if not user_answer:
+                skipped_count += 1
+            elif user_answer == correct_answer:
+                correct_count += 1
+                total_marks_obtained += q.get("marks", 0)
+            else:
+                incorrect_count += 1
+
+        percentage = (
+            (total_marks_obtained / test.total_marks * 100) if test.total_marks > 0 else 0
+        )
+        test.score = total_marks_obtained
+        test.percentage = round(percentage, 1)
+        test.correct_count = correct_count
+        test.incorrect_count = incorrect_count
+        test.skipped_count = skipped_count
+    else:
+        # C-08: no fake scores — mark everything as skipped/zero
+        test.score = 0
+        test.percentage = 0.0
+        test.correct_count = 0
+        test.incorrect_count = 0
+        test.skipped_count = test.total_questions or 0
+
     db.commit()
     db.refresh(test)
-    
+
+    # M-03: guard against None start_time
+    if test.start_time and test.end_time:
+        duration_minutes = (test.end_time - test.start_time).seconds // 60
+    else:
+        duration_minutes = 0
+
     return {
         "test_id": test.id,
         "score": test.score,
         "total_marks": test.total_marks,
         "percentage": test.percentage,
-        "duration_minutes": (test.end_time - test.start_time).seconds // 60,
+        "duration_minutes": duration_minutes,
         "results": {
             "correct": test.correct_count,
             "incorrect": test.incorrect_count,
-            "skipped": test.skipped_count
-        }
+            "skipped": test.skipped_count,
+        },
     }
+
 
 @router.get("/", response_model=List[schemas.MockTestResponse])
 async def get_user_tests(
@@ -177,20 +233,43 @@ async def get_user_tests(
     tests = db.query(models.MockTest).filter(
         models.MockTest.user_id == current_user["id"]
     ).all()
-    
-    return [
-        {
+
+    result = []
+    for test in tests:
+        # H-06: MockTestResponse requires a `questions` field — provide empty list
+        # when the test is already completed (questions are stored in questions_json)
+        questions_list = []
+        if test.questions_json:
+            try:
+                raw = (
+                    json.loads(test.questions_json)
+                    if isinstance(test.questions_json, str)
+                    else test.questions_json
+                )
+                for q in raw:
+                    questions_list.append({
+                        "id": q.get("id", str(uuid.uuid4())),
+                        "number": q.get("number", 0),
+                        "text": q.get("text", ""),
+                        "marks": q.get("marks", 0),
+                        "unit": q.get("unit", "General"),
+                        "options": None,
+                        "type": q.get("type", "descriptive"),
+                    })
+            except Exception:
+                questions_list = []
+
+        result.append({
             "test_id": test.id,
             "total_questions": test.total_questions,
             "total_marks": test.total_marks,
             "time_limit_minutes": test.duration_minutes,
-            "start_time": test.start_time,
-            "is_completed": test.is_completed,
-            "score": test.score,
-            "percentage": test.percentage
-        }
-        for test in tests
-    ]
+            "start_time": test.start_time or datetime.now(timezone.utc),
+            "questions": questions_list,
+        })
+
+    return result
+
 
 @router.get("/{test_id}/results", response_model=schemas.TestResultsResponse)
 async def get_test_results(
@@ -198,42 +277,82 @@ async def get_test_results(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify test belongs to user
     test = db.query(models.MockTest).filter(
         models.MockTest.id == test_id,
         models.MockTest.user_id == current_user["id"]
     ).first()
-    
+
     if not test:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Test not found"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+
     if not test.is_completed:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Test has not been completed yet"
         )
-    
-    # Mock question analysis
+
+    questions_data = []
+    if test.questions_json:
+        try:
+            questions_data = (
+                json.loads(test.questions_json)
+                if isinstance(test.questions_json, str)
+                else test.questions_json
+            )
+        except Exception:
+            questions_data = []
+
+    user_answers = test.user_answers_json if test.user_answers_json else {}
+
     question_analysis = []
-    for i in range(test.total_questions):
-        question_analysis.append({
-            "question_id": f"q{i+1}",
-            "marks": 5,
-            "status": "correct" if i < 18 else "incorrect",
-            "user_answer": "A" if i < 18 else "B",
-            "correct_answer": "A",
-            "explanation": f"Explanation for question {i+1}"
-        })
-    
+    weak_topics: List[str] = []
+    strong_topics: List[str] = []
+
+    if questions_data and user_answers:
+        for q in questions_data:
+            q_id = str(q.get("id", ""))
+            user_answer = (
+                str(user_answers.get(q_id, "")).strip().upper()
+                if user_answers.get(q_id)
+                else ""
+            )
+            correct_answer = (
+                str(q.get("correct_answer", "")).strip().upper()
+                if q.get("correct_answer")
+                else ""
+            )
+            is_correct = bool(user_answer and user_answer == correct_answer)
+            unit = q.get("unit", "General")
+
+            if is_correct:
+                if unit not in strong_topics:
+                    strong_topics.append(unit)
+            else:
+                if unit not in weak_topics:
+                    weak_topics.append(unit)
+
+            question_analysis.append({
+                "question_id": q_id,
+                "marks": q.get("marks", 0),
+                "status": "correct" if is_correct else "incorrect",
+                "user_answer": user_answer if user_answer else "Skipped",
+                "correct_answer": correct_answer if correct_answer else "N/A",
+                "explanation": q.get("explanation", f"Question about {unit}"),
+            })
+    else:
+        # C-09: return empty analysis instead of fake data
+        question_analysis = []
+
     return {
         "test_id": test.id,
-        "score": test.score,
-        "percentage": test.percentage,
+        "score": test.score or 0,
+        "percentage": float(test.percentage or 0),
         "question_analysis": question_analysis,
-        "weak_topics": ["Linear Transformations", "Eigenvalues"],
-        "strong_topics": ["Matrix Operations", "Determinants"],
-        "recommendations": ["Focus more on weak topics", "Practice more problems"]
+        "weak_topics": weak_topics[:5],
+        "strong_topics": strong_topics[:5],
+        "recommendations": (
+            ["Focus more on weak topics", "Practice more problems"]
+            if weak_topics
+            else ["Keep up the good work!", "Try a harder difficulty level"]
+        ),
     }

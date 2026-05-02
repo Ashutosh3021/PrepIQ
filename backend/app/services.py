@@ -1,3 +1,5 @@
+import logging
+
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List
 import uuid
@@ -15,18 +17,63 @@ from .ml.syllabus_analyzer import SyllabusAnalyzer
 from .ml.correlation_analyzer import CorrelationAnalyzer
 from .ml_engines.study_planner import StudyPlanner
 
+logger = logging.getLogger(__name__)
+
+
 class PrepIQService:
     """Main service class to coordinate all PrepIQ functionality"""
-    
+
     def __init__(self):
-        self.prediction_engine = PredictionEngine()
-        self.chatbot = Chatbot()
-        self.pdf_parser = PDFParser()
-        self.question_analyzer = QuestionAnalyzer()
-        self.enhanced_question_analyzer = EnhancedQuestionAnalyzer()
-        self.syllabus_analyzer = SyllabusAnalyzer()
-        self.correlation_analyzer = CorrelationAnalyzer()
-        self.study_planner = StudyPlanner()
+        # Each component is wrapped individually so a single failure does not
+        # prevent the rest of the service from starting.
+
+        try:
+            self.prediction_engine = PredictionEngine()
+        except Exception as e:
+            logger.warning(f"PredictionEngine failed to initialize: {e}")
+            self.prediction_engine = None
+
+        try:
+            self.chatbot = Chatbot()
+        except Exception as e:
+            logger.warning(f"Chatbot failed to initialize: {e}")
+            self.chatbot = None
+
+        try:
+            self.pdf_parser = PDFParser()
+        except Exception as e:
+            logger.warning(f"PDFParser failed to initialize: {e}")
+            self.pdf_parser = None
+
+        try:
+            self.question_analyzer = QuestionAnalyzer()
+        except Exception as e:
+            logger.warning(f"QuestionAnalyzer failed to initialize: {e}")
+            self.question_analyzer = None
+
+        try:
+            self.enhanced_question_analyzer = EnhancedQuestionAnalyzer()
+        except Exception as e:
+            logger.warning(f"EnhancedQuestionAnalyzer failed to initialize: {e}")
+            self.enhanced_question_analyzer = None
+
+        try:
+            self.syllabus_analyzer = SyllabusAnalyzer()
+        except Exception as e:
+            logger.warning(f"SyllabusAnalyzer failed to initialize: {e}")
+            self.syllabus_analyzer = None
+
+        try:
+            self.correlation_analyzer = CorrelationAnalyzer()
+        except Exception as e:
+            logger.warning(f"CorrelationAnalyzer failed to initialize: {e}")
+            self.correlation_analyzer = None
+
+        try:
+            self.study_planner = StudyPlanner()
+        except Exception as e:
+            logger.warning(f"StudyPlanner failed to initialize: {e}")
+            self.study_planner = None
     
     def process_uploaded_paper(self, db: Session, paper_id: str) -> Dict[str, Any]:
         """Process an uploaded paper to extract questions and analyze"""
@@ -37,6 +84,10 @@ class PrepIQService:
         
         if not paper:
             raise ValueError("Paper not found")
+
+        # R-02: guard against PDFParser failing to initialise
+        if self.pdf_parser is None:
+            raise ValueError("PDF parser service is not available")
         
         # Update status to processing
         paper.processing_status = "processing"
@@ -85,7 +136,8 @@ class PrepIQService:
                     marks=q_data.get("marks", 0),
                     unit_name=q_data.get("unit", "Unknown"),
                     question_type=q_data.get("question_type", "unknown"),
-                    difficulty=q_data.get("difficulty", "medium"),
+                    # M-04: PDFParser returns "Hard"/"Easy"/"Medium" — normalise to lowercase
+                    difficulty=q_data.get("difficulty", "medium").lower(),
                     text_length=q_data.get("length", 0)
                 )
                 db.add(question)
@@ -135,16 +187,21 @@ class PrepIQService:
         
         return unique_questions
     
-    def _is_similar_text(self, text1: str, text2: str, threshold: float = 0.9) -> bool:
-        """Check if two texts are similar based on character overlap"""
+    def _is_similar_text(self, text1: str, text2: str, threshold: float = 0.6) -> bool:
+        """Check if two texts are similar using token-level Jaccard similarity"""
         if not text1 or not text2:
             return False
         
-        # Simple similarity check using character overlap
-        set1 = set(text1)
-        set2 = set(text2)
-        intersection = len(set1.intersection(set2))
-        union = len(set1.union(set2))
+        # Tokenize by splitting on whitespace and punctuation (word-level, not char-level)
+        import re
+        tokens1 = set(re.findall(r'\b\w+\b', text1.lower()))
+        tokens2 = set(re.findall(r'\b\w+\b', text2.lower()))
+        
+        if not tokens1 or not tokens2:
+            return False
+        
+        intersection = len(tokens1.intersection(tokens2))
+        union = len(tokens1.union(tokens2))
         
         if union == 0:
             return True  # Both empty
@@ -152,7 +209,7 @@ class PrepIQService:
         similarity = intersection / union
         return similarity >= threshold
     
-    def generate_predictions(self, db: Session, subject_id: str, user_id: str) -> Dict[str, Any]:
+    def generate_predictions(self, db: Session, subject_id: str, user_id: str, existing_prediction_id: str = None) -> Dict[str, Any]:
         """Generate predictions for a subject using enhanced ML and NLP analysis"""
         # Get all processed papers for the subject
         papers = db.query(models.QuestionPaper).filter(
@@ -188,11 +245,17 @@ class PrepIQService:
             raise ValueError("No questions extracted from processed papers")
         
         # Use enhanced ML model to analyze patterns and generate predictions
-        enhanced_analysis = self.enhanced_question_analyzer.analyze_patterns(all_questions)
-        ml_predictions = self.enhanced_question_analyzer.predict_exam_questions(
-            historical_questions=all_questions,
-            num_predictions=10  # Generate 10 predictions
-        )
+        enhanced_analysis = {}
+        ml_predictions = []
+        if self.enhanced_question_analyzer:
+            try:
+                enhanced_analysis = self.enhanced_question_analyzer.analyze_patterns(all_questions)
+                ml_predictions = self.enhanced_question_analyzer.predict_exam_questions(
+                    historical_questions=all_questions,
+                    num_predictions=10
+                )
+            except Exception as e:
+                logger.warning(f"EnhancedQuestionAnalyzer failed during prediction: {e}")
         
         # Perform syllabus-to-question correlation analysis
         syllabus_content = ""
@@ -200,15 +263,25 @@ class PrepIQService:
             syllabus_content = json.dumps(subject.syllabus_json) if isinstance(subject.syllabus_json, dict) else str(subject.syllabus_json)
         
         # Perform correlation analysis
-        correlation_results = self.correlation_analyzer.comprehensive_correlation_analysis(
-            questions=all_questions,
-            syllabus_topics=self.syllabus_analyzer.calculate_topic_importance(
-                self.syllabus_analyzer.extract_syllabus_structure(syllabus_content)
-            ) if syllabus_content else {}
-        )
-        
-        # Get high-impact topics from correlation analysis
-        high_impact_topics = self.correlation_analyzer.predict_high_impact_topics(correlation_results)
+        correlation_results = {}
+        high_impact_topics = []
+        if self.correlation_analyzer:
+            try:
+                syllabus_topics = {}
+                if syllabus_content and self.syllabus_analyzer:
+                    try:
+                        syllabus_topics = self.syllabus_analyzer.calculate_topic_importance(
+                            self.syllabus_analyzer.extract_syllabus_structure(syllabus_content)
+                        )
+                    except Exception as e:
+                        logger.warning(f"SyllabusAnalyzer failed: {e}")
+                correlation_results = self.correlation_analyzer.comprehensive_correlation_analysis(
+                    questions=all_questions,
+                    syllabus_topics=syllabus_topics
+                )
+                high_impact_topics = self.correlation_analyzer.predict_high_impact_topics(correlation_results)
+            except Exception as e:
+                logger.warning(f"CorrelationAnalyzer failed during prediction: {e}")
         
         # Generate traditional AI predictions with enhanced context
         all_text = ""
@@ -238,24 +311,62 @@ class PrepIQService:
             unit = pred.get("unit", "General")
             unit_coverage[unit] = unit_coverage.get(unit, 0) + 1
         
-        # Create prediction record
-        prediction_record = models.Prediction(
-            subject_id=subject_id,
-            user_id=user_id,
-            predicted_questions_json=json.dumps(final_predictions),
-            total_questions=len(final_predictions),
-            total_predicted_marks=total_predicted_marks,
-            unit_coverage_json=unit_coverage,
-            ml_analysis_json=json.dumps({
-                "enhanced_pattern_analysis": enhanced_analysis,
-                "correlation_analysis": correlation_results,
-                "high_impact_topics": high_impact_topics,
-                "confidence_scores": [pred.get("confidence_score", 0) for pred in final_predictions]
-            }),
-            prediction_accuracy_score=self._calculate_prediction_accuracy(ml_predictions)
-        )
-        db.add(prediction_record)
-        db.commit()
+        # Use existing prediction or create new one
+        if existing_prediction_id:
+            prediction_record = db.query(models.Prediction).filter(
+                models.Prediction.id == existing_prediction_id
+            ).first()
+            if prediction_record:
+                prediction_record.predicted_questions_json = json.dumps(final_predictions)
+                prediction_record.total_questions = len(final_predictions)
+                prediction_record.total_predicted_marks = total_predicted_marks
+                prediction_record.unit_coverage_json = unit_coverage
+                prediction_record.ml_analysis_json = json.dumps({
+                    "enhanced_pattern_analysis": enhanced_analysis,
+                    "correlation_analysis": correlation_results,
+                    "high_impact_topics": high_impact_topics,
+                    "confidence_scores": [pred.get("confidence_score", 0) for pred in final_predictions]
+                })
+                prediction_record.prediction_accuracy_score = self._calculate_prediction_accuracy(ml_predictions)
+                db.commit()
+            else:
+                # Fallback to creating new record
+                prediction_record = models.Prediction(
+                    subject_id=subject_id,
+                    user_id=user_id,
+                    predicted_questions_json=json.dumps(final_predictions),
+                    total_questions=len(final_predictions),
+                    total_predicted_marks=total_predicted_marks,
+                    unit_coverage_json=unit_coverage,
+                    ml_analysis_json=json.dumps({
+                        "enhanced_pattern_analysis": enhanced_analysis,
+                        "correlation_analysis": correlation_results,
+                        "high_impact_topics": high_impact_topics,
+                        "confidence_scores": [pred.get("confidence_score", 0) for pred in final_predictions]
+                    }),
+                    prediction_accuracy_score=self._calculate_prediction_accuracy(ml_predictions)
+                )
+                db.add(prediction_record)
+                db.commit()
+        else:
+            # Create prediction record (legacy behavior)
+            prediction_record = models.Prediction(
+                subject_id=subject_id,
+                user_id=user_id,
+                predicted_questions_json=json.dumps(final_predictions),
+                total_questions=len(final_predictions),
+                total_predicted_marks=total_predicted_marks,
+                unit_coverage_json=unit_coverage,
+                ml_analysis_json=json.dumps({
+                    "enhanced_pattern_analysis": enhanced_analysis,
+                    "correlation_analysis": correlation_results,
+                    "high_impact_topics": high_impact_topics,
+                    "confidence_scores": [pred.get("confidence_score", 0) for pred in final_predictions]
+                }),
+                prediction_accuracy_score=self._calculate_prediction_accuracy(ml_predictions)
+            )
+            db.add(prediction_record)
+            db.commit()
         
         return {
             "predictions": final_predictions,
@@ -270,10 +381,10 @@ class PrepIQService:
             "high_impact_topics": high_impact_topics
         }
     
-    def _calculate_prediction_accuracy(self, predictions: List[Dict[str, Any]]) -> float:
-        """Calculate an estimated accuracy score for predictions"""
+    def _calculate_prediction_accuracy(self, predictions: List[Dict[str, Any]]) -> str:
+        """Calculate an estimated accuracy score for predictions (returned as string for DB column)"""
         if not predictions:
-            return 0.0
+            return "0.0"
         
         # Calculate average confidence score
         avg_confidence = sum([pred.get("confidence_score", 0) for pred in predictions]) / len(predictions)
@@ -285,8 +396,9 @@ class PrepIQService:
         # Weighted combination of confidence and consistency
         accuracy_score = (avg_confidence * 0.7) + (consistency * 0.3)
         
-        # Ensure score is between 0 and 1
-        return min(max(accuracy_score, 0.0), 1.0)
+        # Ensure score is between 0 and 1, return as string truncated to 5 chars
+        clamped = min(max(accuracy_score, 0.0), 1.0)
+        return str(round(clamped, 2))
 
     
     def get_trend_analysis(self, db: Session, subject_id: str) -> Dict[str, Any]:
@@ -298,7 +410,7 @@ class PrepIQService:
             models.QuestionPaper.subject_id == subject_id
         ).all()
         
-        # Format questions for analysis
+        # Format questions for analysis — M-11: extract year from the paper, not from Question
         questions_formatted = []
         for q in questions:
             questions_formatted.append({
@@ -306,21 +418,34 @@ class PrepIQService:
                 "marks": q.marks,
                 "unit": q.unit_name,
                 "difficulty": q.difficulty,
-                "year": getattr(q, 'year', datetime.now().year)  # Assuming year attribute exists
+                "year": q.paper.exam_year if q.paper and q.paper.exam_year else datetime.now().year,
             })
         
         # Perform enhanced analysis using ML components
-        enhanced_analysis = self.enhanced_question_analyzer.analyze_patterns(questions_formatted)
-        
+        enhanced_analysis = {}
+        if self.enhanced_question_analyzer:
+            try:
+                enhanced_analysis = self.enhanced_question_analyzer.analyze_patterns(questions_formatted)
+            except Exception as e:
+                logger.warning(f"EnhancedQuestionAnalyzer failed in trend analysis: {e}")
+
         # Perform correlation analysis
-        correlation_results = self.correlation_analyzer.comprehensive_correlation_analysis(questions_formatted)
-        
+        correlation_results = {}
+        if self.correlation_analyzer:
+            try:
+                correlation_results = self.correlation_analyzer.comprehensive_correlation_analysis(questions_formatted)
+            except Exception as e:
+                logger.warning(f"CorrelationAnalyzer failed in trend analysis: {e}")
+
         # Perform syllabus alignment analysis if available
         subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
         syllabus_alignment = {}
-        if subject and subject.syllabus_json:
-            syllabus_content = json.dumps(subject.syllabus_json) if isinstance(subject.syllabus_json, dict) else str(subject.syllabus_json)
-            syllabus_alignment = self.syllabus_analyzer.analyze_curriculum_alignment(syllabus_content, questions_formatted)
+        if subject and subject.syllabus_json and self.syllabus_analyzer:
+            try:
+                syllabus_content = json.dumps(subject.syllabus_json) if isinstance(subject.syllabus_json, dict) else str(subject.syllabus_json)
+                syllabus_alignment = self.syllabus_analyzer.analyze_curriculum_alignment(syllabus_content, questions_formatted)
+            except Exception as e:
+                logger.warning(f"SyllabusAnalyzer failed in trend analysis: {e}")
         
         # Perform basic analysis for compatibility
         basic_analysis = {
@@ -441,6 +566,13 @@ class PrepIQService:
         
         if not subject:
             raise ValueError("Subject not found")
+
+        # R-02: guard against Chatbot failing to initialise
+        if self.chatbot is None:
+            return {
+                "message_id": "",
+                "response": "AI tutor is currently unavailable. Please try again later.",
+            }
         
         # Get response from chatbot
         response_text = self.chatbot.get_response(
@@ -468,6 +600,10 @@ class PrepIQService:
     
     def generate_study_plan(self, db: Session, user_id: str, subject_id: str, start_date: str, exam_date: str) -> Dict[str, Any]:
         """Generate a personalized study plan using AI-powered optimization"""
+        # R-03: guard against StudyPlanner failing to initialise
+        if self.study_planner is None:
+            raise ValueError("Study planner is not available")
+
         # Get user's performance history to personalize the plan
         user_tests = db.query(models.MockTest).filter(
             models.MockTest.user_id == user_id
@@ -613,9 +749,12 @@ class PrepIQService:
         # Use the existing trend analysis method
         analysis = self.get_trend_analysis(db, subject_id)
         
+        # Keys are nested under "basic_analysis" (BUG-B30 fix)
+        basic = analysis.get("basic_analysis", {})
+        
         return {
-            "unit_weightage": analysis.get("unit_weightage", {}),
-            "mark_distribution": analysis.get("mark_distribution", {})
+            "unit_weightage": basic.get("unit_weightage", {}),
+            "mark_distribution": basic.get("mark_distribution", {})
         }
     
     def get_repetition_analysis(self, db: Session, subject_id: str, user_id: str) -> Dict[str, Any]:
@@ -696,14 +835,18 @@ class PrepIQService:
             if "similar_questions" in patterns:
                 similar_questions = patterns["similar_questions"][:10]  # Limit to top 10
         
-        # Calculate repetition cycle
-        all_years = set()
-        for q in questions:
-            paper = db.query(models.QuestionPaper).filter(
-                models.QuestionPaper.id == q.paper_id
-            ).first()
-            if paper and paper.exam_year:
-                all_years.add(paper.exam_year)
+        # Calculate repetition cycle - OPTIMIZED (PERF-02: Use join instead of O(n) queries)
+        # Get exam years in a single query with join
+        paper_years = db.query(models.QuestionPaper.exam_year).join(
+            models.Question,
+            models.Question.paper_id == models.QuestionPaper.id
+        ).filter(
+            models.QuestionPaper.subject_id == subject_id,
+            models.QuestionPaper.processing_status == "completed",
+            models.QuestionPaper.exam_year.isnot(None)
+        ).distinct().all()
+        
+        all_years = {py[0] for py in paper_years if py[0]}
         
         repetition_cycle = max(all_years) - min(all_years) + 1 if len(all_years) > 1 else 0
         
@@ -731,14 +874,12 @@ class PrepIQService:
         except:
             predicted_questions = []
         
-        # Get unit coverage if available
-        try:
-            unit_coverage = json.loads(prediction.unit_coverage_json) if prediction.unit_coverage_json else {}
-        except:
-            unit_coverage = {}
+        # Get unit coverage - JSON column is already deserialized by SQLAlchemy
+        unit_coverage = prediction.unit_coverage_json if isinstance(prediction.unit_coverage_json, dict) else {}
         
         # Get ML analysis if available
         try:
+            import json
             ml_analysis = json.loads(prediction.ml_analysis_json) if prediction.ml_analysis_json else {}
         except:
             ml_analysis = {}
@@ -782,14 +923,12 @@ class PrepIQService:
         except:
             predicted_questions = []
         
-        # Get unit coverage if available
-        try:
-            unit_coverage = json.loads(prediction.unit_coverage_json) if prediction.unit_coverage_json else {}
-        except:
-            unit_coverage = {}
+        # Get unit coverage - JSON column is already deserialized by SQLAlchemy
+        unit_coverage = prediction.unit_coverage_json if isinstance(prediction.unit_coverage_json, dict) else {}
         
         # Get ML analysis if available
         try:
+            import json
             ml_analysis = json.loads(prediction.ml_analysis_json) if prediction.ml_analysis_json else {}
         except:
             ml_analysis = {}

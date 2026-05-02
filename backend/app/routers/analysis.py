@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 import logging
+import numpy as np
 
 from ..database import get_db
 from .. import models, schemas
@@ -33,6 +34,24 @@ router = APIRouter(
     tags=["Analysis"]
 )
 
+
+def generate_analysis(subject_id: str, extracted_data: dict) -> dict:
+    """Generate comprehensive analysis — M-14: sync function, no await needed."""
+    return {
+        "subject_id": subject_id,
+        "timestamp": datetime.now().isoformat(),
+        "summary": {
+            "total_questions": len(extracted_data["questions"]),
+            "theory_questions": len([q for q in extracted_data["questions"] if q["type"] == "theory"]),
+            "numerical_questions": len([q for q in extracted_data["questions"] if q["type"] == "numerical"]),
+            "diagram_questions": len([q for q in extracted_data["questions"] if q["type"] == "diagram"]),
+            "detected_objects": len(extracted_data["detected_objects"]),
+            "circuit_diagrams": len(extracted_data["circuit_diagrams"]),
+        },
+        "questions": extracted_data["questions"][:20],
+    }
+
+
 @router.get("/{subject_id}/frequency")
 async def get_frequency_analysis(
     subject_id: str,
@@ -48,10 +67,9 @@ async def get_frequency_analysis(
         )
         return result
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:  # M-15: catch JSONDecodeError, AttributeError, etc.
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @router.get("/{subject_id}/weightage")
 async def get_weightage_analysis(
@@ -68,10 +86,9 @@ async def get_weightage_analysis(
         )
         return result
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @router.get("/{subject_id}/repetitions")
 async def get_repetition_analysis(
@@ -88,10 +105,9 @@ async def get_repetition_analysis(
         )
         return result
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @router.get("/{subject_id}/trends")
 async def get_trend_analysis(
@@ -107,10 +123,9 @@ async def get_trend_analysis(
         )
         return result
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @router.get("/data")
 async def get_analysis_data(
@@ -118,7 +133,6 @@ async def get_analysis_data(
     db: Session = Depends(get_db)
 ):
     from datetime import datetime
-    import numpy as np
     service = get_prepiq_service()
     try:
         # Get all analysis data for the user
@@ -222,11 +236,11 @@ async def get_analysis_data(
                 analysis["trend_analysis"].get("total_questions_analyzed", 0) 
                 for analysis in all_subject_analysis
             ),
-            "average_accuracy": np.mean([
+            "average_accuracy": float(np.mean([
                 analysis.get("predictions", {}).get("accuracy_score", 0) 
                 for analysis in all_subject_analysis 
                 if "predictions" in analysis and analysis["predictions"]
-            ]).item() if any("predictions" in analysis and analysis["predictions"] for analysis in all_subject_analysis) else 0,
+            ]) or 0.0) if any("predictions" in analysis and analysis["predictions"] for analysis in all_subject_analysis) else 0.0,
             "high_priority_topics": [],
             "recommended_focus_areas": []
         }
@@ -309,8 +323,8 @@ async def upload_material(
         # Extract questions
         extracted_data["questions"] = extract_questions(extracted_data["text_content"])
         
-        # Generate analysis
-        analysis_result = await generate_analysis(subject_id, extracted_data)
+        # Generate analysis — M-14: generate_analysis is now sync, no await
+        analysis_result = generate_analysis(subject_id, extracted_data)
         
         return {
             "success": True,
@@ -401,23 +415,6 @@ def extract_marks(text: str) -> int:
         if match:
             return int(match.group(1))
     return 0
-
-
-async def generate_analysis(subject_id: str, extracted_data: dict):
-    """Generate comprehensive analysis"""
-    return {
-        "subject_id": subject_id,
-        "timestamp": datetime.now().isoformat(),
-        "summary": {
-            "total_questions": len(extracted_data["questions"]),
-            "theory_questions": len([q for q in extracted_data["questions"] if q["type"] == "theory"]),
-            "numerical_questions": len([q for q in extracted_data["questions"] if q["type"] == "numerical"]),
-            "diagram_questions": len([q for q in extracted_data["questions"] if q["type"] == "diagram"]),
-            "detected_objects": len(extracted_data["detected_objects"]),
-            "circuit_diagrams": len(extracted_data["circuit_diagrams"])
-        },
-        "questions": extracted_data["questions"][:20]  # Limit to top 20
-    }
 
 
 @router.get("/important-questions/{subject_id}")

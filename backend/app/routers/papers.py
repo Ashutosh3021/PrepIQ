@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Header
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Header, Form
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List
 import os
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ import mimetypes
 
 logger = logging.getLogger(__name__)
 
-from ..database import get_db
+from ..database import get_db, get_new_db_session
 from .. import models, schemas
 from ..dependencies import get_prepiq_service
 
@@ -44,14 +45,11 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 # Allowed file extensions
 ALLOWED_EXTENSIONS = {".pdf"}
 
-# Progress tracking
-upload_progress = {}
-
 @router.post("/upload", response_model=schemas.PaperUploadResponse)
 async def upload_paper(
     file: UploadFile = File(...),
-    subject_id: str = None,
-    exam_year: int = None,
+    subject_id: str = Form(...),   # H-25: must be Form(...) for multipart uploads
+    exam_year: int = Form(None),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -138,25 +136,26 @@ async def upload_paper(
     db.commit()
     db.refresh(paper)
     
-    # Initialize progress tracking
-    upload_progress[paper.id] = {"status": "processing", "progress": 0, "message": "Starting processing..."}
-    
-    # Process the paper asynchronously
+    # Process the paper asynchronously with a NEW session for the thread
     try:
         service = get_prepiq_service()
+        
+        # Create a wrapper that creates its own session for thread-safe DB access
+        def process_with_new_session():
+            thread_db = get_new_db_session()
+            try:
+                return service.process_uploaded_paper(thread_db, paper.id)
+            finally:
+                thread_db.close()
+        
         result = await asyncio.get_event_loop().run_in_executor(
             ThreadPoolExecutor(),
-            service.process_uploaded_paper,
-            db,
-            paper.id
+            process_with_new_session
         )
         
         paper.processing_status = "completed"
         paper.processed_at = datetime.now(timezone.utc)
         db.commit()
-        
-        # Update progress tracking
-        upload_progress[paper.id] = {"status": "completed", "progress": 100, "message": result["message"]}
         
         return {
             "paper_id": paper.id,
@@ -172,44 +171,13 @@ async def upload_paper(
         paper.error_message = str(e)
         db.commit()
         
-        # Update progress tracking
-        upload_progress[paper.id] = {"status": "failed", "progress": 0, "message": str(e)}
-        
         logger.error(f"Error processing paper {paper.id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error processing paper: {str(e)}"
         )
 
-@router.get("/{subject_id}", response_model=List[schemas.PaperResponse])
-async def get_papers(
-    subject_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    # Verify subject belongs to user
-    subject = db.query(models.Subject).filter(
-        models.Subject.id == subject_id,
-        models.Subject.user_id == current_user["id"]
-    ).first()
-    
-    if not subject:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Subject not found"
-        )
-    
-    papers = db.query(models.QuestionPaper).filter(
-        models.QuestionPaper.subject_id == subject_id
-    ).all()
-    
-    # Add questions extracted count to each paper
-    for paper in papers:
-        paper.questions_extracted = db.query(models.Question).filter(
-            models.Question.paper_id == paper.id
-        ).count()
-    
-    return papers
+# More specific routes must come before parameterized routes to avoid conflicts
 
 @router.get("/{paper_id}/preview", response_model=schemas.PaperPreviewResponse)
 async def get_paper_preview(
@@ -247,6 +215,43 @@ async def get_paper_preview(
             for q in questions
         ]
     }
+
+
+@router.get("/by-subject/{subject_id}", response_model=List[schemas.PaperResponse])
+async def get_papers_by_subject(
+    subject_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Verify subject belongs to user
+    subject = db.query(models.Subject).filter(
+        models.Subject.id == subject_id,
+        models.Subject.user_id == current_user["id"]
+    ).first()
+    
+    if not subject:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Subject not found"
+        )
+    
+    papers = db.query(models.QuestionPaper).filter(
+        models.QuestionPaper.subject_id == subject_id
+    ).all()
+
+    # H-26: compute question counts in a single query instead of N+1 per-paper queries
+    paper_ids = [p.id for p in papers]
+    counts = dict(
+        db.query(models.Question.paper_id, func.count(models.Question.id))
+        .filter(models.Question.paper_id.in_(paper_ids))
+        .group_by(models.Question.paper_id)
+        .all()
+    ) if paper_ids else {}
+
+    for paper in papers:
+        paper.questions_extracted = counts.get(paper.id, 0)
+
+    return papers
 
 @router.delete("/{paper_id}")
 async def delete_paper(
@@ -299,16 +304,14 @@ async def get_upload_progress(
             detail="Paper not found"
         )
     
-    # Get progress from memory
-    progress_info = upload_progress.get(paper_id, {
-        "status": paper.processing_status,
-        "progress": 0 if paper.processing_status != "completed" else 100,
-        "message": "Processing..." if paper.processing_status != "completed" else "Processing completed"
-    })
+    # Get progress from database (BUG-B12 fix - use DB instead of in-memory dict)
+    status = paper.processing_status or "pending"
+    progress = 0 if status != "completed" else 100
+    message = "Processing..." if status != "completed" else "Processing completed"
     
     return {
         "paper_id": paper_id,
-        "status": progress_info["status"],
-        "progress": progress_info["progress"],
-        "message": progress_info["message"]
+        "status": status,
+        "progress": progress,
+        "message": message
     }

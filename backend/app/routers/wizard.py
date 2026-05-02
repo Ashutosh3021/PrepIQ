@@ -133,7 +133,6 @@ async def complete_step1(
         
     except HTTPException:
         # Re-raise HTTP exceptions without modification
-        db.rollback() if 'db' in locals() else None
         raise
     except Exception as e:
         db.rollback()
@@ -199,11 +198,12 @@ async def complete_step2(
             ).first()
             
             if not existing_subject:
-                # Create new subject
+                # Create new subject — M-09: pad short names to avoid empty code prefix
+                safe_prefix = (subject_name[:3] if len(subject_name) >= 3 else subject_name.ljust(3, "X")).upper()
                 new_subject = models.Subject(
                     user_id=current_user["id"],
                     name=subject_name,
-                    code=f"SUB-{subject_name[:3].upper()}-{datetime.now().strftime('%Y')}",
+                    code=f"SUB-{safe_prefix}-{datetime.now().strftime('%Y')}",
                     semester=1,
                     academic_year=str(datetime.now().year)
                 )
@@ -224,7 +224,6 @@ async def complete_step2(
         }
         
     except HTTPException:
-        db.rollback() if 'db' in locals() else None
         raise
     except Exception as e:
         db.rollback()
@@ -289,7 +288,6 @@ async def complete_step3(
         }
         
     except HTTPException:
-        db.rollback() if 'db' in locals() else None
         raise
     except Exception as e:
         db.rollback()
@@ -354,7 +352,6 @@ async def complete_wizard(
         }
         
     except HTTPException:
-        db.rollback() if 'db' in locals() else None
         raise
     except Exception as e:
         db.rollback()
@@ -444,7 +441,6 @@ async def update_wizard_data(
         }
         
     except HTTPException:
-        db.rollback() if 'db' in locals() else None
         raise
     except Exception as e:
         db.rollback()
@@ -453,3 +449,5 @@ async def update_wizard_data(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update wizard data. Please try again."
         )
+
+

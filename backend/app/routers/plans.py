@@ -1,15 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
-from typing import Dict, Any
-from datetime import datetime, date, timedelta
+from typing import Dict, Any, List
 
 from ..database import get_db
 from .. import models, schemas
-
-# Import from the new Supabase-first auth service
+from ..dependencies import get_prepiq_service
 from ..services.supabase_first_auth import get_current_user_from_token
 
-# Dependency for protected routes
+
 async def get_current_user(
     authorization: str = Header(None),
     db: Session = Depends(get_db)
@@ -17,12 +15,48 @@ async def get_current_user(
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization, db)
-from ..dependencies import get_prepiq_service
+
 
 router = APIRouter(
     prefix="/plan",
     tags=["Study Plans"]
 )
+
+
+def _build_schedule_day(item: Dict[str, Any]) -> schemas.StudyPlanDay:
+    """
+    Convert a raw daily-schedule item from StudyPlanner into a StudyPlanDay schema.
+
+    StudyPlanner returns:
+      - "topics"          : list of dicts  {name, unit, importance, ...}
+      - "recommended_hours": float
+      - "focus_topics"    : list of str    (weak-area topic names)
+
+    StudyPlanDay schema expects:
+      - topics            : List[str]
+      - recommended_hours : float
+      - priority_topics   : List[str]
+    """
+    raw_topics = item.get("topics", [])
+    # Convert topic dicts to plain strings; plain strings pass through unchanged
+    topic_strings: List[str] = []
+    for t in raw_topics:
+        if isinstance(t, dict):
+            topic_strings.append(t.get("name", str(t)))
+        else:
+            topic_strings.append(str(t))
+
+    # C-12 / H-07: planner uses "focus_topics", schema uses "priority_topics"
+    priority_topics = item.get("focus_topics", item.get("priority_topics", []))
+
+    return schemas.StudyPlanDay(
+        day=item["day"],
+        date=item["date"],
+        topics=topic_strings,
+        recommended_hours=float(item.get("recommended_hours", 0)),
+        priority_topics=priority_topics,
+    )
+
 
 @router.post("/generate", response_model=schemas.StudyPlanResponse)
 async def generate_study_plan(
@@ -39,27 +73,17 @@ async def generate_study_plan(
             start_date=plan_request.start_date,
             exam_date=plan_request.exam_date
         )
-        
-        # Format the response to match the schema
+
         return {
             "plan_id": result["plan_id"],
             "subject_id": result["subject_id"],
             "total_days": result["total_days"],
             "daily_schedule": [
-                schemas.StudyPlanDay(
-                    day=item["day"],
-                    date=item["date"],
-                    topics=item["topics"],
-                    recommended_hours=item["recommended_hours"],
-                    priority_topics=item["priority_topics"]
-                ) for item in result["daily_schedule"]
-            ]
+                _build_schedule_day(item) for item in result["daily_schedule"]
+            ],
         }
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
 @router.get("/{user_id}", response_model=schemas.StudyPlanResponse)
@@ -73,33 +97,22 @@ async def get_current_study_plan(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to access this study plan"
         )
-    
+
     service = get_prepiq_service()
     try:
-        result = service.get_user_study_plan(
-            db=db,
-            user_id=user_id
-        )
-        
+        result = service.get_user_study_plan(db=db, user_id=user_id)
+
         return {
             "plan_id": result["plan_id"],
             "subject_id": result["subject_id"],
             "total_days": result["total_days"],
+            # H-07: same key-mapping fix as generate
             "daily_schedule": [
-                schemas.StudyPlanDay(
-                    day=item["day"],
-                    date=item["date"],
-                    topics=item["topics"],
-                    recommended_hours=item["recommended_hours"],
-                    priority_topics=item["priority_topics"]
-                ) for item in result["daily_schedule"]
-            ]
+                _build_schedule_day(item) for item in result["daily_schedule"]
+            ],
         }
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
 @router.put("/{plan_id}", response_model=schemas.StudyPlanUpdateResponse)
@@ -118,10 +131,10 @@ async def update_study_plan(
             days_completed=plan_update.days_completed,
             on_track=plan_update.on_track
         )
-        
-        # Get the updated plan details
+
+        # H-08: get updated plan and apply the same key-mapping fix
         updated_plan = service.get_user_study_plan(db=db, user_id=current_user["id"])
-        
+
         return {
             "message": result["message"],
             "plan": {
@@ -129,21 +142,9 @@ async def update_study_plan(
                 "subject_id": updated_plan["subject_id"],
                 "total_days": updated_plan["total_days"],
                 "daily_schedule": [
-                    schemas.StudyPlanDay(
-                        day=item["day"],
-                        date=item["date"],
-                        topics=item["topics"],
-                        recommended_hours=item["recommended_hours"],
-                        priority_topics=item["priority_topics"]
-                    ) for item in updated_plan["daily_schedule"]
+                    _build_schedule_day(item) for item in updated_plan["daily_schedule"]
                 ],
-                "days_completed": updated_plan["days_completed"],
-                "completion_percentage": updated_plan["completion_percentage"],
-                "on_track": updated_plan["on_track"]
-            }
+            },
         }
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))

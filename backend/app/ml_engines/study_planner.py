@@ -5,8 +5,25 @@ import random
 from sqlalchemy.orm import Session
 from .. import models
 import json
+from dateutil.parser import parse as _dateutil_parse
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_date(date_string: str) -> datetime:
+    """
+    Parse an ISO date string robustly using dateutil.
+    Handles 'Z' suffix, '+HH:MM' offsets, and plain 'YYYY-MM-DD' strings.
+    Returns a naive datetime (timezone info stripped) for arithmetic compatibility.
+    """
+    try:
+        dt = _dateutil_parse(date_string)
+        # Strip timezone so timedelta arithmetic works uniformly
+        return dt.replace(tzinfo=None)
+    except Exception:
+        # Last-resort: strip everything after 'T' or '+' and parse date only
+        clean = date_string.split('T')[0].split('+')[0].replace('Z', '')
+        return datetime.strptime(clean, '%Y-%m-%d')
 
 class StudyPlanner:
     """
@@ -52,9 +69,9 @@ class StudyPlanner:
         if not subject:
             raise ValueError("Subject not found or doesn't belong to user")
         
-        # Parse dates
-        start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00')) if 'Z' in start_date else datetime.fromisoformat(start_date)
-        exam_dt = datetime.fromisoformat(exam_date.replace('Z', '+00:00')) if 'Z' in exam_date else datetime.fromisoformat(exam_date)
+        # Parse dates using robust helper (handles Z, +HH:MM, plain YYYY-MM-DD)
+        start_dt = _parse_date(start_date)
+        exam_dt = _parse_date(exam_date)
         
         # Calculate total days
         total_days = (exam_dt - start_dt).days + 1

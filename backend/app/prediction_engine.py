@@ -10,6 +10,11 @@ import logging
 from tenacity import retry, stop_after_attempt, wait_exponential
 import re
 from datetime import datetime
+
+# Logger MUST be defined before any code that uses it (including the external_api import block)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 from .ml_models.enhanced_question_analyzer import EnhancedQuestionAnalyzer
 from .ml.syllabus_analyzer import SyllabusAnalyzer
 from .ml.correlation_analyzer import CorrelationAnalyzer
@@ -25,32 +30,24 @@ except Exception as e:
 
 load_dotenv()
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 class PredictionEngine:
     """AI-powered prediction engine using Google's Gemini API with enhanced ML capabilities"""
     
     def __init__(self):
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise ValueError("GEMINI_API_KEY environment variable is not set")
-        
-        # Test the API key by configuring and testing a simple request
-        # Test the API key by configuring and testing a simple request
-        try:
-            genai.configure(api_key=api_key)
-            # Test API connection with a simple request
-            test_model = genai.GenerativeModel('gemini-1.5-flash')
-            # test_response = test_model.generate_content("Hello") # Skip actual call to save quota/time during init
-            logger.info("Gemini API connection configured")
-            self.model = test_model
-        except Exception as e:
-            logger.error(f"Gemini API connection failed: {str(e)}")
-            # Don't raise, just log and set model to None to allow server to start
+            logger.warning("GEMINI_API_KEY is not set — Gemini predictions will be unavailable")
             self.model = None
-            # raise ValueError(f"Invalid GEMINI_API_KEY: {str(e)}")
+        else:
+            # Configure Gemini and verify the connection
+            try:
+                genai.configure(api_key=api_key)
+                test_model = genai.GenerativeModel('gemini-1.5-flash')
+                logger.info("Gemini API connection configured")
+                self.model = test_model
+            except Exception as e:
+                logger.error(f"Gemini API connection failed: {str(e)}")
+                self.model = None
         
         # Initialize enhanced ML components with error handling
         try:
@@ -230,7 +227,7 @@ class PredictionEngine:
                 "marks": q.marks,
                 "unit": q.unit_name,
                 "type": q.question_type,
-                "difficulty": q.difficulty_level
+                "difficulty": q.difficulty  # Python attribute name (DB column is difficulty_level)
             })
         
         # Get syllabus information if available
@@ -484,7 +481,7 @@ class PredictionEngine:
                 "text": q.question_text,
                 "marks": q.marks,
                 "unit": q.unit_name,
-                "difficulty": q.difficulty_level
+                "difficulty": q.difficulty  # Python attribute name (DB column is difficulty_level)
             })
         
         # Analyze user's weak areas

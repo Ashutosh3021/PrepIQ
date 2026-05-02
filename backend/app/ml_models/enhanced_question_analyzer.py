@@ -1,22 +1,38 @@
 import re
+import logging
+import json
+import string
+from datetime import datetime
+from typing import List, Dict, Any, Tuple, Optional
+
+# Logger MUST be defined before any code that uses it (including lazy-import helpers)
+logger = logging.getLogger(__name__)
+
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 from sklearn.decomposition import LatentDirichletAllocation
-from typing import List, Dict, Any, Tuple, Optional
-import json
-from datetime import datetime
-import logging
+from sklearn.metrics.pairwise import cosine_similarity
+
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
-import string
-from sklearn.metrics.pairwise import cosine_similarity
 
-# Lazy imports to prevent DLL errors
+# Download required NLTK data (with safe fallback)
+try:
+    nltk.download('punkt', quiet=True)
+    nltk.download('punkt_tab', quiet=True)
+    nltk.download('stopwords', quiet=True)
+    nltk.download('wordnet', quiet=True)
+    nltk.download('omw-1.4', quiet=True)
+except Exception as _nltk_err:
+    logger.warning(f"NLTK data download failed (non-fatal): {_nltk_err}")
+
+# Lazy imports to prevent DLL / heavy-dependency errors on startup
 _spacy = None
 _sentence_transformers = None
+
 
 def _lazy_import_spacy():
     """Lazy import spacy to prevent DLL errors on startup"""
@@ -31,6 +47,7 @@ def _lazy_import_spacy():
             return None
     return _spacy
 
+
 def _lazy_import_sentence_transformers():
     """Lazy import sentence_transformers"""
     global _sentence_transformers
@@ -44,6 +61,7 @@ def _lazy_import_sentence_transformers():
             return None
     return _sentence_transformers
 
+
 # Try to import external_api, but don't fail if it doesn't work
 try:
     from ..ml.external_api_wrapper import get_external_api
@@ -52,9 +70,7 @@ except Exception as e:
     logger.warning(f"Failed to import external_api: {e}")
     external_api = None
 
-logger = logging.getLogger(__name__)
-
-# BERTopic for advanced topic modeling
+# BERTopic for advanced topic modeling (optional heavy dependency)
 try:
     from bertopic import BERTopic
     from umap import UMAP
@@ -65,17 +81,6 @@ except ImportError:
     BERTopic = None
     UMAP = None
     HDBSCAN = None
-
-# Download required NLTK data
-try:
-    nltk.download('punkt', quiet=True)
-    nltk.download('stopwords', quiet=True)
-    nltk.download('wordnet', quiet=True)
-    nltk.download('omw-1.4', quiet=True)
-except:
-    pass  # Handle cases where downloads fail
-
-logger = logging.getLogger(__name__)
 
 class EnhancedQuestionAnalyzer:
     """

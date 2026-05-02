@@ -13,14 +13,14 @@ ALTER TABLE study_plans ENABLE ROW LEVEL SECURITY;
 
 -- Create policies for users table
 CREATE POLICY "Users can view own profile" ON users
-  FOR SELECT USING (auth.uid() = id OR auth.role() = 'authenticated');
+  FOR SELECT USING (auth.uid() = id);
 
 CREATE POLICY "Users can update own profile" ON users
   FOR UPDATE USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
 
 -- Create policies for subjects table
 CREATE POLICY "Users can view own subjects" ON subjects
-  FOR SELECT USING (user_id = auth.uid() OR auth.role() = 'authenticated');
+  FOR SELECT USING (user_id = auth.uid());
 
 CREATE POLICY "Users can insert own subjects" ON subjects
   FOR INSERT WITH CHECK (user_id = auth.uid());
@@ -36,7 +36,7 @@ CREATE POLICY "Users can view own question papers" ON question_papers
   FOR SELECT USING (
     subject_id IN (
       SELECT id FROM subjects WHERE user_id = auth.uid()
-    ) OR auth.role() = 'authenticated'
+    )
   );
 
 CREATE POLICY "Users can insert own question papers" ON question_papers
@@ -67,7 +67,7 @@ CREATE POLICY "Users can view questions from own papers" ON questions
       SELECT id FROM question_papers WHERE subject_id IN (
         SELECT id FROM subjects WHERE user_id = auth.uid()
       )
-    ) OR auth.role() = 'authenticated'
+    )
   );
 
 CREATE POLICY "Users can insert questions to own papers" ON questions
@@ -103,7 +103,7 @@ CREATE POLICY "Users can view own predictions" ON predictions
     user_id = auth.uid() OR
     subject_id IN (
       SELECT id FROM subjects WHERE user_id = auth.uid()
-    ) OR auth.role() = 'authenticated'
+    )
   );
 
 CREATE POLICY "Users can insert own predictions" ON predictions
@@ -136,7 +136,7 @@ CREATE POLICY "Users can view own mock tests" ON mock_tests
     user_id = auth.uid() OR
     subject_id IN (
       SELECT id FROM subjects WHERE user_id = auth.uid()
-    ) OR auth.role() = 'authenticated'
+    )
   );
 
 CREATE POLICY "Users can insert own mock tests" ON mock_tests
@@ -169,7 +169,7 @@ CREATE POLICY "Users can view own chat history" ON chat_history
     user_id = auth.uid() OR
     subject_id IN (
       SELECT id FROM subjects WHERE user_id = auth.uid()
-    ) OR auth.role() = 'authenticated'
+    )
   );
 
 CREATE POLICY "Users can insert own chat history" ON chat_history
@@ -202,7 +202,7 @@ CREATE POLICY "Users can view own study plans" ON study_plans
     user_id = auth.uid() OR
     subject_id IN (
       SELECT id FROM subjects WHERE user_id = auth.uid()
-    ) OR auth.role() = 'authenticated'
+    )
   );
 
 CREATE POLICY "Users can insert own study plans" ON study_plans

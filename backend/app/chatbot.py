@@ -23,21 +23,17 @@ class Chatbot:
     def __init__(self):
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise ValueError("GEMINI_API_KEY environment variable is not set")
-        
-        # Test the API key by configuring and testing a simple request
-        try:
-            genai.configure(api_key=api_key)
-            # Test API connection with a simple request
-            test_model = genai.GenerativeModel('gemini-1.5-flash')
-            # test_response = test_model.generate_content("Hello") # Skip actual call
-            logger.info("Gemini API connection configured")
-            self.model = test_model
-        except Exception as e:
-            logger.error(f"Gemini API connection failed: {str(e)}")
-            # Don't raise, just log and set model to None
+            logger.warning("GEMINI_API_KEY is not set — Chatbot will be unavailable")
             self.model = None
-            # raise ValueError(f"Invalid GEMINI_API_KEY: {str(e)}")
+        else:
+            try:
+                genai.configure(api_key=api_key)
+                test_model = genai.GenerativeModel('gemini-1.5-flash')
+                logger.info("Gemini API connection configured")
+                self.model = test_model
+            except Exception as e:
+                logger.error(f"Gemini API connection failed: {str(e)}")
+                self.model = None
         self.conversation_memory = {}  # Store conversation history per user
         self.max_history_length = 10  # Keep last 10 messages
     
@@ -104,6 +100,8 @@ class Chatbot:
         """
         
         try:
+            if self.model is None:
+                return "AI tutor is currently unavailable (GEMINI_API_KEY not configured)."
             response = self.model.generate_content(prompt)
             return response.text
         except Exception as e:

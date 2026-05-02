@@ -17,3 +17,17 @@ supabase==2.10.0
 Pillow==12.1.1
 numpy==1.26.4
 pytesseract==0.3.10
+
+# ML / NLP dependencies (required by ml/, ml_models/, ml_engines/)
+scikit-learn==1.4.2
+pandas==2.2.2
+scipy==1.13.1
+PyMuPDF==1.24.5
+nltk==3.8.1
+sentence-transformers==3.0.1
+
+# Optional heavy ML (only loaded when ENABLE_HEAVY_ML=true or explicitly imported)
+# spacy is imported lazily — install separately if needed:
+#   pip install spacy && python -m spacy download en_core_web_sm
+# bertopic, umap-learn, hdbscan are imported lazily — install separately if needed:
+#   pip install bertopic umap-learn hdbscan

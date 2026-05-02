@@ -1,14 +1,34 @@
-import PyPDF2
-import fitz  # PyMuPDF for better PDF processing
-from typing import List, Dict, Any
+import logging
 import io
 import re
-import logging
-from PIL import Image
 import base64
 import io as bio
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+# PyMuPDF (fitz) — now in requirements.txt; guard import for graceful degradation
+try:
+    import fitz  # PyMuPDF
+    FITZ_AVAILABLE = True
+except ImportError:
+    logger.warning("PyMuPDF (fitz) not installed — PDF extraction will fall back to PyPDF2")
+    fitz = None
+    FITZ_AVAILABLE = False
+
+try:
+    import PyPDF2
+    PYPDF2_AVAILABLE = True
+except ImportError:
+    logger.warning("PyPDF2 not installed — PDF text extraction unavailable")
+    PyPDF2 = None
+    PYPDF2_AVAILABLE = False
+
+try:
+    from PIL import Image
+except ImportError:
+    logger.warning("Pillow not installed — image extraction from PDFs unavailable")
+    Image = None
 
 class PDFParser:
     """PDF parser to extract text and metadata from PDF files"""
@@ -17,25 +37,29 @@ class PDFParser:
     def extract_text_from_pdf(pdf_path: str) -> str:
         """Extract text content from a PDF file using multiple methods for better accuracy"""
         text = ""
-        try:
-            # First try with PyMuPDF (fitz) for better text extraction
-            doc = fitz.open(pdf_path)
-            for page_num in range(len(doc)):
-                page = doc.load_page(page_num)
-                text += page.get_text()
-            doc.close()
-        except Exception as e:
-            logger.warning(f"PyMuPDF failed, falling back to PyPDF2: {str(e)}")
-            # Fallback to PyPDF2
+        if FITZ_AVAILABLE:
+            try:
+                doc = fitz.open(pdf_path)
+                for page_num in range(len(doc)):
+                    page = doc.load_page(page_num)
+                    text += page.get_text()
+                doc.close()
+                return text
+            except Exception as e:
+                logger.warning(f"PyMuPDF failed, falling back to PyPDF2: {str(e)}")
+
+        if PYPDF2_AVAILABLE:
             try:
                 with open(pdf_path, 'rb') as file:
                     pdf_reader = PyPDF2.PdfReader(file)
                     for page in pdf_reader.pages:
-                        text += page.extract_text()
+                        text += page.extract_text() or ""
+                return text
             except Exception as e2:
-                logger.error(f"Both PDF extraction methods failed: {str(e2)}")
+                logger.error(f"PyPDF2 extraction also failed: {str(e2)}")
                 raise e2
-        return text
+
+        raise RuntimeError("No PDF extraction library available (install PyMuPDF or PyPDF2)")
     
     @staticmethod
     def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
@@ -71,76 +95,69 @@ class PDFParser:
     
     @staticmethod
     def parse_questions_from_text(text: str) -> List[Dict[str, Any]]:
-        """Parse questions from extracted text with enhanced ML-ready features"""
-        
-        # Enhanced patterns to match various question formats
-        question_patterns = [
-            # Pattern for questions with numbers (Q1, Q2, etc.)
-            r'(?:Q|Question)?\.?\s*(\d+)\.?\s*(.*?)(?=\n(?:Q|Question)?\.?\s*\d+\.?|$)',
-            # Pattern for questions with marks
-            r'(.*?)(?:\(\d+\s*marks?\)|\[\d+\s*marks?\]|\d+\s*M|\d+\s*MARKS)',
-            # Pattern for general question formats
-            r'(?:^|\n)([A-Z][^\n]*?)(?=\n[A-Z]|$)',
-        ]
-        
-        questions = []
-        
-        # Process each pattern
-        for i, pattern in enumerate(question_patterns):
-            matches = re.finditer(pattern, text, re.DOTALL | re.IGNORECASE)
-            for match in matches:
-                if i == 0:  # Pattern with question numbers
-                    if len(match.groups()) >= 2:
-                        q_number = match.group(1)
-                        q_text = match.group(2).strip()
-                        if len(q_text) > 10:
-                            questions.append({
-                                "text": q_text,
-                                "number": int(q_number) if q_number.isdigit() else len(questions) + 1,
-                                "marks": PDFParser._estimate_marks(q_text),
-                                "unit": PDFParser._estimate_unit(q_text),
-                                "question_type": PDFParser._classify_question_type(q_text),
-                                "difficulty": PDFParser._estimate_difficulty(q_text),
-                                "keywords": PDFParser._extract_keywords(q_text),
-                                "length": len(q_text)
-                            })
-                elif i == 1:  # Pattern with marks
-                    q_text = match.group(1).strip()
-                    if len(q_text) > 10 and not any(q['text'] == q_text for q in questions):  # Avoid duplicates
-                        questions.append({
-                            "text": q_text,
-                            "number": len(questions) + 1,
-                            "marks": PDFParser._estimate_marks(q_text),
-                            "unit": PDFParser._estimate_unit(q_text),
-                            "question_type": PDFParser._classify_question_type(q_text),
-                            "difficulty": PDFParser._estimate_difficulty(q_text),
-                            "keywords": PDFParser._extract_keywords(q_text),
-                            "length": len(q_text)
-                        })
-                else:  # General pattern
-                    q_text = match.group(1).strip()
-                    if len(q_text) > 20 and not any(q['text'] == q_text for q in questions):  # Avoid duplicates
-                        questions.append({
-                            "text": q_text,
-                            "number": len(questions) + 1,
-                            "marks": PDFParser._estimate_marks(q_text),
-                            "unit": PDFParser._estimate_unit(q_text),
-                            "question_type": PDFParser._classify_question_type(q_text),
-                            "difficulty": PDFParser._estimate_difficulty(q_text),
-                            "keywords": PDFParser._extract_keywords(q_text),
-                            "length": len(q_text)
-                        })
-        
-        # Remove duplicates based on text content
-        unique_questions = []
-        seen_texts = set()
-        for q in questions:
-            text_hash = hash(q['text'].lower().strip())
-            if text_hash not in seen_texts:
-                unique_questions.append(q)
-                seen_texts.add(text_hash)
-        
-        return unique_questions
+        """Parse questions from extracted text with enhanced ML-ready features.
+
+        M-05: The original approach used re.DOTALL with greedy (.*?) across the
+        whole document, which causes catastrophic backtracking on large PDFs.
+        Fixed by:
+          1. Splitting the document into lines first (O(n), no backtracking).
+          2. Applying simple per-line patterns that cannot backtrack.
+          3. Capping the text length fed to each pattern.
+        """
+        MAX_TEXT = 200_000  # cap to avoid runaway on huge PDFs
+        text = text[:MAX_TEXT]
+
+        questions: List[Dict[str, Any]] = []
+        seen_texts: set = set()
+
+        def _add(q_text: str, q_number: int) -> None:
+            q_text = q_text.strip()
+            if len(q_text) < 10:
+                return
+            key = hash(q_text.lower())
+            if key in seen_texts:
+                return
+            seen_texts.add(key)
+            questions.append({
+                "text": q_text,
+                "number": q_number,
+                "marks": PDFParser._estimate_marks(q_text),
+                "unit": PDFParser._estimate_unit(q_text),
+                "question_type": PDFParser._classify_question_type(q_text),
+                "difficulty": PDFParser._estimate_difficulty(q_text),
+                "keywords": PDFParser._extract_keywords(q_text),
+                "length": len(q_text),
+            })
+
+        # Pattern 1: numbered questions  "Q1." / "1." / "Question 1"
+        _numbered = re.compile(
+            r'^(?:Q(?:uestion)?\s*\.?\s*)?(\d{1,3})[.)]\s+(.+)$',
+            re.IGNORECASE,
+        )
+        # Pattern 2: lines that contain a marks indicator
+        _marks_line = re.compile(
+            r'^(.+?)(?:\(\d+\s*marks?\)|\[\d+\s*marks?\]|\d+\s*M\b)',
+            re.IGNORECASE,
+        )
+
+        q_counter = 0
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or len(line) > 600:
+                continue
+
+            m = _numbered.match(line)
+            if m:
+                q_counter += 1
+                _add(m.group(2), int(m.group(1)))
+                continue
+
+            m = _marks_line.match(line)
+            if m:
+                q_counter += 1
+                _add(m.group(1), q_counter)
+
+        return questions
     
     @staticmethod
     def _estimate_marks(question_text: str) -> int:
@@ -246,11 +263,12 @@ class PDFParser:
     @staticmethod
     def extract_metadata_from_pdf(pdf_path: str) -> Dict[str, Any]:
         """Extract metadata from PDF file"""
+        if not FITZ_AVAILABLE:
+            logger.warning("PyMuPDF not available — returning empty metadata")
+            return {}
         try:
             doc = fitz.open(pdf_path)
             metadata = doc.metadata
-            
-            # Extract additional info
             result = {
                 "title": metadata.get("title", ""),
                 "author": metadata.get("author", ""),
@@ -262,28 +280,27 @@ class PDFParser:
                 "pages": len(doc),
                 "encrypted": doc.is_encrypted
             }
-            
             doc.close()
             return result
         except Exception as e:
             logger.error(f"Error extracting PDF metadata: {str(e)}")
             return {}
-    
+
     @staticmethod
     def extract_images_from_pdf(pdf_path: str) -> List[Dict[str, Any]]:
         """Extract images from PDF file"""
+        if not FITZ_AVAILABLE:
+            logger.warning("PyMuPDF not available — skipping image extraction")
+            return []
         try:
             doc = fitz.open(pdf_path)
             images = []
-            
             for page_num in range(len(doc)):
                 page = doc.load_page(page_num)
                 image_list = page.get_images()
-                
                 for img_index, img in enumerate(image_list):
                     xref = img[0]
                     pix = fitz.Pixmap(doc, xref)
-                    
                     if pix.n < 5:  # Skip CMYK images for simplicity
                         img_data = pix.tobytes(output='png')
                         images.append({
@@ -295,7 +312,6 @@ class PDFParser:
                             "colorspace": "RGB" if pix.n <= 3 else "RGBA"
                         })
                     pix = None  # Free memory
-            
             doc.close()
             return images
         except Exception as e:
