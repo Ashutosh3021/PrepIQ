@@ -1,10 +1,36 @@
-# PrepIQ
+# 🚀 PrepIQ
 
-AI-Powered Exam Preparation Platform that predicts exam questions using ML analysis.
+> **AI-Powered Exam Preparation Platform**  
+> Predict exam questions, generate smart tests, and learn with an AI tutor.
+
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Frontend](https://img.shields.io/badge/frontend-Next.js_16-black?logo=next.js)
+![Backend](https://img.shields.io/badge/backend-FastAPI-teal?logo=fastapi)
+![Database](https://img.shields.io/badge/database-PostgreSQL_(Supabase)-blue?logo=postgresql)
+![AI](https://img.shields.io/badge/AI-Gemini_+_Bytez-orange?logo=google)
+![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen)
 
 ---
 
-## Tech Stack
+## 📊 Project Status
+
+```mermaid
+gantt
+    title PrepIQ Development Progress
+    dateFormat  YYYY-MM-DD
+    section Core
+    Backend API           :done, 2025-01-01, 30d
+    Frontend UI           :done, 2025-02-01, 25d
+    ML Integration        :active, 2025-03-01, 20d
+    section Features
+    Question Prediction   :done, 2025-02-15, 10d
+    AI Tutor              :active, 2025-03-10, 15d
+    Analytics Dashboard   :pending, 2025-04-01, 10d
+```
+
+---
+
+## 🎯 Tech Stack
 
 | Layer | Technology |
 |-------|------------|
@@ -16,17 +42,41 @@ AI-Powered Exam Preparation Platform that predicts exam questions using ML analy
 
 ---
 
-## Features
+## ✨ Features
 
-- **Question Prediction** - AI analyzes past papers to predict likely exam questions
-- **Smart Mock Tests** - Generate practice tests from uploaded materials  
-- **AI Tutor** - Socratic teaching method chatbot
-- **Analytics Dashboard** - Visualize patterns and trends
-- **Subject Management** - Organize subjects and papers
+- 🧠 **Question Prediction** – AI analyzes past papers to predict likely exam questions  
+- 📝 **Smart Mock Tests** – Generate practice tests from your uploaded materials  
+- 🤖 **AI Tutor** – Socratic teaching chatbot that guides you to answers  
+- 📈 **Analytics Dashboard** – Visualize patterns, trends, and weak areas  
+- 📚 **Subject Management** – Organize subjects, papers, and study plans  
 
 ---
 
-## Quick Start
+## 🖼️ Gallery (App Screenshots)
+
+*Place your actual screenshots here – replace the placeholder images with your own.*
+
+![Dashboard Preview](https://via.placeholder.com/800x400?text=📸+Screenshot:+Dashboard+%28coming+soon%29)
+*Dashboard – overview of your progress*
+
+![AI Tutor Chat](https://via.placeholder.com/800x400?text=🤖+Screenshot:+AI+Tutor+%28coming+soon%29)
+*AI Tutor – Socratic learning in action*
+
+![Predictions Page](https://via.placeholder.com/800x400?text=🔮+Screenshot:+Predictions+%28coming+soon%29)
+*Question prediction results with confidence scores*
+
+---
+
+## 🧠 Meme of the Day (because debugging is hard)
+
+![AI Meme](https://media.makeameme.org/created/ai-will-take-5c4b6d.jpg)
+
+> *“AI will take your exam… but only after you fix the environment variables.”*  
+> – Every developer ever
+
+---
+
+## 🚀 Quick Start
 
 ```bash
 # Backend
@@ -44,7 +94,7 @@ npm run dev
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 PrepIQ/
@@ -95,7 +145,7 @@ PrepIQ/
 
 ---
 
-## Environment Variables
+## 🔧 Environment Variables
 
 ### Backend (.env)
 ```env
@@ -116,7 +166,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 
 ---
 
-## API Endpoints
+## 📡 API Endpoints
 
 | Endpoint | Description |
 |----------|-------------|
@@ -132,14 +182,18 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 
 ---
 
-## Deployment
+## ☁️ Deployment
 
-- **Frontend**: Vercel (push to main)
-- **Backend**: Render / Railway
-- **Database**: Supabase PostgreSQL
+- **Frontend**: Vercel (push to `main`)  
+- **Backend**: Render / Railway  
+- **Database**: Supabase PostgreSQL  
 
 ---
 
-## License
+## 📄 License
 
-MIT
+MIT © Ashutosh Patra
+
+---
+
+*Made with ❤️ for students who want to beat the exam stress.*

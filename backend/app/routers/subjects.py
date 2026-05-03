@@ -103,13 +103,25 @@ async def create_subject(
 ):
     """Create a new subject"""
     try:
+        from datetime import datetime as _dt
+
+        # BUG-M08: parse exam_date string to datetime before storing in DateTime column
+        parsed_exam_date = None
+        if subject.exam_date:
+            try:
+                parsed_exam_date = _dt.fromisoformat(
+                    subject.exam_date.replace('Z', '+00:00')
+                )
+            except (ValueError, AttributeError):
+                parsed_exam_date = None
+
         db_subject = models.Subject(
             user_id=current_user["id"],
             name=subject.name,
             code=subject.code,
             semester=subject.semester,
             total_marks=subject.total_marks,
-            exam_date=subject.exam_date,
+            exam_date=parsed_exam_date,
             exam_duration_minutes=subject.exam_duration_minutes,
             syllabus_json=subject.syllabus_json
         )
@@ -206,6 +218,13 @@ async def update_subject(
         # Update fields
         for var, value in vars(subject_update).items():
             if value is not None:
+                # BUG-M08: parse exam_date string before storing
+                if var == 'exam_date' and isinstance(value, str):
+                    from datetime import datetime as _dt
+                    try:
+                        value = _dt.fromisoformat(value.replace('Z', '+00:00'))
+                    except (ValueError, AttributeError):
+                        continue
                 setattr(subject, var, value)
         
         db.commit()

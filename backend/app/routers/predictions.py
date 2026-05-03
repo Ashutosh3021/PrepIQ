@@ -82,13 +82,8 @@ async def generate_prediction(
             detail="Prediction record not found after generation."
         )
 
-    # H-24: use json.dumps (not str()) so the stored value is valid JSON
-    prediction.predicted_questions_json = json.dumps(result.get("predictions", []))
-    prediction.total_questions = len(result.get("predictions", []))
-    prediction.total_predicted_marks = result.get("total_marks", 0)
-    db.commit()
-    db.refresh(prediction)
-
+    # BUG-H16: service already committed the correct data — no second write needed.
+    # Just return the prediction that was committed by the service.
     return {
         "prediction_id": prediction.id,
         "status": "completed",

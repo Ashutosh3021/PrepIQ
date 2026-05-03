@@ -170,25 +170,38 @@ async def upload_and_analyze(
         
         # Generate analysis
         logger.info("Generating analysis...")
-        analysis_result = await generate_analysis(subject_id, extracted_data, db)
-        
+        analysis_result = await generate_upload_analysis(subject_id, extracted_data, db)
+
+        # BUG-M13: clean up local temp files — filesystem is ephemeral on Render
+        for fp in saved_files:
+            try:
+                os.unlink(fp)
+            except OSError:
+                pass  # non-fatal — file may already be gone
+
         return {
             "success": True,
             "message": f"Processed {len(files)} files successfully",
-            "files": saved_files,
+            "files": [],  # paths are gone; don't expose ephemeral paths in response
             "extracted_data": {
-                "text_content": extracted_data["text_content"][:5],  # Limit for response
+                "text_content": extracted_data["text_content"][:5],
                 "detected_objects": extracted_data["detected_objects"],
                 "circuit_diagrams": extracted_data["circuit_diagrams"],
                 "questions_count": len(extracted_data["questions"]),
-                "questions": extracted_data["questions"][:20]  # Limit to top 20
+                "questions": extracted_data["questions"][:20]
             },
             "analysis": analysis_result
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
+        # BUG-M13: also clean up on error path
+        for fp in saved_files:
+            try:
+                os.unlink(fp)
+            except OSError:
+                pass
         logger.error(f"Upload processing error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -440,7 +453,7 @@ def extract_unit(text: str) -> str:
     return "Unknown"
 
 
-async def generate_analysis(subject_id: str, extracted_data: dict, db: Session):
+async def generate_upload_analysis(subject_id: str, extracted_data: dict, db: Session):
     """Generate comprehensive analysis from extracted data"""
     
     analysis = {

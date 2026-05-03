@@ -86,27 +86,20 @@ async def generate_study_plan(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
-@router.get("/{user_id}", response_model=schemas.StudyPlanResponse)
+@router.get("/me", response_model=schemas.StudyPlanResponse)
 async def get_current_study_plan(
-    user_id: str,
+    # BUG-L07: use /plan/me — no user_id in URL; identity comes from the token
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if current_user["id"] != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access this study plan"
-        )
-
     service = get_prepiq_service()
     try:
-        result = service.get_user_study_plan(db=db, user_id=user_id)
+        result = service.get_user_study_plan(db=db, user_id=current_user["id"])
 
         return {
             "plan_id": result["plan_id"],
             "subject_id": result["subject_id"],
             "total_days": result["total_days"],
-            # H-07: same key-mapping fix as generate
             "daily_schedule": [
                 _build_schedule_day(item) for item in result["daily_schedule"]
             ],

@@ -3,9 +3,55 @@ import Head from 'next/head';
 import { DesktopLayout } from '@/components/desktop';
 import { Skeleton } from '@/components/common';
 import { useAnalysis } from '@/lib/hooks/useAnalysis';
+import type { Analysis } from '@/lib/types/analysis.types';
+
+// ── Mapping helpers ──────────────────────────────────────────────────────────
+// BUG-H12 + BUG-H13: useAnalysis takes no args; all display values are derived
+// from the real Analysis type (subjectPerformance, studyInsights, topicMastery).
+
+/** Derive a 0-100 overall proficiency score from the analysis payload. */
+function deriveOverallScore(analysis: Analysis | null): number {
+  if (!analysis) return 0;
+  const perfs = analysis.subjectPerformance;
+  if (perfs.length > 0) {
+    const avg = perfs.reduce((sum, s) => sum + s.performance, 0) / perfs.length;
+    return Math.round(Math.min(100, Math.max(0, avg)));
+  }
+  return 0;
+}
+
+/** Map subjectPerformance → bar-chart rows. */
+function deriveSubjectProgress(analysis: Analysis | null) {
+  if (!analysis) return [];
+  return analysis.subjectPerformance.map((s, i) => ({
+    subjectId: `${s.subject}-${i}`,
+    name: s.subject,
+    progress: Math.round(Math.min(100, Math.max(0, s.performance))),
+  }));
+}
+
+/** Derive weakness labels from high-priority topics (max 3). */
+function deriveWeaknesses(analysis: Analysis | null): string[] {
+  if (!analysis) return [];
+  return analysis.studyInsights.high_priority_topics
+    .slice(0, 3)
+    .map((t) => `${t.topic} (${t.subject})`);
+}
+
+/** Derive strength labels from high-mastery topics (mastery >= 70, max 4). */
+function deriveStrengths(analysis: Analysis | null): string[] {
+  if (!analysis) return [];
+  return analysis.topicMastery
+    .filter((t) => t.mastery_level >= 70)
+    .slice(0, 4)
+    .map((t) => `${t.topic} — ${t.subject}`);
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
 
 export default function DesktopAnalysis() {
-  const { analysis, isLoading, error } = useAnalysis('default-user');
+  // BUG-H12: no argument — hook takes none
+  const { analysis, isLoading, error } = useAnalysis();
 
   if (isLoading) {
     return (
@@ -27,7 +73,11 @@ export default function DesktopAnalysis() {
     );
   }
 
-  const overallScore = analysis?.overallProgress ?? 0;
+  // BUG-H13: derive all display values from the real Analysis type
+  const overallScore = deriveOverallScore(analysis);
+  const subjectProgress = deriveSubjectProgress(analysis);
+  const weaknesses = deriveWeaknesses(analysis);
+  const strengths = deriveStrengths(analysis);
   const gaugeOffset = 691 - (691 * overallScore) / 100;
 
   return (
@@ -44,7 +94,9 @@ export default function DesktopAnalysis() {
               AI Analysis Results
             </h1>
             <p className="text-on-surface/70 text-lg font-light tracking-wide uppercase text-sm">
-              Session ID: FA-9982-X | Generated October 24, 2023
+              {analysis
+                ? `${analysis.studyInsights.total_subjects} subject${analysis.studyInsights.total_subjects !== 1 ? 's' : ''} · ${analysis.studyInsights.total_questions_analyzed} questions analysed`
+                : 'No data yet — upload papers to generate analysis'}
             </p>
           </div>
           <div className="flex gap-4">
@@ -61,7 +113,7 @@ export default function DesktopAnalysis() {
 
         {/* Dashboard Bento Grid */}
         <div className="grid grid-cols-12 gap-8">
-          {/* Overall Score Gauge (Large) */}
+          {/* Overall Score Gauge */}
           <div className="col-span-12 lg:col-span-4 bg-surface-container-high p-10 flex flex-col items-center justify-center relative">
             <div className="absolute top-6 left-6">
               <span className="text-xs font-extrabold uppercase tracking-widest text-on-surface/70">
@@ -69,7 +121,6 @@ export default function DesktopAnalysis() {
               </span>
             </div>
             <div className="relative w-64 h-64 flex items-center justify-center mt-8">
-              {/* SVG Gauge */}
               <svg className="w-full h-full transform -rotate-90">
                 <circle
                   className="text-secondary-container"
@@ -95,42 +146,45 @@ export default function DesktopAnalysis() {
               <div className="absolute flex flex-col items-center">
                 <span className="text-7xl font-bold tracking-tighter">{overallScore}</span>
                 <span className="text-xs font-bold uppercase text-on-surface/70 tracking-widest">
-                  Percentile
+                  Score
                 </span>
               </div>
             </div>
             <div className="mt-8 text-center">
               <p className="font-serif italic text-2xl">
-                &quot;Exceptional mastery in theoretical logic with minor gaps in applied
-                calculus.&quot;
+                {overallScore >= 70
+                  ? '&quot;Strong overall performance. Keep building on your strengths.&quot;'
+                  : overallScore > 0
+                  ? '&quot;Good progress. Focus on high-priority topics to improve further.&quot;'
+                  : '&quot;Upload past papers to generate your personalised analysis.&quot;'}
               </p>
             </div>
           </div>
 
-          {/* Topic Weightage Bar Chart (Medium) */}
+          {/* Topic Weightage Bar Chart */}
           <div className="col-span-12 lg:col-span-8 bg-surface-container p-10">
             <div className="flex justify-between items-center mb-10">
               <h3 className="text-xl font-bold uppercase tracking-widest">
-                Topic Weightage &amp; Performance
+                Subject Performance
               </h3>
               <div className="flex gap-4">
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 bg-primary" />
                   <span className="text-[10px] font-bold uppercase tracking-tighter">
-                    Current Score
+                    Performance %
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 bg-secondary-container" />
                   <span className="text-[10px] font-bold uppercase tracking-tighter">
-                    Global Avg
+                    Target (85%)
                   </span>
                 </div>
               </div>
             </div>
             <div className="space-y-8">
-              {analysis?.subjectProgress && analysis.subjectProgress.length > 0 ? (
-                analysis.subjectProgress.map((topic) => (
+              {subjectProgress.length > 0 ? (
+                subjectProgress.map((topic) => (
                   <div key={topic.subjectId}>
                     <div className="flex justify-between text-sm mb-2">
                       <span className="font-bold uppercase tracking-wider">{topic.name}</span>
@@ -139,7 +193,7 @@ export default function DesktopAnalysis() {
                     <div className="h-10 bg-surface-container-low relative">
                       <div
                         className="absolute inset-0 bg-secondary-container"
-                        style={{ width: `${Math.round(topic.progress * 0.85)}%` }}
+                        style={{ width: '85%' }}
                       />
                       <div
                         className="absolute inset-0 bg-primary"
@@ -154,14 +208,14 @@ export default function DesktopAnalysis() {
             </div>
           </div>
 
-          {/* Chronological Roadmap List */}
+          {/* Recommended Study Roadmap — driven by high-priority topics */}
           <div className="col-span-12 grid grid-cols-1 md:grid-cols-3 gap-8">
             <div className="md:col-span-3">
               <h2 className="text-4xl font-serif italic mt-8">Recommended Study Roadmap</h2>
               <div className="h-px bg-outline-variant w-full mt-4 opacity-20" />
             </div>
-            {analysis?.weaknesses && analysis.weaknesses.length > 0 ? (
-              analysis.weaknesses.map((weakness, index) => {
+            {weaknesses.length > 0 ? (
+              weaknesses.map((weakness, index) => {
                 const variant = index === 0 ? 'primary' : index === 1 ? 'secondary' : 'outline';
                 const priority = index === 0 ? 'HIGH' : index === 1 ? 'MED' : 'LOW';
                 return (
@@ -200,19 +254,19 @@ export default function DesktopAnalysis() {
               })
             ) : (
               <div className="col-span-3 text-center py-8">
-                <p className="text-on-surface/50">No roadmap items available yet.</p>
+                <p className="text-on-surface/50">No roadmap items available yet. Generate predictions to see focus areas.</p>
               </div>
             )}
           </div>
 
-          {/* Insight Section */}
+          {/* Cognitive Behavioral Insights — driven by high-mastery topics */}
           <div className="col-span-12 lg:col-span-7 bg-surface-container p-10">
             <h3 className="text-xl font-bold uppercase tracking-widest mb-6">
               Cognitive Behavioral Insights
             </h3>
             <div className="space-y-6">
-              {analysis?.strengths && analysis.strengths.length > 0 ? (
-                analysis.strengths.map((strength, index) => (
+              {strengths.length > 0 ? (
+                strengths.map((strength, index) => (
                   <div key={index} className="flex gap-4">
                     <span className="text-primary shrink-0">
                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -228,7 +282,7 @@ export default function DesktopAnalysis() {
                   </div>
                 ))
               ) : (
-                <p className="text-on-surface/50">No insights available yet.</p>
+                <p className="text-on-surface/50">No insights available yet. Complete mock tests to see your strengths.</p>
               )}
             </div>
           </div>

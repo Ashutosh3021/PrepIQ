@@ -6,9 +6,9 @@ import os
 from datetime import datetime, timezone
 import uuid
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import logging
 import mimetypes
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,9 @@ async def get_current_user(
 
 # Import SupabaseStorageService
 from ..services.supabase_storage import SupabaseStorageService
+
+# BUG-H09: module-level shared executor — created once, never leaked
+_upload_executor = ThreadPoolExecutor(max_workers=4)
 
 router = APIRouter(
     prefix="/papers",
@@ -72,11 +75,12 @@ async def upload_paper(
                 detail="File must be a valid PDF"
             )
     
-    # Check file size (10MB limit)
-    # Read file in chunks to avoid memory issues
+    # Check file size (10MB limit) while reading — stop accumulating on breach
+    # BUG-H08: raise 413 as soon as the running total exceeds the limit so we
+    # never buffer more than MAX_FILE_SIZE + 8KB in memory.
     file_content = b""
     total_size = 0
-    
+
     while True:
         chunk = await file.read(8192)  # Read 8KB at a time
         if not chunk:
@@ -84,13 +88,12 @@ async def upload_paper(
         total_size += len(chunk)
         if total_size > MAX_FILE_SIZE:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail="File size exceeds 10MB limit"
             )
         file_content += chunk
     
-    # Reset file pointer to beginning
-    await file.seek(0)
+    # file_content now holds the complete PDF bytes — no seek needed
     
     # Validate subject exists and belongs to user
     subject = db.query(models.Subject).filter(
@@ -149,7 +152,7 @@ async def upload_paper(
                 thread_db.close()
         
         result = await asyncio.get_event_loop().run_in_executor(
-            ThreadPoolExecutor(),
+            _upload_executor,
             process_with_new_session
         )
         

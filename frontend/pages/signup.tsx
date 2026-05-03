@@ -4,9 +4,12 @@ import Link from 'next/link';
 
 export default function SignupPage() {
   const router = useRouter();
+
+  // BUG-H14: form fields aligned with backend SignupRequest schema
+  const [fullName, setFullName] = useState('');
+  const [collegeName, setCollegeName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -15,9 +18,8 @@ export default function SignupPage() {
     setLoading(true);
     setError('');
 
-    // Basic validation
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
       setLoading(false);
       return;
     }
@@ -25,10 +27,16 @@ export default function SignupPage() {
     try {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/signup`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password, name }),
+        headers: { 'Content-Type': 'application/json' },
+        // BUG-H14: send full_name + college_name matching SignupRequest schema
+        body: JSON.stringify({
+          email,
+          password,
+          full_name: fullName,
+          college_name: collegeName,
+          program: 'BTech',       // sensible default; can be a form field later
+          year_of_study: '1st Year',
+        }),
       });
 
       const data = await res.json();
@@ -37,20 +45,30 @@ export default function SignupPage() {
         throw new Error(data.detail || 'Signup failed');
       }
 
-      // Store the token if provided
+      // BUG-H15: build user object from flat response fields (no nested data.user)
       if (data.access_token) {
-        localStorage.setItem('supabase.auth.token', JSON.stringify({
+        const session = {
           access_token: data.access_token,
-          refresh_token: data.refresh_token,
-          user: data.user
-        }));
+          refresh_token: data.refresh_token ?? null,
+          user: {
+            id: data.id,
+            email: data.email,
+            name: data.full_name ?? fullName,
+          },
+        };
+        // Use the key that AuthContext scans for
+        localStorage.setItem('prepiq-supabase-session', JSON.stringify(session));
+        // Redirect straight to dashboard — user is already authenticated
+        router.push('/desktop/dashboard');
+        return;
       }
 
-      // Show success message and redirect to login
-      alert('Registration successful! Please log in.');
+      // Email confirmation required (needs_confirmation = true, no token)
+      alert('Registration successful! Please check your email to confirm your account, then log in.');
       router.push('/login');
-    } catch (err: any) {
-      setError(err.message || 'Signup failed. Please try again.');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Signup failed. Please try again.';
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -71,17 +89,34 @@ export default function SignupPage() {
         )}
 
         <form onSubmit={handleSubmit}>
+          {/* BUG-H14: full_name field */}
           <div className="mb-4">
-            <label htmlFor="name" className="block text-gray-700 text-sm font-bold mb-2">
+            <label htmlFor="fullName" className="block text-gray-700 text-sm font-bold mb-2">
               Full Name
             </label>
             <input
-              id="name"
+              id="fullName"
               type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Enter your full name"
+              required
+            />
+          </div>
+
+          {/* BUG-H14: college_name field */}
+          <div className="mb-4">
+            <label htmlFor="collegeName" className="block text-gray-700 text-sm font-bold mb-2">
+              College / University
+            </label>
+            <input
+              id="collegeName"
+              type="text"
+              value={collegeName}
+              onChange={(e) => setCollegeName(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Enter your college or university name"
               required
             />
           </div>
@@ -111,9 +146,9 @@ export default function SignupPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Create a password (min 6 characters)"
+              placeholder="Min 8 characters, include uppercase, number &amp; symbol"
               required
-              minLength={6}
+              minLength={8}
             />
           </div>
 

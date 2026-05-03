@@ -2,7 +2,7 @@ import google.generativeai as genai
 from typing import Dict, Any, List
 import os
 from dotenv import load_dotenv
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from . import models
 import json
 import time
@@ -110,8 +110,10 @@ class Chatbot:
     
     def explain_concept(self, concept: str, difficulty_level: str, db: Session, subject_id: str) -> Dict[str, Any]:
         """Explain a complex concept in simple terms with examples from subject materials"""
-        # Get examples of this concept from subject papers
-        concept_questions = db.query(models.Question).join(
+        # BUG-H07: eager-load paper to avoid N+1 lazy-load queries
+        concept_questions = db.query(models.Question).options(
+            joinedload(models.Question.paper)
+        ).join(
             models.QuestionPaper
         ).filter(
             models.QuestionPaper.subject_id == subject_id,
@@ -143,6 +145,9 @@ class Chatbot:
         """
         
         try:
+            # BUG-H06: guard against Gemini model being None
+            if self.model is None:
+                raise ValueError("Gemini model is not configured (GEMINI_API_KEY missing)")
             response = self.model.generate_content(prompt)
             # Mock response for now
             return {

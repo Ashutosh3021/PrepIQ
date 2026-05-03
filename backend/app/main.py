@@ -119,13 +119,31 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Debug Mode: {settings.DEBUG}")
     
-    # Validate environment variables (non-blocking)
+    # Validate environment variables (non-blocking in dev, fatal in production)
     missing_vars = get_missing_environment_vars()
     if missing_vars:
-        logger.warning("[WARN] Missing optional environment variables:")
-        for var in missing_vars:
-            logger.warning(var)
-        logger.warning("[INFO] Application will run with limited functionality")
+        if settings.ENVIRONMENT == "production":
+            # BUG-L01: hard-fail in production — never start with missing secrets
+            logger.error("[FATAL] Missing required environment variables in production:")
+            for var in missing_vars:
+                logger.error(var)
+            raise RuntimeError(
+                "Cannot start in production with missing environment variables. "
+                "Set all required vars in your deployment platform dashboard."
+            )
+        else:
+            logger.warning("[WARN] Missing optional environment variables:")
+            for var in missing_vars:
+                logger.warning(var)
+            logger.warning("[INFO] Application will run with limited functionality")
+
+    # BUG-L01: also refuse to start in production with the default insecure key
+    _insecure_default = "default-insecure-change-me"
+    if settings.ENVIRONMENT == "production" and settings.SECRET_KEY == _insecure_default:
+        raise RuntimeError(
+            "Cannot start in production with the default insecure SECRET_KEY. "
+            "Set JWT_SECRET to a strong random value (openssl rand -base64 32)."
+        )
     
     # Verify database connection
     try:
@@ -135,6 +153,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[ERROR] Database connection failed: {e}")
         raise RuntimeError("Cannot start without database connection")
+
+    # BUG-H10: pre-warm PrepIQService during startup so the first request
+    # does not hang for 10-30 seconds while ML models load.
+    try:
+        from app.dependencies import get_prepiq_service
+        get_prepiq_service()
+        logger.info("[OK] PrepIQService initialized")
+    except Exception as e:
+        logger.warning(f"[WARN] PrepIQService pre-warm failed (non-fatal): {e}")
     
     yield
     
@@ -209,32 +236,35 @@ def create_app() -> FastAPI:
     # ============================================
     # EXCEPTION HANDLERS
     # ============================================
-    
+
     @app.exception_handler(ConnectionResetError)
     async def connection_reset_handler(request: Request, exc: ConnectionResetError):
         """Handle ConnectionResetError to prevent log spam on Windows."""
-        # Log once at debug level but don't spam logs
         logger.debug(f"Connection reset by client: {request.url}")
         return JSONResponse(
             status_code=499,  # Client Closed Request
             content={"detail": "Connection reset by client"}
         )
-    
+
+    # BUG-L06: HTTPException handler MUST be registered before the generic
+    # Exception handler. FastAPI checks handlers in registration order;
+    # since HTTPException is a subclass of Exception, the generic handler
+    # would otherwise swallow all HTTP errors and return 500.
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        """Handle HTTP exceptions with their correct status codes."""
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail}
+        )
+
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        """Handle all unhandled exceptions."""
+        """Handle all unhandled non-HTTP exceptions."""
         logger.error(f"Unhandled exception: {exc}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error"}
-        )
-    
-    @app.exception_handler(HTTPException)
-    async def http_exception_handler(request: Request, exc: HTTPException):
-        """Handle HTTP exceptions."""
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"detail": exc.detail}
         )
     
     # ============================================

@@ -45,11 +45,20 @@ async def logout():
 @router.get("/profile")
 async def get_profile(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db),  # C-14: always pass db so lazy user creation works
+    db: Session = Depends(get_db),
 ):
     """Get user profile using Supabase token"""
-    from datetime import datetime
+    from ..models import User as UserModel
     user = await get_current_user_from_token(f"Bearer {credentials.credentials}", db)
+
+    # BUG-L02: return the real created_at from the DB record, not datetime.now()
+    db_user = db.query(UserModel).filter(UserModel.id == user["id"]).first()
+    created_at = (
+        db_user.created_at.isoformat()
+        if db_user and db_user.created_at
+        else None
+    )
+
     return {
         "id": user["id"],
         "email": user["email"],
@@ -58,7 +67,7 @@ async def get_profile(
         "program": user.get("program", ""),
         "year_of_study": user.get("year_of_study", 1),
         "wizard_completed": user.get("wizard_completed", False),
-        "created_at": datetime.now().isoformat(),
+        "created_at": created_at,
     }
 
 

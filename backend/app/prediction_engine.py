@@ -145,6 +145,10 @@ class PredictionEngine:
         
         # Try external API approach first
         try:
+            # BUG-H04: guard against external_api being None
+            if external_api is None:
+                raise Exception("External API not available")
+
             # Use text summarization to condense study material
             summary_response = external_api.text_summarization(study_material[:2000])  # Limit input size
             summary = summary_response["output"] if summary_response["success"] else study_material[:500]
@@ -529,6 +533,9 @@ class PredictionEngine:
         """
         
         try:
+            # BUG-H05: guard against Gemini model being None
+            if self.model is None:
+                raise ValueError("Gemini model is not configured (GEMINI_API_KEY missing)")
             response = self.model.generate_content(prompt)
             result = json.loads(response.text) if response.text.strip() else {}
             

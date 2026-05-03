@@ -1,24 +1,84 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import Head from 'next/head';
 import { DesktopLayout } from '@/components/desktop';
+import { Skeleton } from '@/components/common';
+import { useSubjects } from '@/lib/hooks/useSubjects';
+import { getAccessToken } from '@/lib/services/base.service';
 
-const recentlyCatalogued = [
-  { name: 'Lecture_04_Fluid.pdf', date: '12 Mar', subject: 'Thermodynamics' },
-  { name: 'Modernism_Notes.docx', date: '10 Mar', subject: 'Literature' },
-  { name: 'Intro_Macro_V2.pdf', date: '08 Mar', subject: 'Economics' },
-  { name: 'Psych_Labs.pdf', date: '05 Mar', subject: 'Psychology' },
-];
+// ── Types ────────────────────────────────────────────────────────────────────
 
-const subjectOptions = [
-  'Select a Subject...',
-  'Advanced Thermodynamics',
-  'Modernist Literature',
-  'Cognitive Psychology',
-  'Macroeconomics 101',
-];
+interface UploadResult {
+  paper_id: string;
+  status: string;
+  message: string;
+  questions_count: number;
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
 
 export default function DesktopUpload() {
-  const [selectedSubject, setSelectedSubject] = useState('');
+  const { subjects, isLoading: subjectsLoading } = useSubjects();
+
+  const [selectedSubjectId, setSelectedSubjectId] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState<UploadResult | null>(null);
+  const [error, setError] = useState('');
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setSelectedFile(file);
+    setResult(null);
+    setError('');
+  };
+
+  const handleSelectClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile) { setError('Please select a PDF file first.'); return; }
+    if (!selectedSubjectId) { setError('Please select a subject first.'); return; }
+
+    const token = getAccessToken();
+    if (!token) { setError('You must be logged in to upload files.'); return; }
+
+    setUploading(true);
+    setError('');
+    setResult(null);
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? '';
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      formData.append('subject_id', selectedSubjectId);
+
+      const res = await fetch(`${apiUrl}/papers/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail ?? `Upload failed (${res.status})`);
+      }
+
+      setResult(data as UploadResult);
+      setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Upload failed. Please try again.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <>
@@ -56,7 +116,18 @@ export default function DesktopUpload() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
           {/* Upload Section */}
           <section className="lg:col-span-8 flex flex-col gap-8">
-            <div className="bg-surface-container-highest p-12 flex flex-col border border-dashed border-primary/30 relative">
+
+            {/* Drop zone */}
+            <div
+              className="bg-surface-container-highest p-12 flex flex-col border border-dashed border-primary/30 relative cursor-pointer"
+              onClick={handleSelectClick}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const file = e.dataTransfer.files?.[0];
+                if (file) { setSelectedFile(file); setResult(null); setError(''); }
+              }}
+            >
               <div className="absolute inset-0 border-[3px] border-dashed border-primary/20 pointer-events-none" />
               <div className="flex flex-col items-center justify-center py-20 text-center relative z-10">
                 <div className="w-16 h-16 bg-primary text-white flex items-center justify-center mb-6">
@@ -66,52 +137,110 @@ export default function DesktopUpload() {
                     <line x1="12" y1="3" x2="12" y2="15" />
                   </svg>
                 </div>
-                <h2 className="text-2xl font-semibold mb-2">
-                  Drop your lecture notes or textbooks
-                </h2>
-                <p className="text-on-surface/60 text-sm mb-8 font-medium">
-                  PDF, DOCX, or Image formats supported (Up to 50MB)
-                </p>
-                <button className="bg-primary text-white px-10 py-4 font-bold uppercase tracking-widest text-xs hover:bg-primary/90 transition-colors">
-                  Select Files from Device
-                </button>
+                {selectedFile ? (
+                  <>
+                    <p className="text-lg font-semibold text-primary mb-1">{selectedFile.name}</p>
+                    <p className="text-sm text-on-surface/60">
+                      {(selectedFile.size / 1024 / 1024).toFixed(2)} MB · Click to change
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="text-2xl font-semibold mb-2">
+                      Drop your question paper here
+                    </h2>
+                    <p className="text-on-surface/60 text-sm mb-8 font-medium">
+                      PDF only · Max 10 MB
+                    </p>
+                    <button
+                      type="button"
+                      className="bg-primary text-white px-10 py-4 font-bold uppercase tracking-widest text-xs hover:bg-primary/90 transition-colors"
+                      onClick={(e) => { e.stopPropagation(); handleSelectClick(); }}
+                    >
+                      Select File from Device
+                    </button>
+                  </>
+                )}
               </div>
+              {/* Hidden real file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,application/pdf"
+                className="hidden"
+                onChange={handleFileChange}
+              />
             </div>
 
+            {/* Subject selector + upload button */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              {/* Form Controls */}
               <div className="flex flex-col gap-4">
                 <label className="text-xs font-bold uppercase tracking-widest text-on-surface/60">
                   Assign to Subject
                 </label>
-                <div className="relative group">
-                  <select
-                    className="w-full bg-surface-container-low border-b-2 border-primary/20 focus:border-primary appearance-none py-4 px-4 text-on-surface text-sm font-medium focus:ring-0 cursor-pointer"
-                    value={selectedSubject}
-                    onChange={(e) => setSelectedSubject(e.target.value)}
-                  >
-                    {subjectOptions.map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-primary">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
-                  </span>
-                </div>
+                {subjectsLoading ? (
+                  <Skeleton className="h-12" />
+                ) : (
+                  <div className="relative group">
+                    <select
+                      className="w-full bg-surface-container-low border-b-2 border-primary/20 focus:border-primary appearance-none py-4 px-4 text-on-surface text-sm font-medium focus:ring-0 cursor-pointer"
+                      value={selectedSubjectId}
+                      onChange={(e) => setSelectedSubjectId(e.target.value)}
+                    >
+                      <option value="">Select a Subject…</option>
+                      {subjects.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-primary">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="flex flex-col justify-end">
-                <button className="bg-primary text-white w-full py-4 font-bold uppercase tracking-widest text-xs hover:bg-primary/90 transition-colors flex items-center justify-center gap-3">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2v-4M9 21H5a2 2 0 0 1-2-2v-4" />
-                  </svg>
-                  Upload &amp; Analyze
+                <button
+                  type="button"
+                  disabled={uploading || !selectedFile || !selectedSubjectId}
+                  onClick={handleUpload}
+                  className="bg-primary text-white w-full py-4 font-bold uppercase tracking-widest text-xs hover:bg-primary/90 transition-colors flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {uploading ? (
+                    <>
+                      <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                      </svg>
+                      Processing…
+                    </>
+                  ) : (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2v-4M9 21H5a2 2 0 0 1-2-2v-4" />
+                      </svg>
+                      Upload &amp; Analyze
+                    </>
+                  )}
                 </button>
               </div>
             </div>
+
+            {/* Error / success feedback */}
+            {error && (
+              <div className="p-4 bg-red-50 border border-red-300 text-red-700 text-sm">
+                {error}
+              </div>
+            )}
+            {result && (
+              <div className="p-4 bg-green-50 border border-green-300 text-green-800 text-sm">
+                <p className="font-bold mb-1">Upload successful!</p>
+                <p>{result.message}</p>
+                <p className="mt-1 text-xs opacity-70">
+                  {result.questions_count} question{result.questions_count !== 1 ? 's' : ''} extracted · Paper ID: {result.paper_id}
+                </p>
+              </div>
+            )}
           </section>
 
           {/* Topic Extraction Info */}
@@ -129,42 +258,19 @@ export default function DesktopUpload() {
                 </h3>
               </div>
               <div className="flex flex-col gap-8">
-                <div className="flex flex-start gap-4">
-                  <span className="text-primary font-serif italic text-3xl shrink-0">01.</span>
-                  <div>
-                    <h4 className="font-bold text-sm mb-1 uppercase tracking-wider">
-                      Semantic Scanning
-                    </h4>
-                    <p className="text-sm text-on-surface/70 leading-relaxed">
-                      Our AI identifies key definitions, formulas, and critical concepts within the
-                      text hierarchy.
-                    </p>
+                {[
+                  { n: '01.', title: 'Semantic Scanning', desc: 'Our AI identifies key definitions, formulas, and critical concepts within the text hierarchy.' },
+                  { n: '02.', title: 'Automated Tagging', desc: 'Materials are automatically cross-referenced with your existing syllabus and exam board requirements.' },
+                  { n: '03.', title: 'Prediction Generation', desc: "Questions are immediately added to your 'Predictions' pool based on the new material's complexity." },
+                ].map(({ n, title, desc }) => (
+                  <div key={n} className="flex flex-start gap-4">
+                    <span className="text-primary font-serif italic text-3xl shrink-0">{n}</span>
+                    <div>
+                      <h4 className="font-bold text-sm mb-1 uppercase tracking-wider">{title}</h4>
+                      <p className="text-sm text-on-surface/70 leading-relaxed">{desc}</p>
+                    </div>
                   </div>
-                </div>
-                <div className="flex flex-start gap-4">
-                  <span className="text-primary font-serif italic text-3xl shrink-0">02.</span>
-                  <div>
-                    <h4 className="font-bold text-sm mb-1 uppercase tracking-wider">
-                      Automated Tagging
-                    </h4>
-                    <p className="text-sm text-on-surface/70 leading-relaxed">
-                      Materials are automatically cross-referenced with your existing syllabus and
-                      exam board requirements.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex flex-start gap-4">
-                  <span className="text-primary font-serif italic text-3xl shrink-0">03.</span>
-                  <div>
-                    <h4 className="font-bold text-sm mb-1 uppercase tracking-wider">
-                      Prediction Generation
-                    </h4>
-                    <p className="text-sm text-on-surface/70 leading-relaxed">
-                      Questions are immediately added to your &apos;Predictions&apos; pool based on
-                      the new material&apos;s complexity.
-                    </p>
-                  </div>
-                </div>
+                ))}
               </div>
               <div className="mt-auto pt-12">
                 <div className="bg-primary/5 p-6 border-l-4 border-primary">
@@ -178,34 +284,6 @@ export default function DesktopUpload() {
               </div>
             </div>
           </aside>
-        </div>
-
-        {/* Secondary Info Row */}
-        <div className="mt-20 border-t border-primary/10 pt-12">
-          <h3 className="font-serif italic text-2xl mb-8">Recently Catalogued</h3>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            {recentlyCatalogued.map((file) => (
-              <div key={file.name} className="bg-surface-container p-6 flex flex-col gap-4">
-                <div className="flex justify-between items-start">
-                  <span className="text-on-surface/60">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                      <polyline points="14 2 14 8 20 8" />
-                    </svg>
-                  </span>
-                  <span className="text-[10px] font-bold bg-primary/10 text-primary px-2 py-1 uppercase tracking-tighter">
-                    Analyzed
-                  </span>
-                </div>
-                <div>
-                  <p className="font-bold text-xs uppercase tracking-wider mb-1">{file.name}</p>
-                  <p className="text-[11px] text-on-surface/60">
-                    {file.date} &bull; {file.subject}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       </DesktopLayout>
     </>

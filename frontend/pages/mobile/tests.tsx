@@ -64,7 +64,7 @@ function TestCard({ id, category, title, time, questions, level, levelColor, com
 }
 
 export default function MobileTests() {
-  const { tests, isLoading, error, startTest, submitTest } = useTests();
+  const { tests, isLoading, error, submitTest } = useTests();
 
   if (isLoading) {
     return (
@@ -126,26 +126,19 @@ export default function MobileTests() {
                 <p className="text-on-surface-variant/50 text-sm">No tests available yet.</p>
               </div>
             ) : (
+              // BUG-H11 (mobile): map BackendTest fields correctly
               tests.map((test) => {
-                const isCompleted = test.status === 'completed';
-                const levelColor =
-                  test.difficulty === 'hard'
-                    ? 'text-error'
-                    : test.difficulty === 'medium'
-                      ? 'text-primary'
-                      : 'text-green-700';
                 return (
                   <TestCard
-                    key={test.id}
-                    id={test.id}
-                    category={test.subject}
-                    title={test.title}
-                    time={`${test.duration} MIN`}
-                    questions={`${test.questionCount} Qs`}
-                    level={test.difficulty.toUpperCase()}
-                    levelColor={levelColor}
-                    completed={isCompleted}
-                    score={test.score ? `${test.score}%` : undefined}
+                    key={test.test_id}
+                    id={test.test_id}
+                    category="Mock Test"
+                    title={`Mock Test · ${test.total_questions} Questions`}
+                    time={`${test.time_limit_minutes ?? '—'} MIN`}
+                    questions={`${test.total_questions} Qs`}
+                    level={`${test.total_marks ?? '—'} Marks`}
+                    levelColor="text-primary"
+                    completed={false}
                   />
                 );
               })

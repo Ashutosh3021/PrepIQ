@@ -381,30 +381,27 @@ class PrepIQService:
             "high_impact_topics": high_impact_topics
         }
     
-    def _calculate_prediction_accuracy(self, predictions: List[Dict[str, Any]]) -> str:
-        """Calculate an estimated accuracy score for predictions (returned as string for DB column)"""
+    def _calculate_prediction_accuracy(self, predictions: List[Dict[str, Any]]) -> float:
+        """Calculate an estimated accuracy score for predictions (0.0–1.0 float for Numeric DB column)"""
         if not predictions:
-            return "0.0"
-        
-        # Calculate average confidence score
+            return 0.0
+
         avg_confidence = sum([pred.get("confidence_score", 0) for pred in predictions]) / len(predictions)
-        
-        # Calculate consistency score based on similar predictions
         unique_predictions = len(set(pred.get("text", "")[:50] for pred in predictions))
         consistency = unique_predictions / len(predictions)
-        
-        # Weighted combination of confidence and consistency
         accuracy_score = (avg_confidence * 0.7) + (consistency * 0.3)
-        
-        # Ensure score is between 0 and 1, return as string truncated to 5 chars
-        clamped = min(max(accuracy_score, 0.0), 1.0)
-        return str(round(clamped, 2))
+        # BUG-M06: return float, not string — column is now Numeric(5,2)
+        return round(min(max(accuracy_score, 0.0), 1.0), 2)
 
     
     def get_trend_analysis(self, db: Session, subject_id: str) -> Dict[str, Any]:
         """Get comprehensive trend analysis for a subject using enhanced ML analysis"""
-        # Get all questions for the subject
-        questions = db.query(models.Question).join(
+        from sqlalchemy.orm import joinedload
+
+        # BUG-M11: eager-load paper to avoid N+1 lazy-load queries (one per question)
+        questions = db.query(models.Question).options(
+            joinedload(models.Question.paper)
+        ).join(
             models.QuestionPaper
         ).filter(
             models.QuestionPaper.subject_id == subject_id
@@ -704,7 +701,13 @@ class PrepIQService:
         # Update fields if provided
         if days_completed is not None:
             study_plan.days_completed = days_completed
-            study_plan.completion_percentage = str((days_completed / study_plan.total_days) * 100)
+            # BUG-H17 + BUG-M05: guard zero division; store as float not string
+            if study_plan.total_days and study_plan.total_days > 0:
+                study_plan.completion_percentage = round(
+                    (days_completed / study_plan.total_days) * 100, 2
+                )
+            else:
+                study_plan.completion_percentage = 0.0
             study_plan.last_update_date = datetime.now()
         
         if on_track is not None:
@@ -827,13 +830,15 @@ class PrepIQService:
                     "marks": q.marks,
                     "unit": q.unit_name
                 })
-            
-            # Analyze patterns to find similar questions
-            patterns = self.enhanced_question_analyzer.analyze_patterns(questions_data)
-            
-            # Extract similar questions from pattern analysis
-            if "similar_questions" in patterns:
-                similar_questions = patterns["similar_questions"][:10]  # Limit to top 10
+
+            # BUG-H03: guard against EnhancedQuestionAnalyzer being None
+            if self.enhanced_question_analyzer:
+                try:
+                    patterns = self.enhanced_question_analyzer.analyze_patterns(questions_data)
+                    if "similar_questions" in patterns:
+                        similar_questions = patterns["similar_questions"][:10]
+                except Exception as e:
+                    logger.warning(f"EnhancedQuestionAnalyzer failed in repetition analysis: {e}")
         
         # Calculate repetition cycle - OPTIMIZED (PERF-02: Use join instead of O(n) queries)
         # Get exam years in a single query with join

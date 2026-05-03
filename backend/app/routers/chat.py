@@ -222,9 +222,9 @@ async def get_chat_history(
     
     return history_list
 
-@router.delete("/clear")
+@router.delete("/history/{subject_id}")
 async def clear_chat_history(
-    subject_id: str,
+    subject_id: str,  # BUG-M10: path param, not query param
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):

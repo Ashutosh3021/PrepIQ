@@ -1,5 +1,4 @@
 import os
-import uuid
 from datetime import datetime, timezone
 from typing import List
 
@@ -76,29 +75,9 @@ async def get_important_questions(
                 "last_asked": q[4].strftime("%Y-%m-%d") if q[4] else "2025-01-01",
             })
 
-        # M-22: only return placeholder data in non-production environments
-        if not all_questions and os.getenv("ENVIRONMENT", "development").lower() != "production":
-            return [
-                {
-                    "id": str(uuid.uuid4()),
-                    "subject": "Linear Algebra",
-                    "topic": "Eigenvalues and Eigenvectors",
-                    "question": "Find the eigenvalues of the matrix A = [[3, 1], [0, 2]]",
-                    "difficulty": "medium",
-                    "importance": "High",
-                    "last_asked": "2025-12-15",
-                },
-                {
-                    "id": str(uuid.uuid4()),
-                    "subject": "Calculus",
-                    "topic": "Definite Integrals",
-                    "question": "Evaluate ∫₀¹ x² dx using fundamental theorem",
-                    "difficulty": "easy",
-                    "importance": "Very High",
-                    "last_asked": "2025-12-20",
-                },
-            ]
-
+        # BUG-L05: always return empty array when no real data exists.
+        # Fake placeholder data was removed — it masked the real empty state
+        # and caused confusion during development.
         return all_questions
 
     except Exception as e:

@@ -231,15 +231,15 @@ class PDFParser:
             import string
             
             # Download required NLTK data if not present
-            try:
-                nltk.data.find('tokenizers/punkt')
-            except LookupError:
-                nltk.download('punkt', quiet=True)
-            
-            try:
-                nltk.data.find('corpora/stopwords')
-            except LookupError:
-                nltk.download('stopwords', quiet=True)
+            for resource, path in [
+                ('punkt_tab', 'tokenizers/punkt_tab'),
+                ('punkt', 'tokenizers/punkt'),
+                ('stopwords', 'corpora/stopwords'),
+            ]:
+                try:
+                    nltk.data.find(path)
+                except LookupError:
+                    nltk.download(resource, quiet=True)
             
             stop_words = set(stopwords.words('english'))
             word_tokens = word_tokenize(question_text)
@@ -253,9 +253,8 @@ class PDFParser:
             
             # Return top 5 keywords
             return list(set(keywords))[:5]
-        except ImportError:
-            # Fallback if NLTK is not available
-            # Extract basic keywords based on capitalization and length
+        except (ImportError, LookupError, Exception):
+            # Fallback if NLTK is not available or data is missing
             words = question_text.split()
             keywords = [word.strip('.,!?()[]{}"\'') for word in words if len(word) > 3]
             return list(set(keywords))[:5]

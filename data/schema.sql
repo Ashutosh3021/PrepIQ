@@ -16,9 +16,18 @@ CREATE TABLE users (
     college_name VARCHAR(255),
     program VARCHAR(100),
     year_of_study INTEGER,
-    theme_preference VARCHAR(20) DEFAULT 'light',
+    theme_preference VARCHAR(20) DEFAULT 'system',
     language VARCHAR(10) DEFAULT 'en',
     exam_date TIMESTAMP WITH TIME ZONE,
+    -- Wizard completion flag (added migration 004)
+    wizard_completed     BOOLEAN     NOT NULL DEFAULT FALSE,
+    -- Wizard data columns (added migration 004)
+    exam_name            VARCHAR(255),
+    days_until_exam      INTEGER,
+    focus_subjects       JSONB,
+    study_hours_per_day  INTEGER,
+    target_score         INTEGER,
+    preparation_level    VARCHAR(50),
     email_verified BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -30,6 +39,7 @@ CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_college_name ON users(college_name);
 CREATE INDEX idx_users_program ON users(program);
 CREATE INDEX idx_users_year_of_study ON users(year_of_study);
+CREATE INDEX idx_users_wizard_completed ON users(wizard_completed);
 
 -- 2. Subjects table
 CREATE TABLE subjects (
@@ -69,6 +79,7 @@ CREATE TABLE question_papers (
     total_marks INTEGER,
     duration_minutes INTEGER,
     raw_text TEXT,
+    metadata_json TEXT,                          -- added migration 004 (BUG-C08)
     extraction_confidence DECIMAL(3,2),
     extraction_method VARCHAR(50),
     processing_status VARCHAR(20) DEFAULT 'pending',
@@ -101,6 +112,7 @@ CREATE TABLE questions (
     subparts_count INTEGER DEFAULT 0,
     is_repeated BOOLEAN DEFAULT FALSE,
     similar_question_ids UUID[],
+    text_length INTEGER,                         -- added migration 004 (BUG-C08)
     embedding vector(768), -- Assuming 768-dimensional embeddings for similarity search
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -128,8 +140,10 @@ CREATE TABLE predictions (
     topic_coverage_percentage DECIMAL(5,2),
     analysis_summary TEXT,
     key_insights_json JSONB,
+    ml_analysis_json TEXT,                       -- added migration 004 (BUG-H01)
     actual_exam_questions_json JSONB,
     accuracy_score DECIMAL(5,2),
+    prediction_accuracy_score VARCHAR(5),        -- added migration 004 (BUG-H01)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

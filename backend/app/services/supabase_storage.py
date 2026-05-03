@@ -1,139 +1,109 @@
 from supabase import create_client, Client
+from fastapi import HTTPException
 import os
-from typing import Optional
+import logging
 import mimetypes
-from io import BytesIO
 
-# Supabase Configuration
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+logger = logging.getLogger(__name__)
 
-if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables must be set")
+# Read env vars at module level (cheap — just os.getenv, no network call)
+_SUPABASE_URL = os.getenv("SUPABASE_URL")
+_SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
-# Initialize Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+# Lazy singleton — created on first actual use, not at import time
+_supabase_client: Client | None = None
+
+
+def _get_client() -> Client:
+    """
+    Return the Supabase storage client, creating it on first call.
+    Raises HTTP 503 if credentials are missing so the error is surfaced
+    cleanly to the caller rather than crashing the process at import time.
+    """
+    global _supabase_client
+    if _supabase_client is None:
+        if not _SUPABASE_URL or not _SUPABASE_SERVICE_KEY:
+            raise HTTPException(
+                status_code=503,
+                detail="Supabase storage is not configured on the server (missing SUPABASE_URL or SUPABASE_SERVICE_KEY)"
+            )
+        _supabase_client = create_client(_SUPABASE_URL, _SUPABASE_SERVICE_KEY)
+    return _supabase_client
+
 
 class SupabaseStorageService:
-    """
-    Service class to handle file uploads and downloads using Supabase Storage
-    """
-    
+    """Service class to handle file uploads and downloads using Supabase Storage."""
+
     @staticmethod
     def upload_file(file_content: bytes, file_name: str, bucket_name: str = "question-papers") -> str:
         """
-        Upload a file to Supabase Storage
-        
-        Args:
-            file_content: The binary content of the file to upload
-            file_name: The name to give the file in storage
-            bucket_name: The storage bucket name (defaults to "question-papers")
-        
+        Upload a file to Supabase Storage.
+
         Returns:
-            The public URL of the uploaded file
+            The public URL of the uploaded file.
         """
+        client = _get_client()
         try:
-            # Create the bucket if it doesn't exist (or ensure it exists)
-            # Note: In practice, you'd create buckets through the Supabase dashboard
-            response = supabase.storage.from_(bucket_name).upload(
-                file_name, 
+            client.storage.from_(bucket_name).upload(
+                file_name,
                 file_content,
-                file_options={"content-type": mimetypes.guess_type(file_name)[0] or "application/octet-stream"}
+                file_options={
+                    "content-type": mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+                },
             )
-            
-            # Get the public URL
-            public_url = supabase.storage.from_(bucket_name).get_public_url(file_name)
-            return public_url
-            
+            return client.storage.from_(bucket_name).get_public_url(file_name)
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"Error uploading file to Supabase: {str(e)}")
-            raise e
-    
+            logger.error(f"Error uploading file to Supabase: {e}")
+            raise
+
     @staticmethod
     def download_file(file_path: str, bucket_name: str = "question-papers") -> bytes:
-        """
-        Download a file from Supabase Storage
-        
-        Args:
-            file_path: The path of the file in storage
-            bucket_name: The storage bucket name (defaults to "question-papers")
-        
-        Returns:
-            The binary content of the downloaded file
-        """
+        """Download a file from Supabase Storage."""
+        client = _get_client()
         try:
-            response = supabase.storage.from_(bucket_name).download(file_path)
-            return response
-        
+            return client.storage.from_(bucket_name).download(file_path)
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"Error downloading file from Supabase: {str(e)}")
-            raise e
-    
+            logger.error(f"Error downloading file from Supabase: {e}")
+            raise
+
     @staticmethod
     def delete_file(file_path: str, bucket_name: str = "question-papers") -> bool:
-        """
-        Delete a file from Supabase Storage
-        
-        Args:
-            file_path: The path of the file in storage
-            bucket_name: The storage bucket name (defaults to "question-papers")
-        
-        Returns:
-            True if deletion was successful, False otherwise
-        """
+        """Delete a file from Supabase Storage. Returns True on success."""
+        client = _get_client()
         try:
-            response = supabase.storage.from_(bucket_name).remove([file_path])
+            client.storage.from_(bucket_name).remove([file_path])
             return True
-        
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"Error deleting file from Supabase: {str(e)}")
+            logger.error(f"Error deleting file from Supabase: {e}")
             return False
-    
+
     @staticmethod
     def list_files(bucket_name: str = "question-papers", prefix: str = "") -> list:
-        """
-        List files in a Supabase Storage bucket
-        
-        Args:
-            bucket_name: The storage bucket name (defaults to "question-papers")
-            prefix: Optional prefix to filter files
-        
-        Returns:
-            List of file objects with metadata
-        """
+        """List files in a Supabase Storage bucket."""
+        client = _get_client()
         try:
-            response = supabase.storage.from_(bucket_name).list(prefix)
-            return response
-        
+            return client.storage.from_(bucket_name).list(prefix)
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"Error listing files from Supabase: {str(e)}")
+            logger.error(f"Error listing files from Supabase: {e}")
             return []
 
     @staticmethod
-    def get_file_info(file_path: str, bucket_name: str = "question-papers"):
-        """
-        Get metadata information about a file in Supabase Storage
-        
-        Args:
-            file_path: The path of the file in storage
-            bucket_name: The storage bucket name (defaults to "question-papers")
-        
-        Returns:
-            File metadata object
-        """
+    def get_file_info(file_path: str, bucket_name: str = "question-papers") -> dict:
+        """Get metadata information about a file in Supabase Storage."""
+        client = _get_client()
         try:
-            # Unfortunately, Supabase Storage doesn't have a direct method to get file info
-            # We'll return the public URL which confirms the file exists
-            public_url = supabase.storage.from_(bucket_name).get_public_url(file_path)
-            return {
-                "exists": True,
-                "public_url": public_url,
-                "file_name": file_path
-            }
-        
+            public_url = client.storage.from_(bucket_name).get_public_url(file_path)
+            return {"exists": True, "public_url": public_url, "file_name": file_path}
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"Error getting file info from Supabase: {str(e)}")
-            return {
-                "exists": False,
-                "error": str(e)
-            }
+            logger.error(f"Error getting file info from Supabase: {e}")
+            return {"exists": False, "error": str(e)}

@@ -3,7 +3,7 @@ PrepIQ Database Models
 SQLAlchemy models for PostgreSQL with Supabase
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, LargeBinary, Index
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, LargeBinary, Index, Numeric
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -136,7 +136,7 @@ class QuestionPaper(Base):
     # Processing
     raw_text = Column(Text, nullable=True)  # Full extracted text
     metadata_json = Column(Text, nullable=True)  # PDF metadata as JSON string
-    extraction_confidence = Column(String(5), nullable=True)  # 0-1
+    extraction_confidence = Column(Numeric(3, 2), nullable=True)  # 0.00–1.00
     extraction_method = Column(String(50), nullable=True)  # pdfplumber, tesseract
 
     # Status
@@ -178,7 +178,7 @@ class Question(Base):
     unit_name = Column(String(255), nullable=True)
     topics_json = Column(JSON, nullable=True)  # ["Binary Search", "Complexity Analysis"]
     question_type = Column(String(50), nullable=True)  # mcq, short_answer, numerical, essay
-    difficulty = Column(String(20), nullable=True, name='difficulty_level')  # easy, medium, hard
+    difficulty = Column(String(20), nullable=True)  # easy, medium, hard  (DB column: difficulty)
 
     # Metadata
     section_name = Column(String(100), nullable=True)  # Part A, Part B, Section I
@@ -199,7 +199,7 @@ class Question(Base):
     # Indexes
     __table_args__ = (
         Index('idx_questions_paper_id', 'paper_id'),
-        Index('idx_questions_difficulty', 'difficulty_level'),
+        Index('idx_questions_difficulty', 'difficulty'),
         Index('idx_questions_unit', 'unit_id'),
     )
 
@@ -235,8 +235,8 @@ class Prediction(Base):
 
     # Accuracy Tracking (filled after exam)
     actual_exam_questions_json = Column(Text, nullable=True)
-    accuracy_score = Column(String(5), nullable=True)  # % of predictions that appeared
-    prediction_accuracy_score = Column(String(5), nullable=True)  # Estimated accuracy of predictions
+    accuracy_score = Column(Numeric(5, 2), nullable=True)          # % of predictions that appeared
+    prediction_accuracy_score = Column(Numeric(5, 2), nullable=True)  # Estimated accuracy of predictions
 
     # Timestamps
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
@@ -274,7 +274,8 @@ class ChatHistory(Base):
 
     # Metadata
     response_time_seconds = Column(String(5), nullable=True)
-    user_feedback = Column(Integer, nullable=True)  # -1: unhelpful, 0: neutral, 1: helpful
+    # BUG-M04: align with schema VARCHAR(20) — 'positive', 'negative', 'neutral'
+    user_feedback = Column(String(20), nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
@@ -308,7 +309,7 @@ class MockTest(Base):
     difficulty_level = Column(String(50), nullable=True)  # easy, medium, hard
 
     # Question Selection
-    questions_json = Column(JSON, nullable=True)  # Array of question objects with options
+    questions_json = Column(JSON, nullable=False)  # BUG-M02: NOT NULL matches schema constraint
 
     # Test Execution
     start_time = Column(DateTime, nullable=True)
@@ -317,8 +318,8 @@ class MockTest(Base):
 
     # Results
     user_answers_json = Column(JSON, nullable=True)  # { "q1": "A", "q2": "C" }
-    score = Column(Integer, nullable=True)
-    percentage = Column(String(5), nullable=True)
+    score = Column(Numeric(5, 2), nullable=True)
+    percentage = Column(Numeric(5, 2), nullable=True)
 
     # Analysis
     correct_count = Column(Integer, nullable=True)
@@ -364,7 +365,7 @@ class StudyPlan(Base):
 
     # Progress Tracking
     days_completed = Column(Integer, default=0, nullable=False)
-    completion_percentage = Column(String(5), default="0", nullable=False)
+    completion_percentage = Column(Numeric(5, 2), default=0.0, nullable=False)
 
     # Adherence
     on_track = Column(Boolean, default=True, nullable=False)

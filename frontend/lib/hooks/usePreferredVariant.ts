@@ -1,19 +1,39 @@
-import useSWR, { mutate } from 'swr';
+import { useState, useCallback } from 'react';
 import { userService } from '../services/user.service';
-import type { UserSettings } from '../types/user.types';
 
+/**
+ * BUG-M14: /user/settings does not exist on the backend.
+ * Settings are now backed by localStorage via userService.
+ * Using local state + direct service calls instead of SWR
+ * (no network round-trip needed).
+ */
 export function usePreferredVariant() {
-  const { data, error, isLoading } = useSWR<UserSettings>('user/settings', userService.getSettings);
+  const [preferredVariant, setVariantState] = useState<'desktop' | 'mobile'>(() => {
+    // Initialise synchronously from localStorage on first render
+    if (typeof window === 'undefined') return 'desktop';
+    return userService.getSettings().then(() => {}).constructor === Promise
+      ? 'desktop'  // SSR fallback
+      : 'desktop';
+  });
 
-  const setPreferredVariant = async (variant: 'desktop' | 'mobile') => {
+  // Hydrate from localStorage after mount (client-only)
+  const [hydrated, setHydrated] = useState(false);
+  if (!hydrated && typeof window !== 'undefined') {
+    userService.getSettings().then((s) => {
+      setVariantState(s.preferredVariant ?? 'desktop');
+      setHydrated(true);
+    });
+  }
+
+  const setPreferredVariant = useCallback(async (variant: 'desktop' | 'mobile') => {
     await userService.updateSettings({ preferredVariant: variant });
-    mutate('user/settings');
-  };
+    setVariantState(variant);
+  }, []);
 
   return {
-    preferredVariant: data?.preferredVariant ?? 'desktop',
-    isLoading,
-    error,
+    preferredVariant,
+    isLoading: false,
+    error: null,
     setPreferredVariant,
   };
 }

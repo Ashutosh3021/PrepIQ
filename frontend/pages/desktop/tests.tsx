@@ -14,7 +14,7 @@ const testDomains = [
 
 export default function DesktopTests() {
   const router = useRouter();
-  const { tests, isLoading, error, startTest, submitTest } = useTests();
+  const { tests, isLoading, error, submitTest } = useTests();
 
   if (isLoading) {
     return (
@@ -101,20 +101,26 @@ export default function DesktopTests() {
                 <p className="text-on-surface/50 text-lg">No tests available yet.</p>
               </div>
             ) : (
+              // BUG-H11: map BackendTest fields — test_id, time_limit_minutes,
+              // total_questions. No title/subject/difficulty in the backend response;
+              // derive sensible display values from what is available.
               tests.map((test, index) => {
-                const isCompleted = test.status === 'completed';
+                const isCompleted = (test.questions ?? []).length > 0 &&
+                  (test.questions ?? []).every((q) => q.id);
                 return (
                   <div
-                    key={test.id}
+                    key={test.test_id}
                     className="grid grid-cols-12 items-center py-10 px-4 hover:bg-surface-container-low transition-colors duration-100 group"
                   >
                     <div className="col-span-1 text-xs font-bold text-tertiary">
                       {String(index + 1).padStart(2, '0')}.
                     </div>
                     <div className="col-span-4">
-                      <h3 className="text-2xl font-serif italic">{test.title}</h3>
+                      <h3 className="text-2xl font-serif italic">
+                        Mock Test {String(index + 1).padStart(2, '0')}
+                      </h3>
                       <p className="text-[0.7rem] uppercase tracking-wider text-primary mt-1">
-                        {test.subject} {isCompleted ? '\u2022 COMPLETED' : '\u2022 FULL MODULE'}
+                        {test.total_questions} Questions &bull; FULL MODULE
                       </p>
                     </div>
                     <div className="col-span-5 grid grid-cols-3 gap-4">
@@ -122,31 +128,29 @@ export default function DesktopTests() {
                         <span className="block text-[0.6rem] uppercase font-bold text-tertiary mb-1">
                           Duration
                         </span>
-                        <span className="text-sm font-medium">{test.duration} Minutes</span>
+                        <span className="text-sm font-medium">
+                          {test.time_limit_minutes ?? '—'} Minutes
+                        </span>
                       </div>
                       <div>
                         <span className="block text-[0.6rem] uppercase font-bold text-tertiary mb-1">
-                          Complexity
+                          Total Marks
                         </span>
-                        <span className="text-sm font-medium capitalize">{test.difficulty}</span>
+                        <span className="text-sm font-medium">{test.total_marks ?? '—'}</span>
                       </div>
                       <div>
                         <span className="block text-[0.6rem] uppercase font-bold text-tertiary mb-1">
                           Inventory
                         </span>
-                        <span className="text-sm font-medium">{test.questionCount} Questions</span>
+                        <span className="text-sm font-medium">{test.total_questions} Questions</span>
                       </div>
                     </div>
                     <div className="col-span-2 flex justify-end">
                       <button
-                        className={
-                          isCompleted
-                            ? 'border border-primary text-primary px-8 py-3 text-xs font-bold tracking-widest uppercase hover:bg-primary hover:text-white transition-all duration-150'
-                            : 'bg-primary text-white px-8 py-3 text-xs font-bold tracking-widest uppercase hover:bg-primary/90 transition-colors duration-150'
-                        }
+                        className="bg-primary text-white px-8 py-3 text-xs font-bold tracking-widest uppercase hover:bg-primary/90 transition-colors duration-150"
                         onClick={() => router.push('/desktop/start-test')}
                       >
-                        {isCompleted ? 'Review' : 'Start Test'}
+                        Start Test
                       </button>
                     </div>
                   </div>

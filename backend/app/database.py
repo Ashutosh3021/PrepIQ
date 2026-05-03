@@ -7,9 +7,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
+# BUG-M09: removed redundant load_dotenv() — main.py already loads .env before
+# any module is imported. Having a second load_dotenv() here can silently
+# override values that main.py set with override=True.
 
 # Database configuration - PostgreSQL only (via Supabase)
 DATABASE_URL = os.getenv("DATABASE_URL")
