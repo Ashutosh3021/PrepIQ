@@ -99,7 +99,7 @@ export default function DesktopProfile() {
   }
 
   // Prefer full profile data; fall back to auth context
-  const displayName = profile?.full_name || authUser?.name || authUser?.email?.split('@')[0] || 'Student';
+  const displayName = profile?.full_name || authUser?.user_metadata?.full_name || authUser?.email?.split('@')[0] || 'Student';
   const displayEmail = profile?.email || authUser?.email || '';
   const displayInitials = initials(displayName, displayEmail);
   const college = profile?.college_name || '—';

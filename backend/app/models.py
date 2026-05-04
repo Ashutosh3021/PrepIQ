@@ -18,14 +18,14 @@ class User(Base):
 
     # Primary Key - PostgreSQL UUID
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
+
     # Required fields
     email = Column(String(255), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
+    # password_hash removed — Supabase manages authentication
 
     # Profile - Required fields for registration
-    full_name = Column(String(255), nullable=False)
-    college_name = Column(String(255), nullable=False)
+    full_name = Column(String(255), nullable=True)   # nullable: OAuth users set this in wizard
+    college_name = Column(String(255), nullable=True)
     program = Column(String(100), nullable=False, default='BTech')  # BTech, BSc, MSc
     year_of_study = Column(Integer, nullable=False, default=1)
 
@@ -33,10 +33,10 @@ class User(Base):
     theme_preference = Column(String(20), default='system', nullable=False)  # light/dark/system
     language = Column(String(10), default='en', nullable=False)
     exam_date = Column(DateTime, nullable=True)
-    
+
     # Wizard Completion Flag
     wizard_completed = Column(Boolean, default=False, nullable=False)
-    
+
     # Wizard Data - Optional
     exam_name = Column(String(255), nullable=True)
     days_until_exam = Column(Integer, nullable=True)
@@ -70,7 +70,7 @@ class Subject(Base):
 
     # Primary Key - PostgreSQL UUID
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
+
     # Foreign Key - Required
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
@@ -117,7 +117,7 @@ class QuestionPaper(Base):
 
     # Primary Key - PostgreSQL UUID
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
+
     # Foreign Key - Required
     subject_id = Column(UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True)
 
@@ -164,7 +164,7 @@ class Question(Base):
 
     # Primary Key - PostgreSQL UUID
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
+
     # Foreign Key - Required
     paper_id = Column(UUID(as_uuid=True), ForeignKey("question_papers.id", ondelete="CASCADE"), nullable=False, index=True)
 
@@ -209,7 +209,7 @@ class Prediction(Base):
 
     # Primary Key - PostgreSQL UUID
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
+
     # Foreign Keys - Required
     subject_id = Column(UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -235,7 +235,7 @@ class Prediction(Base):
 
     # Accuracy Tracking (filled after exam)
     actual_exam_questions_json = Column(Text, nullable=True)
-    accuracy_score = Column(Numeric(5, 2), nullable=True)          # % of predictions that appeared
+    accuracy_score = Column(Numeric(5, 2), nullable=True)           # % of predictions that appeared
     prediction_accuracy_score = Column(Numeric(5, 2), nullable=True)  # Estimated accuracy of predictions
 
     # Timestamps
@@ -259,7 +259,7 @@ class ChatHistory(Base):
 
     # Primary Key - PostgreSQL UUID
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
+
     # Foreign Keys - Required
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     subject_id = Column(UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -297,7 +297,7 @@ class MockTest(Base):
 
     # Primary Key - PostgreSQL UUID
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
+
     # Foreign Keys - Required
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     subject_id = Column(UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -349,7 +349,7 @@ class StudyPlan(Base):
 
     # Primary Key - PostgreSQL UUID
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
+
     # Foreign Keys - Required
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     subject_id = Column(UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True)

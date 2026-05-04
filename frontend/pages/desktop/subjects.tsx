@@ -1,13 +1,192 @@
-import React from 'react';
+import React, { useState } from 'react';
 import Head from 'next/head';
-import Link from 'next/link';
 import { DesktopLayout, SubjectCard } from '@/components/desktop';
 import { Skeleton } from '@/components/common';
 import { useSubjects } from '@/lib/hooks/useSubjects';
+import { subjectsService } from '@/lib/services/subjects.service';
+import { apiFetch } from '@/lib/services/base.service';
 import { deriveSubjectProgress } from '@/lib/types/subject.types';
 
+// ── Add Subject modal ─────────────────────────────────────────────────────────
+
+interface AddSubjectModalProps {
+  onClose: () => void;
+  onCreated: () => void;
+}
+
+function AddSubjectModal({ onClose, onCreated }: AddSubjectModalProps) {
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [semester, setSemester] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) { setError('Subject name is required.'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      await subjectsService.create({
+        name: name.trim(),
+        code: code.trim() || undefined,
+        semester: semester ? Number(semester) : undefined,
+      });
+      onCreated();
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to create subject.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div className="bg-surface w-full max-w-md p-10 relative">
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 text-on-surface/40 hover:text-on-surface transition-colors"
+          aria-label="Close"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+
+        <h2 className="font-serif italic text-3xl mb-8 text-on-surface">Add Subject</h2>
+
+        {error && (
+          <div className="mb-6 px-4 py-3 text-sm border-l-2 border-error bg-error/5 text-error">
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="space-y-2">
+            <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
+              Subject Name *
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Linear Algebra"
+              className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm"
+              required
+              autoFocus
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
+                Subject Code
+              </label>
+              <input
+                type="text"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="e.g. MA201"
+                className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
+                Semester
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={semester}
+                onChange={(e) => setSemester(e.target.value)}
+                placeholder="1–8"
+                className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm"
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-4 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 border border-primary text-primary py-3 text-xs font-bold uppercase tracking-widest hover:bg-primary hover:text-on-primary transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex-1 bg-primary text-on-primary py-3 text-xs font-bold uppercase tracking-widest hover:bg-primary/90 transition-all disabled:opacity-40 flex items-center justify-center gap-2"
+            >
+              {saving && (
+                <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+              )}
+              {saving ? 'Creating…' : 'Create Subject'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+interface WizardStatus {
+  focus_subjects?: string[];
+}
+
 export default function DesktopSubjects() {
-  const { subjects, isLoading, error } = useSubjects();
+  const { subjects, isLoading, error, refresh } = useSubjects();
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState('');
+
+  // ── Sync from Wizard ────────────────────────────────────────────────────────
+  const handleSyncFromWizard = async () => {
+    setSyncing(true);
+    setSyncMessage('');
+    try {
+      const status = await apiFetch<WizardStatus>('/wizard/status', {});
+      const focusSubjects: string[] = status.focus_subjects ?? [];
+
+      if (focusSubjects.length === 0) {
+        setSyncMessage('No subjects found in your wizard setup. Complete the wizard first.');
+        return;
+      }
+
+      // Find which subjects don't already exist (case-insensitive)
+      const existingNames = new Set(subjects.map((s) => s.name.toLowerCase()));
+      const toCreate = focusSubjects.filter((name) => !existingNames.has(name.toLowerCase()));
+
+      if (toCreate.length === 0) {
+        setSyncMessage('All wizard subjects are already in your list.');
+        return;
+      }
+
+      // Create missing subjects sequentially
+      for (const name of toCreate) {
+        await subjectsService.create({ name });
+      }
+
+      await refresh();
+      setSyncMessage(`Synced ${toCreate.length} subject${toCreate.length !== 1 ? 's' : ''} from your wizard.`);
+    } catch (err: unknown) {
+      setSyncMessage(err instanceof Error ? err.message : 'Sync failed. Please try again.');
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncMessage(''), 4000);
+    }
+  };
+
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   if (isLoading) {
     return (
@@ -37,30 +216,55 @@ export default function DesktopSubjects() {
         <meta name="description" content="Browse and manage your study subjects" />
       </Head>
       <DesktopLayout>
+        {showAddModal && (
+          <AddSubjectModal
+            onClose={() => setShowAddModal(false)}
+            onCreated={() => refresh()}
+          />
+        )}
+
         {/* Header Row */}
         <header className="flex flex-col md:flex-row justify-between items-end mb-16 gap-6">
           <div className="flex flex-col">
             <span className="text-xs font-bold uppercase tracking-widest text-primary mb-2">
-              Academic Atelier / 2024
+              Academic Atelier / {new Date().getFullYear()}
             </span>
             <h1 className="text-6xl md:text-7xl font-serif italic leading-none">My Subjects</h1>
           </div>
-          <div className="flex gap-4">
-            <button className="bg-primary text-on-primary px-6 py-3 text-sm font-semibold uppercase tracking-wider hover:bg-primary/90 transition-all flex items-center gap-2">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              <span>Add Subject</span>
-            </button>
-            <button className="border border-primary text-primary px-6 py-3 text-sm font-semibold uppercase tracking-wider hover:bg-primary hover:text-on-primary transition-all flex items-center gap-2">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="1 4 1 10 7 10" />
-                <polyline points="23 20 23 14 17 14" />
-                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-              </svg>
-              <span>Sync from Wizard</span>
-            </button>
+          <div className="flex flex-col items-end gap-3">
+            <div className="flex gap-4">
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="bg-primary text-on-primary px-6 py-3 text-sm font-semibold uppercase tracking-wider hover:bg-primary/90 transition-all flex items-center gap-2"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                <span>Add Subject</span>
+              </button>
+              <button
+                onClick={handleSyncFromWizard}
+                disabled={syncing}
+                className="border border-primary text-primary px-6 py-3 text-sm font-semibold uppercase tracking-wider hover:bg-primary hover:text-on-primary transition-all flex items-center gap-2 disabled:opacity-40"
+              >
+                {syncing ? (
+                  <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="1 4 1 10 7 10" />
+                    <polyline points="23 20 23 14 17 14" />
+                    <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+                  </svg>
+                )}
+                <span>{syncing ? 'Syncing…' : 'Sync from Wizard'}</span>
+              </button>
+            </div>
+            {syncMessage && (
+              <p className="text-xs text-on-surface/60 max-w-xs text-right">{syncMessage}</p>
+            )}
           </div>
         </header>
 
@@ -68,15 +272,19 @@ export default function DesktopSubjects() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {subjects.length === 0 ? (
             <div className="col-span-full text-center py-16">
-              <p className="text-on-surface/50 text-lg">No subjects yet. Add one to get started.</p>
+              <p className="text-on-surface/50 text-lg mb-4">No subjects yet.</p>
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="bg-primary text-on-primary px-6 py-3 text-sm font-bold uppercase tracking-widest hover:bg-primary/90 transition-colors"
+              >
+                Add your first subject
+              </button>
             </div>
           ) : (
             subjects.map((subject) => (
               <SubjectCard
                 key={subject.id}
                 subject={{
-                  // H-19: backend has no `description` or `progress` fields.
-                  // Use `code` as the card code, derive progress from activity counts.
                   code: subject.code ?? subject.id.slice(0, 8).toUpperCase(),
                   name: subject.name,
                   description: subject.syllabus_json
@@ -84,70 +292,11 @@ export default function DesktopSubjects() {
                     : `${subject.papers_uploaded} paper${subject.papers_uploaded !== 1 ? 's' : ''} uploaded`,
                   progress: deriveSubjectProgress(subject),
                 }}
-                onTrackProgress={() => {
-                  // Future: navigate to subject detail page
-                }}
+                onTrackProgress={() => {}}
               />
             ))
           )}
         </div>
-
-        {/* Asymmetric Archive Detail Section */}
-        <section className="mt-24 grid grid-cols-12 gap-8 border-t border-primary/10 pt-16">
-          <div className="col-span-12 lg:col-span-4">
-            <h3 className="text-4xl font-serif italic mb-6">Active Archive</h3>
-            <p className="text-sm text-on-surface/70 leading-loose max-w-xs">
-              Your study materials are curated into focused modules. Each subject represents a
-              curated archive of past papers, predictive analytics, and personalized AI tutoring
-              sessions.
-            </p>
-          </div>
-          <div className="col-span-12 lg:col-span-8">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-surface-container-lowest p-6 flex items-center justify-between border border-outline-variant/20">
-                <div>
-                  <p className="text-[0.65rem] font-bold text-primary uppercase mb-1">Last Sync</p>
-                  <p className="text-lg font-serif">Today, 09:14 AM</p>
-                </div>
-                <span className="text-primary">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                </span>
-              </div>
-              <div className="bg-surface-container-lowest p-6 flex items-center justify-between border border-outline-variant/20">
-                <div>
-                  <p className="text-[0.65rem] font-bold text-primary uppercase mb-1">
-                    Total Study Hours
-                  </p>
-                  <p className="text-lg font-serif">124.5 hrs</p>
-                </div>
-                <span className="text-primary">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
-                </span>
-              </div>
-            </div>
-            <div className="mt-8">
-              <div className="relative overflow-hidden bg-surface-container-highest h-48 w-full group">
-                <div className="absolute inset-0 bg-primary/10 mix-blend-multiply" />
-                <div className="absolute inset-0 flex flex-col justify-center px-12">
-                  <span className="text-xs font-bold uppercase tracking-widest text-primary mb-2">
-                    Next Scheduled Exam
-                  </span>
-                  <h4 className="text-3xl font-serif italic">
-                    Advanced Calculus - Final Mock
-                  </h4>
-                  <p className="text-sm font-bold uppercase mt-2">
-                    MARCH 15, 2024 / 09:00 EST
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
       </DesktopLayout>
     </>
   );

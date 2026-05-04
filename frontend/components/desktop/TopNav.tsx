@@ -4,6 +4,7 @@ import { useRouter } from 'next/router';
 import { DESKTOP_NAV } from '@/lib/navigation';
 import { Avatar } from '@/components/common';
 import { cn } from '@/lib/utils/cn';
+import { useAuth } from '@/lib/context/AuthContext';
 
 export interface TopNavProps {
   className?: string;
@@ -13,6 +14,23 @@ const TopNav = React.forwardRef<HTMLElement, TopNavProps>(
   ({ className }, ref) => {
     const router = useRouter();
     const currentPath = router.pathname;
+    const { user } = useAuth();
+
+    // Derive display name: prefer full_name from OAuth metadata, fall back to email
+    const displayName =
+      user?.user_metadata?.full_name ??
+      user?.user_metadata?.name ??
+      user?.email ??
+      '?';
+
+    // Build a 1-2 char fallback for the Avatar (e.g. "John Doe" → "JD", "john@…" → "J")
+    const avatarFallback = displayName
+      .split(/[\s@]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part: string) => part[0])
+      .join('')
+      .toUpperCase() || '?';
 
     return (
       <header
@@ -89,7 +107,7 @@ const TopNav = React.forwardRef<HTMLElement, TopNavProps>(
               </svg>
               <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary rounded-full" />
             </button>
-            <Avatar fallback="JD" alt="User avatar" size="md" />
+            <Avatar fallback={avatarFallback} alt={`${displayName} avatar`} size="md" />
           </div>
         </nav>
       </header>

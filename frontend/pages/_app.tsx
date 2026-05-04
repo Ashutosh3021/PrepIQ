@@ -5,73 +5,54 @@ import { useRouter } from 'next/router';
 import { useEffect, ReactNode } from 'react';
 import '@/styles/globals.css';
 
-// Protected route wrapper
-function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { user, loading } = useAuth();
-  const router = useRouter();
+// Routes that don't require authentication
+const PUBLIC_ROUTES = ['/auth', '/auth/callback'];
 
-  useEffect(() => {
-    if (!loading && !user) {
-      router.push('/login');
-    }
-  }, [user, loading, router]);
-
-  // Show loading while checking auth
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Don't render children if not authenticated (will redirect)
-  if (!user) {
-    return null;
-  }
-
-  return <>{children}</>;
-}
+// Wizard routes — authenticated but allowed before wizard completion
+const WIZARD_ROUTES = ['/desktop/wizard', '/mobile/wizard'];
 
 function AuthGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, loading } = useAuth();
 
+  const isPublic = PUBLIC_ROUTES.some(
+    (route) => router.pathname === route || router.pathname.startsWith(route + '/')
+  );
+  const isWizard = WIZARD_ROUTES.includes(router.pathname);
+
   useEffect(() => {
-    // Skip auth check for login/signup pages
-    if (router.pathname === '/login' || router.pathname === '/signup') {
-      return;
+    if (loading) return;
+    if (!user && !isPublic && !isWizard) {
+      router.replace('/auth');
     }
+  }, [user, loading, router, isPublic, isWizard]);
 
-    if (!loading && !user) {
-      router.push('/login');
-    }
-  }, [router, user, loading]);
-
-  // Allow access to login/signup without protection
-  if (router.pathname === '/login' || router.pathname === '/signup') {
+  // Allow public and wizard routes through immediately — no auth check needed
+  if (isPublic || isWizard) {
     return <>{children}</>;
   }
 
-  // Show loading for protected routes
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
-        </div>
+      <div className="min-h-screen flex items-center justify-center">
+        <svg
+          className="animate-spin"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          style={{ color: 'var(--color-primary, #4f46e5)' }}
+        >
+          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+        </svg>
       </div>
     );
   }
 
-  // Redirect if not authenticated
-  if (!user) {
-    return null;
-  }
+  if (!user) return null;
 
   return <>{children}</>;
 }

@@ -1,6 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Head from 'next/head';
 import { DesktopLayout } from '@/components/desktop';
+import { Skeleton } from '@/components/common';
+import { userService } from '@/lib/services/user.service';
+import { apiFetch } from '@/lib/services/base.service';
+import type { User } from '@/lib/types/user.types';
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const NOTIF_KEY = 'prepiq-notification-settings';
+const THEME_KEY = 'prepiq-theme-settings';
 
 const themeOptions = ['Atelier Cream (Default)', 'Midnight Parchment', 'Academic Slate'];
 const typographyOptions = [
@@ -9,10 +18,101 @@ const typographyOptions = [
   'Compact (12pt Body)',
 ];
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function readNotifSettings() {
+  if (typeof window === 'undefined') return { weeklyDigest: true, aiAlerts: true, communityInvites: false };
+  try { return { weeklyDigest: true, aiAlerts: true, communityInvites: false, ...JSON.parse(localStorage.getItem(NOTIF_KEY) ?? '{}') }; }
+  catch { return { weeklyDigest: true, aiAlerts: true, communityInvites: false }; }
+}
+
+function readThemeSettings() {
+  if (typeof window === 'undefined') return { theme: 0, typography: 0 };
+  try { return { theme: 0, typography: 0, ...JSON.parse(localStorage.getItem(THEME_KEY) ?? '{}') }; }
+  catch { return { theme: 0, typography: 0 }; }
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export default function DesktopSettings() {
+  // ── Profile state ──────────────────────────────────────────────────────────
+  const [profile, setProfile] = useState<User | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [fullName, setFullName] = useState('');
+  const [collegeName, setCollegeName] = useState('');
+  const [program, setProgram] = useState('');
+  const [yearOfStudy, setYearOfStudy] = useState('');
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveError, setSaveError] = useState('');
+
+  // ── Notification / theme state (localStorage) ──────────────────────────────
   const [weeklyDigest, setWeeklyDigest] = useState(true);
   const [aiAlerts, setAiAlerts] = useState(true);
   const [communityInvites, setCommunityInvites] = useState(false);
+  const [themeIdx, setThemeIdx] = useState(0);
+  const [typographyIdx, setTypographyIdx] = useState(0);
+
+  // ── Load profile on mount ──────────────────────────────────────────────────
+  useEffect(() => {
+    userService.getProfile().then((data) => {
+      setProfile(data);
+      setFullName(data.full_name ?? '');
+      setCollegeName(data.college_name ?? '');
+      setProgram(data.program ?? '');
+      setYearOfStudy(String(data.year_of_study ?? ''));
+    }).catch(() => {
+      // Non-fatal — form stays empty
+    }).finally(() => setProfileLoading(false));
+
+    // Restore localStorage preferences
+    const notif = readNotifSettings();
+    setWeeklyDigest(notif.weeklyDigest);
+    setAiAlerts(notif.aiAlerts);
+    setCommunityInvites(notif.communityInvites);
+
+    const theme = readThemeSettings();
+    setThemeIdx(theme.theme);
+    setTypographyIdx(theme.typography);
+  }, []);
+
+  // ── Save profile ───────────────────────────────────────────────────────────
+  const handleSave = async () => {
+    setSaveStatus('saving');
+    setSaveError('');
+    try {
+      await apiFetch('/wizard/update', {}, {
+        method: 'PUT',
+        body: JSON.stringify({
+          full_name: fullName.trim() || undefined,
+          college_name: collegeName.trim() || undefined,
+          program: program.trim() || undefined,
+          year_of_study: yearOfStudy ? Number(yearOfStudy) : undefined,
+        }),
+      });
+
+      // Persist notification + theme preferences to localStorage
+      localStorage.setItem(NOTIF_KEY, JSON.stringify({ weeklyDigest, aiAlerts, communityInvites }));
+      localStorage.setItem(THEME_KEY, JSON.stringify({ theme: themeIdx, typography: typographyIdx }));
+
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus('idle'), 2500);
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : 'Save failed. Please try again.');
+      setSaveStatus('error');
+    }
+  };
+
+  const handleDiscard = () => {
+    if (!profile) return;
+    setFullName(profile.full_name ?? '');
+    setCollegeName(profile.college_name ?? '');
+    setProgram(profile.program ?? '');
+    setYearOfStudy(String(profile.year_of_study ?? ''));
+    setSaveStatus('idle');
+    setSaveError('');
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <>
@@ -30,106 +130,144 @@ export default function DesktopSettings() {
             </p>
           </div>
           <div className="flex gap-4">
-            <button className="bg-transparent border border-primary text-primary px-8 py-3 font-semibold uppercase text-xs tracking-widest hover:bg-primary hover:text-on-primary transition-all duration-150">
+            <button
+              onClick={handleDiscard}
+              disabled={saveStatus === 'saving'}
+              className="bg-transparent border border-primary text-primary px-8 py-3 font-semibold uppercase text-xs tracking-widest hover:bg-primary hover:text-on-primary transition-all duration-150 disabled:opacity-40"
+            >
               Discard
             </button>
-            <button className="bg-primary text-on-primary px-8 py-3 font-semibold uppercase text-xs tracking-widest hover:bg-primary/90 transition-all duration-150">
-              Save Changes
+            <button
+              onClick={handleSave}
+              disabled={saveStatus === 'saving'}
+              className="bg-primary text-on-primary px-8 py-3 font-semibold uppercase text-xs tracking-widest hover:bg-primary/90 transition-all duration-150 disabled:opacity-40 flex items-center gap-2"
+            >
+              {saveStatus === 'saving' && (
+                <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+              )}
+              {saveStatus === 'saved' ? 'Saved ✓' : 'Save Changes'}
             </button>
           </div>
         </header>
 
+        {saveError && (
+          <div className="mb-8 px-4 py-3 text-sm border-l-2 border-error bg-error/5 text-error">
+            {saveError}
+          </div>
+        )}
+
         <div className="grid grid-cols-12 gap-12">
-          {/* Side Navigation Links */}
+          {/* Side Navigation */}
           <aside className="col-span-3">
             <nav className="flex flex-col gap-2">
-              <a
-                href="#profile"
-                className="text-primary border-l-2 border-primary pl-4 py-2 font-bold transition-all duration-150"
-              >
-                Profile Information
-              </a>
-              <a
-                href="#preferences"
-                className="text-on-surface/70 border-l-2 border-transparent hover:border-primary/30 pl-4 py-2 font-medium transition-all duration-150"
-              >
-                Preferences
-              </a>
-              <a
-                href="#security"
-                className="text-on-surface/70 border-l-2 border-transparent hover:border-primary/30 pl-4 py-2 font-medium transition-all duration-150"
-              >
-                Account Security
-              </a>
-              <a
-                href="#billing"
-                className="text-on-surface/70 border-l-2 border-transparent hover:border-primary/30 pl-4 py-2 font-medium transition-all duration-150"
-              >
-                Billing &amp; Subscription
-              </a>
+              {[
+                { href: '#profile', label: 'Profile Information' },
+                { href: '#preferences', label: 'Preferences' },
+                { href: '#security', label: 'Account Security' },
+              ].map(({ href, label }) => (
+                <a key={href} href={href}
+                  className="text-on-surface/70 border-l-2 border-transparent hover:border-primary/30 pl-4 py-2 font-medium transition-all duration-150 first:text-primary first:border-primary first:font-bold">
+                  {label}
+                </a>
+              ))}
             </nav>
           </aside>
 
           {/* Settings Content */}
           <div className="col-span-9 space-y-24">
-            {/* Section: Profile Information */}
+
+            {/* ── 01. Profile Information ── */}
             <section className="space-y-8" id="profile">
               <div className="flex items-center gap-4">
                 <span className="text-4xl font-serif italic text-primary">01.</span>
                 <h2 className="text-2xl font-semibold text-on-surface">Profile Information</h2>
               </div>
-              <div className="bg-surface-container-low p-10 grid grid-cols-2 gap-x-12 gap-y-8">
-                <div className="col-span-2 flex items-center gap-8 mb-4">
-                  <div className="w-24 h-24 bg-surface-container-high flex items-center justify-center border-2 border-dashed border-primary/20">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
-                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                      <circle cx="12" cy="13" r="4" />
-                    </svg>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="font-bold text-on-surface">Profile Picture</p>
-                    <p className="text-xs text-primary">
-                      JPG or PNG, max 2MB. 400x400px recommended.
+
+              {profileLoading ? (
+                <div className="space-y-4">
+                  <Skeleton className="h-12 w-full" />
+                  <Skeleton className="h-12 w-full" />
+                  <Skeleton className="h-12 w-full" />
+                </div>
+              ) : (
+                <div className="bg-surface-container-low p-10 grid grid-cols-2 gap-x-12 gap-y-8">
+                  {/* Email — read-only, managed by Supabase OAuth */}
+                  <div className="col-span-2 space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
+                      Email Address
+                    </label>
+                    <input
+                      className="w-full bg-surface border-none border-b-2 border-outline-variant/20 p-3 text-sm text-on-surface/50 cursor-not-allowed"
+                      type="email"
+                      value={profile?.email ?? ''}
+                      disabled
+                      title="Email is managed by your OAuth provider and cannot be changed here."
+                    />
+                    <p className="text-[10px] text-on-surface/40">
+                      Managed by your Google / GitHub account — cannot be changed here.
                     </p>
-                    <button className="mt-2 text-primary font-bold text-xs uppercase underline tracking-wider">
-                      Change Image
-                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
+                      Full Name
+                    </label>
+                    <input
+                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm transition-all duration-150"
+                      type="text"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      placeholder="Your full name"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
+                      College / University
+                    </label>
+                    <input
+                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm transition-all duration-150"
+                      type="text"
+                      value={collegeName}
+                      onChange={(e) => setCollegeName(e.target.value)}
+                      placeholder="Your institution"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
+                      Program
+                    </label>
+                    <input
+                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm transition-all duration-150"
+                      type="text"
+                      value={program}
+                      onChange={(e) => setProgram(e.target.value)}
+                      placeholder="e.g. B.Tech, B.Sc"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
+                      Year of Study
+                    </label>
+                    <input
+                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm transition-all duration-150"
+                      type="number"
+                      min={1}
+                      max={6}
+                      value={yearOfStudy}
+                      onChange={(e) => setYearOfStudy(e.target.value)}
+                      placeholder="1–6"
+                    />
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
-                    First Name
-                  </label>
-                  <input
-                    className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm transition-all duration-150"
-                    type="text"
-                    defaultValue="Julian"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
-                    Last Name
-                  </label>
-                  <input
-                    className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm transition-all duration-150"
-                    type="text"
-                    defaultValue="Vandervilt"
-                  />
-                </div>
-                <div className="col-span-2 space-y-2">
-                  <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
-                    Academic Biography
-                  </label>
-                  <textarea
-                    className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm transition-all duration-150"
-                    rows={4}
-                    defaultValue="Ph.D. candidate specializing in classical literature and archival studies. Focus on early 19th-century folio preservation."
-                  />
-                </div>
-              </div>
+              )}
             </section>
 
-            {/* Section: Preferences */}
+            {/* ── 02. Preferences (localStorage) ── */}
             <section className="space-y-8" id="preferences">
               <div className="flex items-center gap-4">
                 <span className="text-4xl font-serif italic text-primary">02.</span>
@@ -141,9 +279,13 @@ export default function DesktopSettings() {
                     <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
                       Interface Theme
                     </label>
-                    <select className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm appearance-none cursor-pointer">
-                      {themeOptions.map((opt) => (
-                        <option key={opt}>{opt}</option>
+                    <select
+                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm appearance-none cursor-pointer"
+                      value={themeIdx}
+                      onChange={(e) => setThemeIdx(Number(e.target.value))}
+                    >
+                      {themeOptions.map((opt, i) => (
+                        <option key={opt} value={i}>{opt}</option>
                       ))}
                     </select>
                   </div>
@@ -151,105 +293,84 @@ export default function DesktopSettings() {
                     <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
                       Typographic Scale
                     </label>
-                    <select className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm appearance-none cursor-pointer">
-                      {typographyOptions.map((opt) => (
-                        <option key={opt}>{opt}</option>
+                    <select
+                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm appearance-none cursor-pointer"
+                      value={typographyIdx}
+                      onChange={(e) => setTypographyIdx(Number(e.target.value))}
+                    >
+                      {typographyOptions.map((opt, i) => (
+                        <option key={opt} value={i}>{opt}</option>
                       ))}
                     </select>
                   </div>
                 </div>
+
                 <div className="space-y-6">
                   <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
                     Notification Settings
                   </p>
+                  <p className="text-xs text-on-surface/40 -mt-4">
+                    Saved locally in your browser.
+                  </p>
                   <div className="space-y-4">
-                    <label className="flex items-center gap-4 cursor-pointer group">
-                      <div className="relative w-5 h-5 border-2 border-primary flex items-center justify-center">
-                        <input
-                          checked={weeklyDigest}
-                          onChange={(e) => setWeeklyDigest(e.target.checked)}
-                          className="opacity-0 absolute inset-0 cursor-pointer peer"
-                          type="checkbox"
-                        />
-                        <div className="w-2.5 h-2.5 bg-primary opacity-0 peer-checked:opacity-100 transition-opacity" />
-                      </div>
-                      <span className="text-sm font-medium text-on-surface">
-                        Weekly Performance Digest
-                      </span>
-                    </label>
-                    <label className="flex items-center gap-4 cursor-pointer group">
-                      <div className="relative w-5 h-5 border-2 border-primary flex items-center justify-center">
-                        <input
-                          checked={aiAlerts}
-                          onChange={(e) => setAiAlerts(e.target.checked)}
-                          className="opacity-0 absolute inset-0 cursor-pointer peer"
-                          type="checkbox"
-                        />
-                        <div className="w-2.5 h-2.5 bg-primary opacity-0 peer-checked:opacity-100 transition-opacity" />
-                      </div>
-                      <span className="text-sm font-medium text-on-surface">
-                        AI Tutor Prediction Alerts
-                      </span>
-                    </label>
-                    <label className="flex items-center gap-4 cursor-pointer group">
-                      <div className="relative w-5 h-5 border-2 border-primary flex items-center justify-center">
-                        <input
-                          checked={communityInvites}
-                          onChange={(e) => setCommunityInvites(e.target.checked)}
-                          className="opacity-0 absolute inset-0 cursor-pointer peer"
-                          type="checkbox"
-                        />
-                        <div className="w-2.5 h-2.5 bg-primary opacity-0 peer-checked:opacity-100 transition-opacity" />
-                      </div>
-                      <span className="text-sm font-medium text-on-surface">
-                        Community Study Session Invites
-                      </span>
-                    </label>
+                    {[
+                      { label: 'Weekly Performance Digest', value: weeklyDigest, set: setWeeklyDigest },
+                      { label: 'AI Tutor Prediction Alerts', value: aiAlerts, set: setAiAlerts },
+                      { label: 'Community Study Session Invites', value: communityInvites, set: setCommunityInvites },
+                    ].map(({ label, value, set }) => (
+                      <label key={label} className="flex items-center gap-4 cursor-pointer group">
+                        <div className="relative w-5 h-5 border-2 border-primary flex items-center justify-center">
+                          <input
+                            checked={value}
+                            onChange={(e) => set(e.target.checked)}
+                            className="opacity-0 absolute inset-0 cursor-pointer peer"
+                            type="checkbox"
+                          />
+                          <div className="w-2.5 h-2.5 bg-primary opacity-0 peer-checked:opacity-100 transition-opacity" />
+                        </div>
+                        <span className="text-sm font-medium text-on-surface">{label}</span>
+                      </label>
+                    ))}
                   </div>
                 </div>
               </div>
             </section>
 
-            {/* Section: Account Security */}
+            {/* ── 03. Account Security ── */}
             <section className="space-y-8" id="security">
               <div className="flex items-center gap-4">
                 <span className="text-4xl font-serif italic text-primary">03.</span>
                 <h2 className="text-2xl font-semibold text-on-surface">Account Security</h2>
               </div>
               <div className="bg-surface-container-highest p-10 space-y-12">
-                <div className="grid grid-cols-1 gap-8 max-w-lg">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
-                      Current Password
-                    </label>
-                    <input
-                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm"
-                      placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
-                      type="password"
-                    />
+                {/* Password change — OAuth users don't have a password */}
+                <div className="p-6 border border-outline-variant/30 bg-surface-container-low">
+                  <p className="text-sm font-semibold text-on-surface mb-2">Password Management</p>
+                  <p className="text-xs text-on-surface/60 leading-relaxed">
+                    Your account uses Google or GitHub OAuth — there is no password to change here.
+                    To update your password, visit your provider&apos;s account settings directly.
+                  </p>
+                  <div className="flex gap-3 mt-4">
+                    <a
+                      href="https://myaccount.google.com/security"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-bold uppercase tracking-wider text-primary underline underline-offset-4"
+                    >
+                      Google Account →
+                    </a>
+                    <a
+                      href="https://github.com/settings/security"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-bold uppercase tracking-wider text-primary underline underline-offset-4"
+                    >
+                      GitHub Security →
+                    </a>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
-                      New Password
-                    </label>
-                    <input
-                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm"
-                      type="password"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
-                      Confirm New Password
-                    </label>
-                    <input
-                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm"
-                      type="password"
-                    />
-                  </div>
-                  <button className="w-fit text-primary font-bold text-xs uppercase underline tracking-wider">
-                    Update Credentials
-                  </button>
                 </div>
+
+                {/* Danger zone */}
                 <div className="pt-8 border-t border-primary/10">
                   <div className="bg-error/5 p-8">
                     <h3 className="text-error font-bold uppercase tracking-widest text-xs mb-4">
@@ -257,12 +378,15 @@ export default function DesktopSettings() {
                     </h3>
                     <div className="flex justify-between items-center">
                       <div className="space-y-1">
-                        <p className="text-sm font-semibold text-on-surface">Archive Account</p>
+                        <p className="text-sm font-semibold text-on-surface">Delete Account</p>
                         <p className="text-xs text-on-surface/70">
                           This will permanently delete all study data and history.
                         </p>
                       </div>
-                      <button className="bg-error text-white px-6 py-2 text-xs font-bold uppercase tracking-widest hover:bg-error/90 transition-all duration-150">
+                      <button
+                        onClick={() => alert('Account deletion is not yet available. Please contact support.')}
+                        className="bg-error text-white px-6 py-2 text-xs font-bold uppercase tracking-widest hover:bg-error/90 transition-all duration-150"
+                      >
                         Delete Account
                       </button>
                     </div>

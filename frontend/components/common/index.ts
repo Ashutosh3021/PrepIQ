@@ -7,3 +7,4 @@ export { default as EmptyState } from './EmptyState';
 export { default as Modal } from './Modal';
 export { default as ErrorBoundary } from './ErrorBoundary';
 export { Skeleton } from './Skeleton';
+export { default as WizardForm } from './WizardForm';

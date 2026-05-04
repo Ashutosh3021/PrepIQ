@@ -93,8 +93,11 @@ export default function DesktopDashboard() {
     if (!subjectsLoading) fetchDashboardData();
   }, [subjectsLoading]);
 
-  // M-19: derive greeting from real user name
-  const displayName = user?.name || user?.email?.split('@')[0] || 'there';
+  // Derive greeting from Supabase user metadata
+  const displayName =
+    user?.user_metadata?.full_name ??
+    user?.email?.split('@')[0] ??
+    'there';
   const hour = new Date().getHours();
   const greeting =
     hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';

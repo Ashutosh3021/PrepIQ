@@ -88,22 +88,22 @@ class SupabaseFirstAuthService:
             # Extract user object from possible response shapes
             user_data = None
             session = None
-            
+
             # R-04: replaced print([DEBUG]) with logger.debug to avoid leaking sensitive data
             logger.debug(f"Supabase signup response type: {type(response)}")
             logger.debug(f"Supabase response dir: {[x for x in dir(response) if not x.startswith('_')]}")
-            
+
             # Try different response formats
             # The response is gotrue.types.AuthResponse with .user and .session directly
             if hasattr(response, "user"):
                 user_data = response.user
             elif hasattr(response, "data") and hasattr(response.data, "user"):
                 user_data = response.data.user
-            
+
             # Also try if response itself is the user object (some Supabase versions)
             if not user_data and hasattr(response, "id"):
                 user_data = response
-                
+
             # Get session if present
             if hasattr(response, "session"):
                 session = response.session
@@ -196,15 +196,15 @@ class SupabaseFirstAuthService:
             logger.debug(f"Login response type: {type(response)}")
             logger.debug(f"Login response user: {response.user}")
             logger.debug(f"Login response session: {response.session}")
-            
+
             user = None
             session = None
-            
+
             if hasattr(response, "user"):
                 user = response.user
             elif hasattr(response, "data") and hasattr(response.data, "user"):
                 user = response.data.user
-                
+
             if hasattr(response, "session"):
                 session = response.session
             elif hasattr(response, "data") and hasattr(response.data, "session"):
@@ -221,7 +221,7 @@ class SupabaseFirstAuthService:
                     metadata = getattr(user, "user_metadata", {}) or {}
                 elif isinstance(user, dict):
                     metadata = user.get("user_metadata", {})
-                
+
                 # Fallback: try app_metadata
                 if not metadata and hasattr(user, "app_metadata"):
                     metadata = getattr(user, "app_metadata", {}) or {}
@@ -258,12 +258,12 @@ class SupabaseFirstAuthService:
         """Verify Supabase JWT token and get user info"""
         import logging
         logger = logging.getLogger(__name__)
-        
+
         try:
             supabase = get_supabase_client()
 
             user_response = supabase.auth.get_user(token)
-            
+
             logger.debug(f"[AUTH] get_user response type: {type(user_response)}")
             logger.debug(f"[AUTH] get_user response: {user_response}")
 
@@ -274,11 +274,11 @@ class SupabaseFirstAuthService:
                     user = user_response.data["user"]
                 elif hasattr(user_response.data, "user"):
                     user = user_response.data.user
-            
+
             # Check for user directly on response
             if not user and hasattr(user_response, "user"):
                 user = user_response.user
-                
+
             # Check if user itself is the user object (some Supabase versions)
             if not user and hasattr(user_response, "id"):
                 user = user_response
@@ -322,26 +322,27 @@ class SupabaseFirstAuthService:
                 logger.error(f"[AUTH] Unexpected auth error ({error_type}): {str(e)}")
                 raise HTTPException(status_code=401, detail="Invalid authentication token")
 
+
 # Dependency for protected routes with lazy user creation
 async def get_current_user_from_token(authorization: str = None, db: Session = None):
     """
     Validate JWT with Supabase and ensure user exists in application database.
     If user doesn't exist in local DB, creates them (lazy creation).
-    
+
     Args:
         authorization: Bearer token from Authorization header
         db: Database session (optional, for lazy creation)
-    
+
     Returns:
         dict: User data with all fields from application database
     """
     import logging
     logger = logging.getLogger(__name__)
-    
+
     if not authorization:
         logger.warning("[AUTH] No authorization header provided")
         raise HTTPException(
-            status_code=401, 
+            status_code=401,
             detail="Authorization header required",
             headers={"WWW-Authenticate": "Bearer"}
         )
@@ -352,57 +353,70 @@ async def get_current_user_from_token(authorization: str = None, db: Session = N
             token = authorization[7:].strip()
         else:
             token = authorization.strip()
-        
+
         logger.debug(f"[AUTH] Token starts with: {token[:20]}..." if len(token) > 20 else f"[AUTH] Token: {token}")
-        
+
         # Get user from Supabase
         supabase_user = await SupabaseFirstAuthService.get_current_user(token)
-        
+
         # If no database session provided, return Supabase user only
         if db is None:
             return supabase_user
-        
+
         # Import models here to avoid circular imports
         import sys
         import os
         sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from app.models import User
-        
+
         # Check if user exists in application database
         db_user = db.query(User).filter(User.id == supabase_user["id"]).first()
-        
+
         if not db_user:
             # LAZY CREATION: User exists in Supabase but not in app DB
             logger.info(f"Lazy-creating user {supabase_user['id']} in application database")
-            
+
             # Use try/except to handle race condition on concurrent first login
             try:
+                # year_of_study from OAuth metadata may be a string like "1st Year"
+                # the DB column is Integer — parse safely
+                raw_year = supabase_user.get("year_of_study", 1)
+                if isinstance(raw_year, str):
+                    year_map = {"1st Year": 1, "2nd Year": 2, "3rd Year": 3, "4th Year": 4}
+                    year_int = year_map.get(raw_year, 1)
+                else:
+                    try:
+                        year_int = int(raw_year)
+                    except (TypeError, ValueError):
+                        year_int = 1
+
                 db_user = User(
                     id=supabase_user["id"],
                     email=supabase_user["email"],
-                    full_name=supabase_user.get("full_name", "Unknown"),
-                    college_name=supabase_user.get("college_name", "Unknown"),
-                    password_hash="supabase_managed",  # Password managed by Supabase
-                    program=supabase_user.get("program", "BTech"),
-                    year_of_study=supabase_user.get("year_of_study", 1),
+                    # full_name / college_name may be empty for OAuth users — filled in wizard
+                    full_name=supabase_user.get("full_name") or None,
+                    college_name=supabase_user.get("college_name") or None,
+                    # password_hash removed — Supabase manages auth
+                    program=supabase_user.get("program") or "BTech",
+                    year_of_study=year_int,
                     wizard_completed=False
                 )
-                
+
                 db.add(db_user)
                 db.commit()
                 db.refresh(db_user)
-                
+
                 logger.info(f"User {supabase_user['id']} created successfully in application database")
             except IntegrityError as integrity_error:
                 # Handle race condition: another request may have created the user
                 db.rollback()
                 logger.warning(f"[AUTH] Race condition on user creation (IntegrityError), re-querying: {str(integrity_error)}")
                 db_user = db.query(User).filter(User.id == supabase_user["id"]).first()
-                
+
                 if not db_user:
                     # If still not found after rollback, re-raise
                     raise HTTPException(status_code=500, detail="Failed to create user record")
-        
+
         # Return combined user data from database
         return {
             "id": str(db_user.id),
@@ -421,14 +435,14 @@ async def get_current_user_from_token(authorization: str = None, db: Session = N
             "exam_date": db_user.exam_date,
             "supabase_user": supabase_user  # Include original Supabase data if needed
         }
-        
+
     except HTTPException:
         # Re-raise HTTP exceptions without modification
         raise
     except Exception as e:
         logger.error(f"[AUTH] Auth error: {str(e)}", exc_info=True)
         raise HTTPException(
-            status_code=401, 
+            status_code=401,
             detail="Authentication failed",
             headers={"WWW-Authenticate": "Bearer"}
         )

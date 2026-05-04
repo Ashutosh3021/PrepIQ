@@ -1,18 +1,15 @@
 /**
  * Base API service with mock/real switching.
  *
- * Key behaviours:
- * - NEXT_PUBLIC_API_MODE=mock  → returns mockData after ~400ms simulated latency
- * - NEXT_PUBLIC_API_MODE=real  → fetches from BASE_URL + path with Bearer token
- * - Handles 401 by refreshing the token once and retrying
- * - FE-01: if no token is found in real mode the request still proceeds
- *   (public endpoints like /auth/login don't need one), but the caller can
- *   pass `requireAuth: true` to throw immediately when no token is available.
+ * Token source: Supabase JS SDK session (supabase.auth.getSession).
+ * Falls back to scanning localStorage for Supabase's own keys so existing
+ * sessions are not broken on first load after the OAuth migration.
  */
+
+import { supabase } from '@/lib/supabase';
 
 const IS_MOCK = process.env.NEXT_PUBLIC_API_MODE === 'mock';
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
-const REFRESH_URL = `${BASE_URL}/auth/refresh`;
 
 /** Standard API response envelope from backend */
 interface ApiResponse<T> {
@@ -22,23 +19,22 @@ interface ApiResponse<T> {
   timestamp?: string;
 }
 
-/** Key used by login.tsx and AuthContext to persist the session */
-const SESSION_KEY = 'prepiq-supabase-session';
+/**
+ * Get the current access token from the live Supabase session.
+ * Exported so other callers (e.g. upload page) can read it directly.
+ */
+export async function getAccessTokenAsync(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
+}
 
 /**
- * Get the stored access token from localStorage.
- * Exported so AuthContext and other callers can read it directly.
+ * Synchronous fallback — reads from Supabase's own localStorage keys.
+ * Used in places that cannot await (e.g. SWR fetcher initialisation).
  */
 export function getAccessToken(): string | null {
   if (typeof window === 'undefined') return null;
   try {
-    // Check our own session key first (fastest path)
-    const own = localStorage.getItem(SESSION_KEY);
-    if (own) {
-      const parsed = JSON.parse(own);
-      if (parsed.access_token) return parsed.access_token;
-    }
-    // Fallback: scan for any Supabase-style keys (e.g. from Supabase JS SDK)
     const keys = Object.keys(localStorage).filter(
       (k) => k.includes('supabase') || k.includes('sb-')
     );
@@ -46,67 +42,17 @@ export function getAccessToken(): string | null {
       const item = localStorage.getItem(key);
       if (item) {
         const parsed = JSON.parse(item);
-        if (parsed.access_token) return parsed.access_token;
+        const token =
+          parsed.access_token ??
+          parsed?.session?.access_token ??
+          null;
+        if (token) return token;
       }
     }
   } catch {
     // Corrupted storage — ignore
   }
   return null;
-}
-
-/** Get the stored refresh token from localStorage */
-function getRefreshToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const own = localStorage.getItem(SESSION_KEY);
-    if (own) {
-      const parsed = JSON.parse(own);
-      if (parsed.refresh_token) return parsed.refresh_token;
-    }
-    const keys = Object.keys(localStorage).filter(
-      (k) => k.includes('supabase') || k.includes('sb-')
-    );
-    for (const key of keys) {
-      const item = localStorage.getItem(key);
-      if (item) {
-        const parsed = JSON.parse(item);
-        if (parsed.refresh_token) return parsed.refresh_token;
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-/** Attempt to refresh the access token. Returns true on success. */
-async function doRefreshToken(): Promise<boolean> {
-  const rt = getRefreshToken();
-  if (!rt) return false;
-  try {
-    const res = await fetch(REFRESH_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: rt }),
-    });
-    if (!res.ok) return false;
-    const data = await res.json();
-    if (data.access_token) {
-      // Update the stored session with the new tokens
-      const own = localStorage.getItem(SESSION_KEY);
-      if (own) {
-        const parsed = JSON.parse(own);
-        parsed.access_token = data.access_token;
-        if (data.refresh_token) parsed.refresh_token = data.refresh_token;
-        localStorage.setItem(SESSION_KEY, JSON.stringify(parsed));
-      }
-      return true;
-    }
-    return false;
-  } catch {
-    return false;
-  }
 }
 
 function isApiEnvelope<T>(body: unknown): body is ApiResponse<T> {
@@ -121,16 +67,14 @@ function isApiEnvelope<T>(body: unknown): body is ApiResponse<T> {
 /**
  * Core fetch helper.
  *
- * @param path        API path relative to BASE_URL (e.g. '/subjects')
- * @param mockData    Fallback data returned in mock mode
- * @param options     Standard RequestInit options (method, body, etc.)
- * @param retryOn401  Internal flag — set to false on the retry to avoid loops
+ * @param path      API path relative to BASE_URL (e.g. '/subjects')
+ * @param mockData  Fallback data returned in mock mode
+ * @param options   Standard RequestInit options (method, body, etc.)
  */
 export async function apiFetch<T>(
   path: string,
   mockData: T,
-  options?: RequestInit,
-  retryOn401 = true
+  options?: RequestInit
 ): Promise<T> {
   if (IS_MOCK) {
     await new Promise((r) => setTimeout(r, 400));
@@ -139,29 +83,23 @@ export async function apiFetch<T>(
 
   const url = `${BASE_URL}${path}`;
 
-  // Build headers — attach Bearer token when available
+  // Prefer the async Supabase session; fall back to sync localStorage scan
+  const token = (await getAccessTokenAsync()) ?? getAccessToken();
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options?.headers as Record<string, string> | undefined),
   };
-
-  const token = getAccessToken();
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  // FE-01: if no token, we still proceed — public endpoints (login, signup)
-  // don't need one. Protected endpoints will return 401 which we handle below.
 
   const res = await fetch(url, { ...options, headers });
 
-  // Handle 401 — try to refresh once and retry
-  if (res.status === 401 && retryOn401) {
-    const refreshed = await doRefreshToken();
-    if (refreshed) {
-      return apiFetch<T>(path, mockData, options, false);
-    }
-    // Refresh failed — throw a clear auth error so the UI can redirect to login
-    throw new Error('Session expired. Please log in again.');
+  // 401 — session expired; sign out so the auth guard redirects to /auth
+  if (res.status === 401) {
+    await supabase.auth.signOut();
+    throw new Error('Session expired. Please sign in again.');
   }
 
   if (!res.ok) {
@@ -177,7 +115,6 @@ export async function apiFetch<T>(
 
   const body = await res.json();
 
-  // Unwrap { data, status } envelope if present
   if (isApiEnvelope<T>(body)) {
     if (body.status === 'error') {
       throw new Error(body.message ?? 'Unknown API error');
