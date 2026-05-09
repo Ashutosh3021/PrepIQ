@@ -148,6 +148,24 @@ export default function DesktopSubjects() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // ── Delete Subject ──────────────────────────────────────────────────────────
+  const handleDeleteSubject = async () => {
+    if (!deleteConfirm) return;
+    setDeleting(true);
+    try {
+      await subjectsService.delete(deleteConfirm.id);
+      await refresh();
+      setDeleteConfirm(null);
+    } catch (err: unknown) {
+      console.error('Failed to delete subject:', err);
+      setDeleteConfirm(null);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   // ── Sync from Wizard ────────────────────────────────────────────────────────
   const handleSyncFromWizard = async () => {
@@ -223,6 +241,42 @@ export default function DesktopSubjects() {
           />
         )}
 
+        {/* Delete Confirmation Dialog */}
+        {deleteConfirm && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+            onClick={(e) => e.target === e.currentTarget && !deleting && setDeleteConfirm(null)}
+          >
+            <div className="bg-surface w-full max-w-md p-10 relative">
+              <h2 className="font-serif italic text-2xl mb-4 text-on-surface">Delete Subject?</h2>
+              <p className="text-sm text-on-surface/70 mb-6">
+                Are you sure you want to delete <strong>{deleteConfirm.name}</strong>? This will permanently remove the subject and all associated data (papers, questions, predictions, mock tests, study plans, and chat history). This action cannot be undone.
+              </p>
+              <div className="flex gap-4">
+                <button
+                  onClick={() => setDeleteConfirm(null)}
+                  disabled={deleting}
+                  className="flex-1 border border-primary text-primary py-3 text-xs font-bold uppercase tracking-widest hover:bg-primary hover:text-on-primary transition-all disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteSubject}
+                  disabled={deleting}
+                  className="flex-1 bg-error text-on-error py-3 text-xs font-bold uppercase tracking-widest hover:bg-error/90 transition-all disabled:opacity-40 flex items-center justify-center gap-2"
+                >
+                  {deleting && (
+                    <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                    </svg>
+                  )}
+                  {deleting ? 'Deleting…' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Header Row */}
         <header className="flex flex-col md:flex-row justify-between items-end mb-16 gap-6">
           <div className="flex flex-col">
@@ -293,6 +347,7 @@ export default function DesktopSubjects() {
                   progress: deriveSubjectProgress(subject),
                 }}
                 onTrackProgress={() => {}}
+                onDelete={() => setDeleteConfirm({ id: subject.id, name: subject.name })}
               />
             ))
           )}
