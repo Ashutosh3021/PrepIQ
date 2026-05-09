@@ -22,11 +22,13 @@ from .. import models, schemas
 
 # Import model coordinator using absolute imports
 try:
-    from app.services.model_coordinator import model_coordinator
-except ImportError:
+    from app.services.model_coordinator import get_model_coordinator as _get_coordinator
+    model_coordinator = _get_coordinator()
+except Exception:
     try:
-        from services.model_coordinator import model_coordinator
-    except ImportError:
+        from services.model_coordinator import get_model_coordinator as _get_coordinator
+        model_coordinator = _get_coordinator()
+    except Exception:
         model_coordinator = None
         logger.warning("Model coordinator not available - some features may be limited")
 

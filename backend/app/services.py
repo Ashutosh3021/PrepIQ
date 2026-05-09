@@ -1,4 +1,5 @@
 import logging
+import os
 
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List
@@ -77,57 +78,80 @@ class PrepIQService:
     
     def process_uploaded_paper(self, db: Session, paper_id: str) -> Dict[str, Any]:
         """Process an uploaded paper to extract questions and analyze"""
-        # Get the paper record
         paper = db.query(models.QuestionPaper).filter(
             models.QuestionPaper.id == paper_id
         ).first()
-        
+
         if not paper:
             raise ValueError("Paper not found")
 
-        # R-02: guard against PDFParser failing to initialise
         if self.pdf_parser is None:
             raise ValueError("PDF parser service is not available")
-        
-        # Update status to processing
+
         paper.processing_status = "processing"
         db.commit()
-        
+
         try:
-            # Extract text from PDF using enhanced parser
-            text_content = self.pdf_parser.extract_text_from_pdf(paper.file_path)
-            
-            # Extract metadata from PDF
-            metadata = self.pdf_parser.extract_metadata_from_pdf(paper.file_path)
-            
-            # Extract images from PDF (for potential visual analysis)
-            images = self.pdf_parser.extract_images_from_pdf(paper.file_path)
-            
-            # Process images with OCR if available
-            ocr_results = []
-            for img in images:
-                # Placeholder for OCR processing - in real implementation, would use pytesseract
-                # For now, just store image info
-                ocr_results.append({
+            # ── Download file bytes from Supabase Storage ─────────────────────
+            # paper.file_path is a public HTTPS URL — parsers need a local path.
+            # Download via the storage service and write to a temp file.
+            import tempfile
+            from .services.supabase_storage import SupabaseStorageService
+
+            file_bytes = SupabaseStorageService.download_file(
+                paper.s3_key, "question-papers"
+            )
+
+            # Determine extension from the stored clean filename
+            _, raw_ext = os.path.splitext(paper.file_name or "")
+            suffix = raw_ext.lower() or ".bin"
+
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+
+            try:
+                # ── Extract text ──────────────────────────────────────────────
+                text_content = self.pdf_parser.extract_text(tmp_path)
+
+                # ── Extract metadata / images (PDF only) ──────────────────────
+                ext = suffix.lstrip(".")
+                metadata = (
+                    self.pdf_parser.extract_metadata_from_pdf(tmp_path)
+                    if ext == "pdf" else {}
+                )
+                images = (
+                    self.pdf_parser.extract_images_from_pdf(tmp_path)
+                    if ext == "pdf" else []
+                )
+            finally:
+                # Always remove the temp file
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+            # ── OCR placeholder ───────────────────────────────────────────────
+            ocr_results = [
+                {
                     "image_id": img.get("index"),
                     "width": img.get("width"),
                     "height": img.get("height"),
-                    "processed": False
-                })
-            
-            # Parse questions from text with enhanced features
+                    "processed": False,
+                }
+                for img in images
+            ]
+
+            # ── Parse questions ───────────────────────────────────────────────
             questions_data = self.pdf_parser.parse_questions_from_text(text_content)
-            
-            # Remove duplicate questions
             unique_questions = self._remove_duplicate_questions(questions_data)
-            
-            # Update paper with extracted information
+
+            # ── Persist ───────────────────────────────────────────────────────
             paper.raw_text = text_content
-            paper.metadata_json = json.dumps(metadata)  # Store metadata
+            paper.metadata_json = json.dumps(metadata)
             paper.processing_status = "completed"
             paper.processed_at = datetime.now(timezone.utc)
-            
-            # Create question records with enhanced attributes
+
             for q_data in unique_questions:
                 question = models.Question(
                     paper_id=paper.id,
@@ -136,23 +160,26 @@ class PrepIQService:
                     marks=q_data.get("marks", 0),
                     unit_name=q_data.get("unit", "Unknown"),
                     question_type=q_data.get("question_type", "unknown"),
-                    # M-04: PDFParser returns "Hard"/"Easy"/"Medium" — normalise to lowercase
                     difficulty=q_data.get("difficulty", "medium").lower(),
-                    text_length=q_data.get("length", 0)
+                    text_length=q_data.get("length", 0),
                 )
                 db.add(question)
-            
+
             db.commit()
-            
+
             return {
                 "status": "success",
-                "message": f"Successfully processed {len(unique_questions)} unique questions from {len(questions_data)} total",
+                "message": (
+                    f"Successfully processed {len(unique_questions)} unique questions "
+                    f"from {len(questions_data)} total"
+                ),
                 "questions_count": len(unique_questions),
                 "metadata": metadata,
                 "images_extracted": len(images),
                 "ocr_results": ocr_results,
-                "duplicate_removed": len(questions_data) - len(unique_questions)
+                "duplicate_removed": len(questions_data) - len(unique_questions),
             }
+
         except Exception as e:
             paper.processing_status = "failed"
             paper.error_message = str(e)

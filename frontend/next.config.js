@@ -4,6 +4,10 @@ const nextConfig = {
   images: {
     domains: [],
   },
+  turbopack: {
+    // Silence the "multiple lockfiles" warning — our workspace root is the frontend dir
+    root: __dirname,
+  },
 };
 
 module.exports = nextConfig;

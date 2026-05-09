@@ -148,3 +148,5 @@ test/
 WIRING_GUIDE.md
 docs/
 .planning/
+testing/
+bin/

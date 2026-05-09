@@ -1,16 +1,19 @@
 import useSWR from 'swr';
 import { analysisService } from '../services/analysis.service';
+import { useAuth } from '../context/AuthContext';
 import type { Analysis } from '../types/analysis.types';
 
 /**
- * H-16 / M-16: Fetch analysis data for the current user.
- * - Old: called analysisService.getByUserId(userId) → GET /analysis/{userId} (404)
- * - New: calls analysisService.getData() → GET /analysis/data (correct endpoint)
- * - Cache key is the stable string 'analysis/data' (no userId needed).
+ * FIX 3: Scope the SWR cache key to the current user's ID so that switching
+ * accounts never shows stale data from the previous user.
+ * Key is null until the session resolves, which disables fetching.
  */
 export function useAnalysis() {
+  const { user } = useAuth();
+  const cacheKey = user?.id ? `analysis/data/${user.id}` : null;
+
   const { data, error, isLoading, mutate } = useSWR<Analysis>(
-    'analysis/data',
+    cacheKey,
     () => analysisService.getData()
   );
 

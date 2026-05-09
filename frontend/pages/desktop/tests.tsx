@@ -65,6 +65,7 @@ export default function DesktopTests() {
             {testDomains.map((domain) => (
               <button
                 key={domain.name}
+                onClick={() => router.push('/desktop/generate-test')}
                 className="group flex flex-col items-start p-8 bg-primary text-white border-r border-white/10 last:border-r-0 hover:bg-primary/90 transition-colors duration-200"
               >
                 <span className="mb-6 text-4xl">

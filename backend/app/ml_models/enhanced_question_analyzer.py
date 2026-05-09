@@ -184,8 +184,9 @@ class EnhancedQuestionAnalyzer:
                     nr_topics=10,  # Target number of topics
                     min_topic_size=5,
                     low_memory=True,
-                    calculate_probabilities=True,
-                    seed=42
+                    calculate_probabilities=True
+                    # seed is not a valid BERTopic param — reproducibility is
+                    # controlled via random_state=42 on the umap_model above
                 )
             except Exception as e:
                 logger.error(f"Failed to initialize BERTopic model: {e}")

@@ -51,7 +51,9 @@ class SupabaseStorageService:
                     "content-type": mimetypes.guess_type(file_name)[0] or "application/octet-stream"
                 },
             )
-            return client.storage.from_(bucket_name).get_public_url(file_name)
+            url = client.storage.from_(bucket_name).get_public_url(file_name)
+            # Supabase SDK sometimes appends a bare '?' with no query params — strip it
+            return url.rstrip("?")
         except HTTPException:
             raise
         except Exception as e:

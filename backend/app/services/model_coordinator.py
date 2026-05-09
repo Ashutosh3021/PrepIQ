@@ -10,6 +10,63 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# ── Conditional heavy-dependency imports ─────────────────────────────────────
+# Track which optional models are available so callers can route to fallbacks.
+
+AVAILABLE_MODELS: set = set()
+
+try:
+    import easyocr as _easyocr
+    AVAILABLE_MODELS.add("easyocr")
+except ImportError:
+    _easyocr = None
+    logger.info("easyocr not installed — OCR will be skipped")
+
+try:
+    from ultralytics import YOLO as _YOLO
+    AVAILABLE_MODELS.add("yolo")
+except ImportError:
+    _YOLO = None
+    logger.info("ultralytics not installed — YOLOv8 will be skipped")
+
+try:
+    from transformers import pipeline as _hf_pipeline
+    from PIL import Image as _PILImage
+    AVAILABLE_MODELS.add("transformers")
+except ImportError:
+    _hf_pipeline = None
+    _PILImage = None
+    logger.info("transformers/Pillow not installed — GroundingDINO will be skipped")
+
+try:
+    from bytez import Bytez as _Bytez
+    AVAILABLE_MODELS.add("bytez")
+except ImportError:
+    _Bytez = None
+    logger.info("bytez not installed — Bytez models will be skipped")
+
+try:
+    import google.generativeai as _genai
+    AVAILABLE_MODELS.add("gemini")
+except ImportError:
+    _genai = None
+    logger.info("google-generativeai not installed — Gemini models will be skipped")
+
+logger.info(f"ModelCoordinator available backends: {AVAILABLE_MODELS or {'none'}}")
+
+# Module-level singleton — created once on first import so upload.py can use it directly.
+_coordinator_instance = None
+
+def get_model_coordinator() -> "ModelCoordinator":
+    """Return the shared ModelCoordinator singleton."""
+    global _coordinator_instance
+    if _coordinator_instance is None:
+        _coordinator_instance = ModelCoordinator()
+    return _coordinator_instance
+
+# Convenience alias used by upload.py: `from app.services.model_coordinator import model_coordinator`
+model_coordinator = None  # populated lazily on first access via get_model_coordinator()
+
 @dataclass
 class ModelConfig:
     """Configuration for each model"""
@@ -166,10 +223,9 @@ class ModelCoordinator:
         }
         
         # Step 1: EasyOCR
-        if self.models['easyocr'].enabled:
+        if self.models['easyocr'].enabled and _easyocr is not None:
             try:
-                import easyocr
-                reader = easyocr.Reader(['en'], gpu=False)
+                reader = _easyocr.Reader(['en'], gpu=False)
                 ocr_results = reader.readtext(image_path)
                 
                 if ocr_results:
@@ -182,12 +238,13 @@ class ModelCoordinator:
             except Exception as e:
                 result["pipeline_status"].append(f"[ERROR] EasyOCR: {str(e)}")
                 logger.error(f"EasyOCR error: {e}")
+        else:
+            result["pipeline_status"].append("[SKIP] EasyOCR: not installed")
         
         # Step 2: YOLOv8 (always run for object detection)
-        if self.models['yolo'].enabled:
+        if self.models['yolo'].enabled and _YOLO is not None:
             try:
-                from ultralytics import YOLO
-                model = YOLO(self.models['yolo'].model_id)
+                model = _YOLO(self.models['yolo'].model_id)
                 yolo_results = model(image_path, verbose=False)
                 
                 for r in yolo_results:
@@ -202,20 +259,19 @@ class ModelCoordinator:
             except Exception as e:
                 result["pipeline_status"].append(f"[ERROR] YOLOv8: {str(e)}")
                 logger.error(f"YOLOv8 error: {e}")
+        else:
+            result["pipeline_status"].append("[SKIP] YOLOv8: not installed")
         
         # Step 3: GroundingDINO (run if low text detected)
         text_length = len(result["text"][0]) if result["text"] else 0
-        if text_length < 100 and self.models['groundingdino'].enabled:
+        if text_length < 100 and self.models['groundingdino'].enabled and _hf_pipeline is not None and _PILImage is not None:
             try:
-                from transformers import pipeline
-                from PIL import Image
-                
-                detector = pipeline(
+                detector = _hf_pipeline(
                     "zero-shot-object-detection",
                     model=self.models['groundingdino'].model_id
                 )
                 
-                image = Image.open(image_path)
+                image = _PILImage.open(image_path)
                 circuit_results = detector(
                     image,
                     candidate_labels=["circuit diagram", "electronic schematic", "wiring diagram"],
@@ -228,6 +284,8 @@ class ModelCoordinator:
             except Exception as e:
                 result["pipeline_status"].append(f"[ERROR] GroundingDINO: {str(e)}")
                 logger.error(f"GroundingDINO error: {e}")
+        else:
+            result["pipeline_status"].append("[SKIP] GroundingDINO: not installed or text sufficient")
         
         return result
     
@@ -235,11 +293,13 @@ class ModelCoordinator:
     
     def _get_bytez_sdk(self):
         """Get Bytez SDK instance"""
+        if _Bytez is None:
+            logger.warning("Bytez SDK not installed — install with: pip install bytez")
+            return None
         try:
-            from bytez import Bytez
-            return Bytez(self.models['qa'].api_key)
-        except ImportError:
-            logger.error("Bytez SDK not installed")
+            return _Bytez(self.models['qa'].api_key)
+        except Exception as e:
+            logger.error(f"Bytez SDK init error: {e}")
             return None
     
     async def answer_question(self, context: str, question: str) -> Dict[str, Any]:
@@ -338,10 +398,12 @@ class ModelCoordinator:
     
     def _get_gemini_model(self):
         """Get Gemini model instance"""
+        if _genai is None:
+            logger.warning("google-generativeai not installed — install with: pip install google-generativeai")
+            return None
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=self.models['gemini_chat'].api_key)
-            return genai.GenerativeModel(self.models['gemini_chat'].model_id)
+            _genai.configure(api_key=self.models['gemini_chat'].api_key)
+            return _genai.GenerativeModel(self.models['gemini_chat'].model_id)
         except Exception as e:
             logger.error(f"Failed to initialize Gemini: {e}")
             return None

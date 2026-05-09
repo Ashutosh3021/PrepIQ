@@ -158,7 +158,8 @@ def verify_password_reset_token(token: str) -> Optional[str]:
     try:
         decoded_token = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
         return decoded_token["sub"]
-    except jwt.JWTError:
+    except Exception:
+        # PyJWT v2 uses jwt.exceptions.PyJWTError; catch all JWT-related errors
         return None
 
 

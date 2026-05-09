@@ -296,6 +296,43 @@ def create_app() -> FastAPI:
                     "error": str(e)
                 }
             )
+
+    @app.get("/health/auth", tags=["Health"])
+    async def auth_health_check():
+        """Check whether the Supabase auth service is reachable and configured."""
+        supabase_url = os.getenv("SUPABASE_URL", "")
+        supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "")
+
+        if not supabase_url or not supabase_key:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "error",
+                    "auth_service": "unconfigured",
+                    "message": "SUPABASE_URL or SUPABASE_SERVICE_KEY is not set",
+                }
+            )
+
+        try:
+            from supabase import create_client
+            client = create_client(supabase_url, supabase_key)
+            # Lightweight probe: list users with limit=1 (service-role only)
+            client.auth.admin.list_users(page=1, per_page=1)
+            return {
+                "status": "ok",
+                "auth_service": "reachable",
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        except Exception as e:
+            logger.warning(f"Auth health check failed: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "error",
+                    "auth_service": "unreachable",
+                    "message": str(e),
+                }
+            )
     
     @app.get("/", tags=["Root"])
     async def root():

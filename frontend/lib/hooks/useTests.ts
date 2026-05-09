@@ -1,16 +1,22 @@
 import useSWR, { mutate } from 'swr';
+import { useAuth } from '../context/AuthContext';
 import { testsService, BackendTest, BackendTestResult, BackendTestResults } from '../services/tests.service';
 
+/**
+ * FIX 4: Scope the SWR cache key to the current user's ID so that switching
+ * accounts never shows stale tests from the previous user.
+ * Key is null until the session resolves, which disables fetching.
+ */
 export function useTests() {
-  const { data, error, isLoading } = useSWR<BackendTest[]>('tests', testsService.getAll);
+  const { user } = useAuth();
+  const cacheKey = user?.id ? `tests/${user.id}` : null;
 
-  /**
-   * M-17 / FE-05: submitTest now accepts a Record<string, string> (questionId → answer)
-   * and sends it directly to the backend. No local scoring.
-   */
+  const { data, error, isLoading } = useSWR<BackendTest[]>(cacheKey, testsService.getAll);
+
   const submitTest = async (id: string, answers: Record<string, string>): Promise<BackendTestResult> => {
     const result = await testsService.submitTest(id, answers);
-    mutate('tests');
+    // Invalidate the user-scoped cache key after submission
+    if (cacheKey) mutate(cacheKey);
     return result;
   };
 

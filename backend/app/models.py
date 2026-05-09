@@ -179,6 +179,7 @@ class Question(Base):
     topics_json = Column(JSON, nullable=True)  # ["Binary Search", "Complexity Analysis"]
     question_type = Column(String(50), nullable=True)  # mcq, short_answer, numerical, essay
     difficulty = Column(String(20), nullable=True)  # easy, medium, hard  (DB column: difficulty)
+    correct_answer = Column(String(500), nullable=True)  # Store correct answer for scoring
 
     # Metadata
     section_name = Column(String(100), nullable=True)  # Part A, Part B, Section I

@@ -32,7 +32,9 @@ export function useSubjects() {
   // Scope cache key to the current user; null key disables fetching until userId resolves.
   const cacheKey = userId ? ['subjects', userId] : null;
 
-  const { data, error, isLoading, mutate } = useSWR<Subject[]>(cacheKey, fetchSubjects);
+  const { data, error, isLoading, mutate } = useSWR<Subject[]>(cacheKey, fetchSubjects, {
+    revalidateOnFocus: false,
+  });
 
   return {
     subjects: data ?? [],

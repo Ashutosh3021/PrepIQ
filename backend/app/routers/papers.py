@@ -7,8 +7,23 @@ from datetime import datetime, timezone
 import uuid
 import asyncio
 import logging
-import mimetypes
 from concurrent.futures import ThreadPoolExecutor
+
+
+def _safe_ext(filename: str) -> str:
+    """
+    Extract the file extension robustly.
+
+    Handles filenames that contain query-string fragments leaked from the
+    browser (e.g. 'report.docx?token=abc') which cause os.path.splitext to
+    return '.docx?' instead of '.docx'.
+    """
+    if not filename:
+        return ""
+    # Strip everything from the first '?' onward
+    clean = filename.split("?")[0].rstrip()
+    _, ext = os.path.splitext(clean)
+    return ext.lower()
 
 logger = logging.getLogger(__name__)
 
@@ -42,143 +57,148 @@ router = APIRouter(
 # Supabase Storage bucket for question papers
 STORAGE_BUCKET = "question-papers"
 
-# File size limit (10MB)
-MAX_FILE_SIZE = 10 * 1024 * 1024
+# Per-file size limit (20MB — increased to accommodate PPTX/DOCX)
+MAX_FILE_SIZE = 20 * 1024 * 1024
 
-# Allowed file extensions
-ALLOWED_EXTENSIONS = {".pdf"}
+# Allowed file extensions and their MIME types
+ALLOWED_EXTENSIONS = {
+    ".pdf":  ["application/pdf"],
+    ".docx": ["application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              "application/msword"],
+    ".doc":  ["application/msword",
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+    ".pptx": ["application/vnd.openxmlformats-officedocument.presentationml.presentation",
+              "application/vnd.ms-powerpoint"],
+    ".ppt":  ["application/vnd.ms-powerpoint",
+              "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+}
 
-@router.post("/upload", response_model=schemas.PaperUploadResponse)
-async def upload_paper(
-    file: UploadFile = File(...),
-    subject_id: str = Form(...),   # H-25: must be Form(...) for multipart uploads
+@router.post("/upload", response_model=List[schemas.PaperUploadResponse])
+async def upload_papers(
+    files: List[UploadFile] = File(...),
+    subject_id: str = Form(...),
     exam_year: int = Form(None),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Validate file type
-    file_ext = os.path.splitext(file.filename)[1].lower()
-    if file_ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Only {', '.join(ALLOWED_EXTENSIONS)} files are allowed"
-        )
-    
-    # Validate file content type
-    content_type = file.content_type
-    if content_type != "application/pdf":
-        # Try to detect content type from file extension if not provided
-        mime_type, _ = mimetypes.guess_type(file.filename)
-        if mime_type != "application/pdf":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File must be a valid PDF"
-            )
-    
-    # Check file size (10MB limit) while reading — stop accumulating on breach
-    # BUG-H08: raise 413 as soon as the running total exceeds the limit so we
-    # never buffer more than MAX_FILE_SIZE + 8KB in memory.
-    file_content = b""
-    total_size = 0
+    """
+    Upload one or more question papers (PDF, DOCX, PPTX).
+    Each file is stored in Supabase Storage and processed independently.
+    Returns a list of results — one per file.
+    """
+    if not files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No files provided")
 
-    while True:
-        chunk = await file.read(8192)  # Read 8KB at a time
-        if not chunk:
-            break
-        total_size += len(chunk)
-        if total_size > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="File size exceeds 10MB limit"
-            )
-        file_content += chunk
-    
-    # file_content now holds the complete PDF bytes — no seek needed
-    
-    # Validate subject exists and belongs to user
+    # Validate subject once for all files
     subject = db.query(models.Subject).filter(
         models.Subject.id == subject_id,
         models.Subject.user_id == current_user["id"]
     ).first()
-    
     if not subject:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Subject not found"
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
+
+    results = []
+
+    for file in files:
+        # ── Validate extension ────────────────────────────────────────────────
+        file_ext = _safe_ext(file.filename or "")
+        if file_ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File '{file.filename}': unsupported type '{file_ext}'. "
+                       f"Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+            )
+
+        # ── Read with size guard ──────────────────────────────────────────────
+        file_content = b""
+        total_size = 0
+        while True:
+            chunk = await file.read(8192)
+            if not chunk:
+                break
+            total_size += len(chunk)
+            if total_size > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"File '{file.filename}' exceeds {MAX_FILE_SIZE // (1024*1024)} MB limit"
+                )
+            file_content += chunk
+
+        # ── Upload to Supabase Storage ────────────────────────────────────────
+        # Use the clean filename (no query-string) for the storage key
+        clean_filename = (file.filename or "upload").split("?")[0].rstrip()
+        unique_filename = f"{uuid.uuid4()}_{current_user['id']}_{subject_id}_{clean_filename}"
+        try:
+            public_url = SupabaseStorageService.upload_file(
+                file_content, unique_filename, STORAGE_BUCKET
+            )
+        except Exception as e:
+            logger.error(f"Storage upload failed for '{file.filename}': {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Storage error for '{file.filename}': {str(e)}"
+            )
+
+        # ── Create DB record ──────────────────────────────────────────────────
+        paper = models.QuestionPaper(
+            subject_id=subject_id,
+            file_name=clean_filename,   # store clean name, not the raw one with '?'
+            file_path=public_url,
+            s3_key=unique_filename,
+            file_size_bytes=total_size,
+            exam_year=exam_year,
+            processing_status="processing"
         )
-    
-    # Generate unique filename to avoid conflicts
-    unique_filename = f"{uuid.uuid4()}_{current_user['id']}_{subject_id}_{file.filename}"
-    
-    # Upload file to Supabase Storage
-    try:
-        public_url = SupabaseStorageService.upload_file(
-            file_content, 
-            unique_filename, 
-            STORAGE_BUCKET
-        )
-        s3_key = unique_filename  # Store the key used in Supabase
-    except Exception as e:
-        logger.error(f"Error uploading file to Supabase: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error uploading file to storage"
-        )
-    
-    # Create paper record
-    paper = models.QuestionPaper(
-        subject_id=subject_id,
-        file_name=file.filename,
-        file_path=public_url,  # Store the public URL
-        s3_key=s3_key,  # Store the key used in Supabase
-        file_size_bytes=total_size,
-        exam_year=exam_year,
-        processing_status="processing"
-    )
-    db.add(paper)
-    db.commit()
-    db.refresh(paper)
-    
-    # Process the paper asynchronously with a NEW session for the thread
-    try:
-        service = get_prepiq_service()
-        
-        # Create a wrapper that creates its own session for thread-safe DB access
-        def process_with_new_session():
-            thread_db = get_new_db_session()
-            try:
-                return service.process_uploaded_paper(thread_db, paper.id)
-            finally:
-                thread_db.close()
-        
-        result = await asyncio.get_event_loop().run_in_executor(
-            _upload_executor,
-            process_with_new_session
-        )
-        
-        paper.processing_status = "completed"
-        paper.processed_at = datetime.now(timezone.utc)
+        db.add(paper)
         db.commit()
-        
-        return {
-            "paper_id": paper.id,
-            "status": "completed",
-            "message": result["message"],
-            "estimated_time": "2-3 minutes",
-            "questions_count": result.get("questions_count", 0),
-            "metadata": result.get("metadata", {}),
-            "images_extracted": result.get("images_extracted", 0)
-        }
-    except Exception as e:
-        paper.processing_status = "failed"
-        paper.error_message = str(e)
-        db.commit()
-        
-        logger.error(f"Error processing paper {paper.id}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing paper: {str(e)}"
-        )
+        db.refresh(paper)
+
+        # ── Process asynchronously ────────────────────────────────────────────
+        try:
+            service = get_prepiq_service()
+
+            def process_with_new_session():
+                thread_db = get_new_db_session()
+                try:
+                    return service.process_uploaded_paper(thread_db, paper.id)
+                finally:
+                    thread_db.close()
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                _upload_executor, process_with_new_session
+            )
+
+            paper.processing_status = "completed"
+            paper.processed_at = datetime.now(timezone.utc)
+            db.commit()
+
+            results.append({
+                "paper_id": paper.id,
+                "status": "completed",
+                "message": result["message"],
+                "estimated_time": "0",
+                "questions_count": result.get("questions_count", 0),
+                "metadata": result.get("metadata", {}),
+                "images_extracted": result.get("images_extracted", 0),
+            })
+
+        except Exception as e:
+            paper.processing_status = "failed"
+            paper.error_message = str(e)
+            db.commit()
+            logger.error(f"Processing failed for paper {paper.id} ('{file.filename}'): {e}")
+            # Don't abort the whole batch — report this file as failed and continue
+            results.append({
+                "paper_id": paper.id,
+                "status": "failed",
+                "message": f"Processing failed: {str(e)}",
+                "estimated_time": "0",
+                "questions_count": 0,
+                "metadata": {},
+                "images_extracted": 0,
+            })
+
+    return results
 
 # More specific routes must come before parameterized routes to avoid conflicts
 

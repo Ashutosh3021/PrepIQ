@@ -163,6 +163,8 @@ async def submit_test(
         incorrect_count = 0
         skipped_count = 0
         total_marks_obtained = 0
+        weak_topics = []
+        strong_topics = []
 
         for q in questions_data:
             q_id = str(q.get("id", ""))
@@ -176,14 +178,21 @@ async def submit_test(
                 if q.get("correct_answer")
                 else ""
             )
+            unit = q.get("unit", "General")
 
             if not user_answer:
                 skipped_count += 1
+                if unit not in weak_topics:
+                    weak_topics.append(unit)
             elif user_answer == correct_answer:
                 correct_count += 1
                 total_marks_obtained += q.get("marks", 0)
+                if unit not in strong_topics:
+                    strong_topics.append(unit)
             else:
                 incorrect_count += 1
+                if unit not in weak_topics:
+                    weak_topics.append(unit)
 
         percentage = (
             (total_marks_obtained / test.total_marks * 100) if test.total_marks > 0 else 0
@@ -193,6 +202,8 @@ async def submit_test(
         test.correct_count = correct_count
         test.incorrect_count = incorrect_count
         test.skipped_count = skipped_count
+        test.weak_topics_json = json.dumps(weak_topics[:5])
+        test.strong_topics_json = json.dumps(strong_topics[:5])
     else:
         # C-08: no fake scores — mark everything as skipped/zero
         test.score = 0
@@ -355,4 +366,72 @@ async def get_test_results(
             if weak_topics
             else ["Keep up the good work!", "Try a harder difficulty level"]
         ),
+    }
+
+
+@router.get("/progress", response_model=dict)
+async def get_test_progress(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get test progress and analytics for the current user"""
+    tests = db.query(models.MockTest).filter(
+        models.MockTest.user_id == current_user["id"],
+        models.MockTest.is_completed == True
+    ).order_by(models.MockTest.created_at).all()
+
+    if not tests:
+        return {
+            "total_tests": 0,
+            "average_score": 0,
+            "average_percentage": 0,
+            "trend": [],
+            "weak_topics": {},
+            "strong_topics": {},
+        }
+
+    total_tests = len(tests)
+    total_score = sum(test.score or 0 for test in tests)
+    average_score = total_score / total_tests if total_tests > 0 else 0
+    average_percentage = sum(test.percentage or 0 for test in tests) / total_tests if total_tests > 0 else 0
+
+    # Build trend data
+    trend = []
+    for i, test in enumerate(tests):
+        trend.append({
+            "test_number": i + 1,
+            "score": float(test.score or 0),
+            "percentage": float(test.percentage or 0),
+            "date": test.created_at.isoformat() if test.created_at else None,
+            "total_marks": test.total_marks or 0,
+        })
+
+    # Aggregate weak and strong topics
+    weak_topics_dict = {}
+    strong_topics_dict = {}
+
+    for test in tests:
+        if test.weak_topics_json:
+            try:
+                weak = json.loads(test.weak_topics_json) if isinstance(test.weak_topics_json, str) else test.weak_topics_json
+                for topic in weak:
+                    weak_topics_dict[topic] = weak_topics_dict.get(topic, 0) + 1
+            except Exception:
+                pass
+
+        if test.strong_topics_json:
+            try:
+                strong = json.loads(test.strong_topics_json) if isinstance(test.strong_topics_json, str) else test.strong_topics_json
+                for topic in strong:
+                    strong_topics_dict[topic] = strong_topics_dict.get(topic, 0) + 1
+            except Exception:
+                pass
+
+    return {
+        "total_tests": total_tests,
+        "average_score": round(average_score, 2),
+        "average_percentage": round(average_percentage, 2),
+        "trend": trend,
+        "weak_topics": weak_topics_dict,
+        "strong_topics": strong_topics_dict,
     }

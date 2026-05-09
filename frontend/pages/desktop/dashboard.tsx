@@ -51,6 +51,7 @@ export default function DesktopDashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [activityItems, setActivityItems] = useState<BackendActivityItem[]>([]);
   const [loadingStats, setLoadingStats] = useState(true);
+  const [backendOffline, setBackendOffline] = useState(false);
 
   // M-19: fetch real dashboard stats and recent activity
   useEffect(() => {
@@ -66,6 +67,7 @@ export default function DesktopDashboard() {
           recent_activity: [],
         });
         setStats(statsData);
+        setBackendOffline(false);
 
         // M-19: fetch real recent activity from the dedicated endpoint
         const activity = await apiFetch<BackendActivityItem[]>(
@@ -74,7 +76,13 @@ export default function DesktopDashboard() {
         );
         setActivityItems(activity);
       } catch (err) {
-        console.warn('Dashboard API unavailable:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        // "Failed to fetch" = backend not running; anything else = API error
+        const isOffline =
+          msg.includes('Failed to fetch') ||
+          msg.includes('NetworkError') ||
+          msg.includes('ECONNREFUSED');
+        setBackendOffline(isOffline);
         setStats({
           subjects_count: 0,
           predictions_count: 0,
@@ -149,6 +157,36 @@ export default function DesktopDashboard() {
         <meta name="description" content="PrepIQ Desktop Dashboard - Your study overview" />
       </Head>
       <DesktopLayout>
+        {/* Backend offline banner */}
+        {backendOffline && (
+          <div className="mb-8 flex items-start gap-3 px-5 py-4 bg-amber-50 border border-amber-300 text-amber-800 text-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <div className="flex-1">
+              <p className="font-semibold">Backend server is not running</p>
+              <p className="text-xs mt-0.5 text-amber-700">
+                Stats are unavailable. Start the backend with{' '}
+                <code className="font-mono bg-amber-100 px-1 rounded">
+                  cd backend &amp;&amp; python start_server.py
+                </code>{' '}
+                then refresh this page.
+              </p>
+            </div>
+            <button
+              onClick={() => setBackendOffline(false)}
+              className="text-amber-500 hover:text-amber-700 transition-colors shrink-0"
+              aria-label="Dismiss"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        )}
+
         {/* Hero Section — M-19: real user name */}
         <section className="mb-16">
           <h1 className="text-6xl font-serif italic text-on-surface mb-2 tracking-tight">
