@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Head from 'next/head';
 import { DesktopLayout } from '@/components/desktop';
 import { Skeleton } from '@/components/common';
@@ -12,6 +12,20 @@ interface UploadResult {
   status: 'completed' | 'failed' | string;
   message: string;
   questions_count: number;
+}
+
+interface UploadProgress {
+  upload_id: string;
+  status: string;
+  overall_progress: number;
+  current_file: string;
+  current_step: string;
+  files_processed: number;
+  total_files: number;
+  questions_extracted: number;
+  errors: string[];
+  start_time: string;
+  end_time?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -46,8 +60,10 @@ export default function DesktopUpload() {
   const [uploading, setUploading] = useState(false);
   const [results, setResults] = useState<UploadResult[]>([]);
   const [error, setError] = useState('');
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -74,7 +90,6 @@ export default function DesktopUpload() {
     }
 
     setSelectedFiles((prev) => {
-      // Deduplicate by name
       const names = new Set(prev.map((f) => f.name));
       return [...prev, ...valid.filter((f) => !names.has(f.name))];
     });
@@ -83,12 +98,39 @@ export default function DesktopUpload() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     validateAndSetFiles(e.target.files);
-    // Reset input so the same file can be re-added after removal
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const removeFile = (name: string) => {
     setSelectedFiles((prev) => prev.filter((f) => f.name !== name));
+  };
+
+  const pollProgress = async (uploadId: string, token: string) => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? '';
+      const res = await fetch(`${apiUrl}/upload/status/${uploadId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        setUploadProgress(data);
+        
+        // Stop polling when complete or failed
+        if (data.status === 'completed' || data.status === 'failed') {
+          if (progressIntervalRef.current) {
+            clearInterval(progressIntervalRef.current);
+          }
+          
+          if (data.status === 'completed') {
+            setUploading(false);
+            setSelectedFiles([]);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to poll progress:', err);
+    }
   };
 
   const handleUpload = async () => {
@@ -101,6 +143,7 @@ export default function DesktopUpload() {
     setUploading(true);
     setError('');
     setResults([]);
+    setUploadProgress(null);
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? '';
@@ -108,7 +151,7 @@ export default function DesktopUpload() {
       selectedFiles.forEach((f) => formData.append('files', f));
       formData.append('subject_id', selectedSubjectId);
 
-      const res = await fetch(`${apiUrl}/papers/upload`, {
+      const res = await fetch(`${apiUrl}/upload`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
@@ -119,14 +162,42 @@ export default function DesktopUpload() {
         throw new Error(data.detail ?? `Upload failed (${res.status})`);
       }
 
+      // Start polling progress
+      if (data.upload_id) {
+        setUploadProgress({
+          upload_id: data.upload_id,
+          status: 'processing',
+          overall_progress: 0,
+          current_file: '',
+          current_step: 'Starting...',
+          files_processed: 0,
+          total_files: selectedFiles.length,
+          questions_extracted: 0,
+          errors: [],
+          start_time: new Date().toISOString(),
+        });
+
+        // Poll every 500ms
+        progressIntervalRef.current = setInterval(() => {
+          pollProgress(data.upload_id, token);
+        }, 500);
+      }
+
       setResults(Array.isArray(data) ? data : [data]);
-      setSelectedFiles([]);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed. Please try again.');
-    } finally {
       setUploading(false);
     }
   };
+
+  // Cleanup interval on unmount
+  useEffect(() => {
+    return () => {
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+      }
+    };
+  }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -306,6 +377,62 @@ export default function DesktopUpload() {
             {error && (
               <div className="p-4 bg-red-50 border border-red-300 text-red-700 text-sm">
                 {error}
+              </div>
+            )}
+
+            {/* Real-time Progress Display */}
+            {uploadProgress && (
+              <div className="space-y-4 p-6 bg-blue-50 border border-blue-300 rounded">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-blue-900">Upload Progress</h3>
+                  <span className="text-sm font-semibold text-blue-700">{uploadProgress.overall_progress}%</span>
+                </div>
+
+                {/* Main Progress Bar */}
+                <div className="w-full bg-blue-200 rounded-full h-3 overflow-hidden">
+                  <div
+                    className="bg-blue-600 h-full transition-all duration-300"
+                    style={{ width: `${uploadProgress.overall_progress}%` }}
+                  />
+                </div>
+
+                {/* Status Info */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                  <div>
+                    <p className="text-xs text-blue-700 uppercase font-bold">Status</p>
+                    <p className="font-semibold text-blue-900 capitalize">{uploadProgress.status}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-blue-700 uppercase font-bold">Files</p>
+                    <p className="font-semibold text-blue-900">{uploadProgress.files_processed}/{uploadProgress.total_files}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-blue-700 uppercase font-bold">Questions</p>
+                    <p className="font-semibold text-blue-900">{uploadProgress.questions_extracted}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-blue-700 uppercase font-bold">Current Step</p>
+                    <p className="font-semibold text-blue-900 truncate">{uploadProgress.current_step}</p>
+                  </div>
+                </div>
+
+                {/* Current File */}
+                {uploadProgress.current_file && (
+                  <div className="text-sm">
+                    <p className="text-xs text-blue-700 uppercase font-bold mb-1">Processing</p>
+                    <p className="text-blue-900 truncate">{uploadProgress.current_file}</p>
+                  </div>
+                )}
+
+                {/* Errors */}
+                {uploadProgress.errors.length > 0 && (
+                  <div className="text-sm">
+                    <p className="text-xs text-red-700 uppercase font-bold mb-1">Errors</p>
+                    {uploadProgress.errors.map((err, idx) => (
+                      <p key={idx} className="text-red-700 text-xs">{err}</p>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

@@ -5,7 +5,7 @@ EasyOCR → YOLOv8 → GroundingDINO → Analysis
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Header, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict
 import os
 import shutil
 from pathlib import Path
@@ -13,9 +13,13 @@ from datetime import datetime
 import logging
 import asyncio
 import sys
+import json
 
 # Setup logging first
 logger = logging.getLogger(__name__)
+
+# In-memory progress tracking (use Redis in production)
+upload_progress: Dict[str, dict] = {}
 
 from ..database import get_db
 from .. import models, schemas
@@ -63,14 +67,23 @@ async def upload_and_analyze(
     db: Session = Depends(get_db)
 ):
     """
-    Upload study materials and process through ML pipeline.
-    
-    Pipeline:
-    1. EasyOCR - Extract text from images
-    2. YOLOv8 - Detect objects/animals in images
-    3. GroundingDINO - Detect circuit diagrams/schematics
-    4. Analysis - Extract questions and patterns
+    Upload study materials and process through ML pipeline with real-time progress tracking.
     """
+    upload_id = f"{current_user['id']}_{datetime.now().timestamp()}"
+    
+    # Initialize progress tracking
+    upload_progress[upload_id] = {
+        "status": "initializing",
+        "overall_progress": 0,
+        "current_file": "",
+        "current_step": "Initializing...",
+        "files_processed": 0,
+        "total_files": len(files),
+        "questions_extracted": 0,
+        "errors": [],
+        "start_time": datetime.now().isoformat()
+    }
+    
     try:
         # Verify subject belongs to user
         subject = db.query(models.Subject).filter(
@@ -95,7 +108,11 @@ async def upload_and_analyze(
         logger.info(f"Starting upload processing for user {current_user['id']}, subject {subject_id}")
         
         # Process each file
-        for file in files:
+        for file_idx, file in enumerate(files):
+            upload_progress[upload_id]["current_file"] = file.filename
+            upload_progress[upload_id]["current_step"] = f"Saving file {file_idx + 1}/{len(files)}"
+            upload_progress[upload_id]["overall_progress"] = int((file_idx / len(files)) * 100)
+            
             timestamp = datetime.now().timestamp()
             file_path = UPLOAD_DIR / f"{timestamp}_{file.filename}"
             
@@ -108,8 +125,9 @@ async def upload_and_analyze(
             
             # Process based on file type
             if file.content_type and file.content_type.startswith("image"):
-                # Process image through coordinated ML pipeline
-                # Models: EasyOCR → YOLOv8 → GroundingDINO
+                upload_progress[upload_id]["current_step"] = f"Processing image: {file.filename}"
+                upload_progress[upload_id]["overall_progress"] = int(((file_idx + 0.3) / len(files)) * 100)
+                
                 if model_coordinator:
                     image_result = await model_coordinator.process_image_pipeline(str(file_path))
                     extracted_data["text_content"].extend(image_result.get("text", []))
@@ -117,14 +135,15 @@ async def upload_and_analyze(
                     extracted_data["circuit_diagrams"].extend(image_result.get("circuits", []))
                     logger.info(f"Image pipeline status: {image_result.get('pipeline_status', [])}")
                 else:
-                    # Fallback to local function if coordinator not available
                     image_result = await process_image_pipeline(str(file_path))
                     extracted_data["text_content"].extend(image_result.get("text", []))
                     extracted_data["detected_objects"].extend(image_result.get("objects", []))
                     extracted_data["circuit_diagrams"].extend(image_result.get("circuits", []))
                 
             elif file.content_type and file.content_type.startswith("text"):
-                # Read text file
+                upload_progress[upload_id]["current_step"] = f"Reading text file: {file.filename}"
+                upload_progress[upload_id]["overall_progress"] = int(((file_idx + 0.3) / len(files)) * 100)
+                
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
                         content = f.read()
@@ -132,17 +151,29 @@ async def upload_and_analyze(
                         logger.info(f"Extracted text from {file.filename}")
                 except Exception as e:
                     logger.warning(f"Could not read text file {file.filename}: {e}")
+                    upload_progress[upload_id]["errors"].append(f"Error reading {file.filename}: {str(e)}")
                 
             elif file.content_type and "pdf" in file.content_type:
-                # Process PDF
+                upload_progress[upload_id]["current_step"] = f"Extracting PDF: {file.filename}"
+                upload_progress[upload_id]["overall_progress"] = int(((file_idx + 0.3) / len(files)) * 100)
+                
                 pdf_result = await process_pdf(str(file_path))
                 extracted_data["text_content"].extend(pdf_result.get("text", []))
+            
+            upload_progress[upload_id]["files_processed"] = file_idx + 1
+            upload_progress[upload_id]["overall_progress"] = int(((file_idx + 0.5) / len(files)) * 100)
         
         # Extract questions from content
+        upload_progress[upload_id]["current_step"] = "Extracting questions..."
+        upload_progress[upload_id]["overall_progress"] = 70
         logger.info("Extracting questions from content...")
         extracted_data["questions"] = extract_questions(extracted_data["text_content"])
+        upload_progress[upload_id]["questions_extracted"] = len(extracted_data["questions"])
         
-        # Create a QuestionPaper record to associate questions with
+        # Create a QuestionPaper record
+        upload_progress[upload_id]["current_step"] = "Saving to database..."
+        upload_progress[upload_id]["overall_progress"] = 80
+        
         question_paper = models.QuestionPaper(
             subject_id=subject_id,
             file_name=files[0].filename if files else "uploaded_material",
@@ -157,7 +188,7 @@ async def upload_and_analyze(
         # Save questions to database
         logger.info(f"Saving {len(extracted_data['questions'])} questions to database...")
         saved_questions = []
-        for q_data in extracted_data["questions"]:
+        for q_idx, q_data in enumerate(extracted_data["questions"]):
             question = models.Question(
                 paper_id=question_paper.id,
                 question_text=q_data["text"],
@@ -167,24 +198,36 @@ async def upload_and_analyze(
             )
             db.add(question)
             saved_questions.append(question)
+            
+            # Update progress for each question saved
+            if q_idx % 5 == 0:
+                upload_progress[upload_id]["overall_progress"] = 80 + int((q_idx / len(extracted_data["questions"])) * 15)
         
         db.commit()
         
         # Generate analysis
+        upload_progress[upload_id]["current_step"] = "Generating analysis..."
+        upload_progress[upload_id]["overall_progress"] = 95
         logger.info("Generating analysis...")
         analysis_result = await generate_upload_analysis(subject_id, extracted_data, db)
 
-        # BUG-M13: clean up local temp files — filesystem is ephemeral on Render
+        # Clean up local temp files
         for fp in saved_files:
             try:
                 os.unlink(fp)
             except OSError:
-                pass  # non-fatal — file may already be gone
+                pass
+
+        upload_progress[upload_id]["status"] = "completed"
+        upload_progress[upload_id]["overall_progress"] = 100
+        upload_progress[upload_id]["current_step"] = "Complete!"
+        upload_progress[upload_id]["end_time"] = datetime.now().isoformat()
 
         return {
             "success": True,
+            "upload_id": upload_id,
             "message": f"Processed {len(files)} files successfully",
-            "files": [],  # paths are gone; don't expose ephemeral paths in response
+            "files": [],
             "extracted_data": {
                 "text_content": extracted_data["text_content"][:5],
                 "detected_objects": extracted_data["detected_objects"],
@@ -196,15 +239,17 @@ async def upload_and_analyze(
         }
 
     except HTTPException:
+        upload_progress[upload_id]["status"] = "failed"
         raise
     except Exception as e:
-        # BUG-M13: also clean up on error path
         for fp in saved_files:
             try:
                 os.unlink(fp)
             except OSError:
                 pass
         logger.error(f"Upload processing error: {str(e)}")
+        upload_progress[upload_id]["status"] = "failed"
+        upload_progress[upload_id]["errors"].append(str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process upload: {str(e)}"
@@ -527,10 +572,25 @@ async def get_upload_status(
     upload_id: str,
     current_user: dict = Depends(get_current_user)
 ):
-    """Get the status of an upload job"""
-    # This would check the status of a background job in production
+    """Get real-time progress of an upload job"""
+    if upload_id not in upload_progress:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Upload not found"
+        )
+    
+    progress_data = upload_progress[upload_id]
+    
     return {
         "upload_id": upload_id,
-        "status": "completed",
-        "progress": 100
+        "status": progress_data.get("status", "unknown"),
+        "overall_progress": progress_data.get("overall_progress", 0),
+        "current_file": progress_data.get("current_file", ""),
+        "current_step": progress_data.get("current_step", ""),
+        "files_processed": progress_data.get("files_processed", 0),
+        "total_files": progress_data.get("total_files", 0),
+        "questions_extracted": progress_data.get("questions_extracted", 0),
+        "errors": progress_data.get("errors", []),
+        "start_time": progress_data.get("start_time"),
+        "end_time": progress_data.get("end_time")
     }
