@@ -141,15 +141,22 @@ async def upload_and_analyze(
 
             upload_progress[upload_id]["files_processed"] = file_idx + 1
 
-        # ── Step 2: Extract questions via Gemini AI ───────────────────────────
-        upload_progress[upload_id]["current_step"] = "Extracting questions with AI..."
+        # ── Step 2: Extract content via Gemini AI ────────────────────────────
+        upload_progress[upload_id]["current_step"] = (
+            "Extracting questions with AI..." if material_type == "question_paper"
+            else "Extracting concepts with AI..."
+        )
         upload_progress[upload_id]["overall_progress"] = 60
-        logger.info(f"Sending {len(all_text_content)} text block(s) to Gemini for question extraction...")
+        logger.info(f"Sending text to Gemini (material_type={material_type})...")
 
         combined_text = "\n\n".join(all_text_content)
-        parsed_questions = await _extract_questions_with_gemini(combined_text) if combined_text.strip() else []
+        parsed_questions = (
+            await _extract_questions_with_gemini(combined_text)
+            if material_type == "question_paper"
+            else await _extract_concepts_with_gemini(combined_text)
+        ) if combined_text.strip() else []
         upload_progress[upload_id]["questions_extracted"] = len(parsed_questions)
-        logger.info(f"Extracted {len(parsed_questions)} questions via Gemini")
+        logger.info(f"Extracted {len(parsed_questions)} items via Gemini")
 
         # ── Step 3: Save QuestionPaper + Questions to DB ──────────────────────
         upload_progress[upload_id]["current_step"] = "Saving to database..."
@@ -201,10 +208,20 @@ async def upload_and_analyze(
         upload_progress[upload_id]["current_step"] = "Complete!"
         upload_progress[upload_id]["end_time"] = datetime.now().isoformat()
 
+        # Invalidate the tutor summary cache for this subject so the next
+        # tutor session picks up the newly uploaded content
+        try:
+            from ..routers.chat import _subject_summary_cache
+            _subject_summary_cache.pop(subject_id, None)
+            logger.info(f"Invalidated tutor summary cache for subject {subject_id}")
+        except Exception:
+            pass  # non-fatal
+
         return {
             "success": True,
             "upload_id": upload_id,
             "message": f"Processed {len(files)} file{'' if len(files) == 1 else 's'} successfully",
+            "material_type": material_type,
             "files": [],
             "extracted_data": {
                 "questions_count": len(parsed_questions),
@@ -305,6 +322,77 @@ Rules:
 
     except Exception as exc:
         logger.error(f"Gemini question extraction failed: {exc} — falling back to regex parser")
+        return PDFParser.parse_questions_from_text(text)
+
+
+async def _extract_concepts_with_gemini(text: str) -> list:
+    """
+    Send study material text to Gemini and extract key concepts, definitions,
+    theorems, and important topics. Falls back to PDFParser if Gemini unavailable.
+    """
+    import os, json as _json
+    api_key = os.getenv("GEMINI_API_KEY")
+
+    if not api_key:
+        logger.warning("GEMINI_API_KEY not set — falling back to regex parser for concepts")
+        return PDFParser.parse_questions_from_text(text)
+
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        truncated = text[:30_000]
+
+        system_prompt = """Analyze the provided study material (textbook, notes, or reference material) and extract all key learning items.
+
+For each item return a JSON object with these fields:
+- "text": the concept, definition, theorem, formula, or key point (string, required)
+- "marks": 0 (not applicable for study material)
+- "question_type": one of "Definition", "Theorem/Formula", "Conceptual/explanation", "Example", "Key Point"
+- "difficulty": one of "Easy", "Medium", "Hard" based on complexity
+- "unit": chapter, unit, or section reference if mentioned (string or null)
+
+Return ONLY a valid JSON array. No markdown, no explanation, no code fences.
+If nothing meaningful is found, return an empty array [].
+
+Rules:
+- Extract definitions, theorems, formulas, key concepts, and important statements
+- Do NOT include generic filler text, page numbers, or table of contents entries
+- Each item must be a complete, meaningful learning unit (minimum 10 words)
+- Merge multi-line definitions into a single "text" string"""
+
+        response = model.generate_content(
+            f"{system_prompt}\n\nSTUDY MATERIAL TEXT:\n{truncated}"
+        )
+
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw)
+
+        items_raw = _json.loads(raw)
+        if not isinstance(items_raw, list):
+            raise ValueError("Gemini returned non-list JSON")
+
+        items = []
+        for item in items_raw:
+            if not isinstance(item, dict) or not item.get("text", "").strip():
+                continue
+            items.append({
+                "text":          item["text"].strip(),
+                "marks":         0,
+                "question_type": item.get("question_type") or "Key Point",
+                "difficulty":    item.get("difficulty") or "Medium",
+                "unit":          item.get("unit") or None,
+                "keywords":      [],
+            })
+
+        logger.info(f"Gemini extracted {len(items)} concepts from study material")
+        return items
+
+    except Exception as exc:
+        logger.error(f"Gemini concept extraction failed: {exc} — falling back to regex parser")
         return PDFParser.parse_questions_from_text(text)
 
 

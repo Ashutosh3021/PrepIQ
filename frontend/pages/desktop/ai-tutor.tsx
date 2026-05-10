@@ -1,41 +1,55 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Head from 'next/head';
 import { SidePanel } from '@/components/desktop';
 import { Skeleton } from '@/components/common';
 import { useTutor } from '@/lib/hooks/useTutor';
 import { useSubjects } from '@/lib/hooks/useSubjects';
+import { tutorService } from '@/lib/services/tutor.service';
 
 export default function DesktopAITutor() {
   const [input, setInput] = useState('');
 
-  // ── Real subjects for the sidebar ──────────────────────────────────────────
   const { subjects, isLoading: subjectsLoading } = useSubjects();
   const [activeSubjectId, setActiveSubjectId] = useState<string | undefined>(undefined);
+  const [kbActive, setKbActive] = useState(false);
 
-  // ── Tutor hook — pass active subject so messages include subject_id ─────────
   const { messages, isLoading, error, sendMessage } = useTutor(activeSubjectId);
+
+  // Clear conversation history when subject changes so context is fresh
+  const handleSubjectSelect = (subjectId: string) => {
+    if (subjectId === activeSubjectId) {
+      setActiveSubjectId(undefined);
+      setKbActive(false);
+    } else {
+      tutorService.clearHistory();
+      setActiveSubjectId(subjectId);
+      setKbActive(false); // will be set true after first response confirms KB
+    }
+  };
 
   const handleSend = async () => {
     if (!input.trim()) return;
     try {
-      await sendMessage(input.trim());
+      const aiMsg = await sendMessage(input.trim());
       setInput('');
+      // Check if the backend confirmed knowledge base is active
+      // (we infer from the fact that a subject is selected and materials exist)
     } catch {
-      // error is surfaced via the error state from useTutor
+      // error surfaced via useTutor error state
     }
   };
 
-  // ── Build sidebar items from real subjects ─────────────────────────────────
+  // Build sidebar items from real subjects
   const sidebarItems = subjectsLoading
     ? []
     : subjects.map((s) => ({
         label: s.name,
         active: s.id === activeSubjectId,
-        onClick: () => setActiveSubjectId((prev) => (prev === s.id ? undefined : s.id)),
+        onClick: () => handleSubjectSelect(s.id),
       }));
 
-  // Active subject name for the context indicator
   const activeSubjectName = subjects.find((s) => s.id === activeSubjectId)?.name;
+  const activeSubject = subjects.find((s) => s.id === activeSubjectId);
 
   if (error) {
     return (
@@ -77,13 +91,28 @@ export default function DesktopAITutor() {
             {/* Chat Header */}
             <header className="px-12 py-8 flex items-baseline justify-between">
               <h1 className="font-serif italic text-4xl text-on-surface">AI Tutor</h1>
-              <div className="flex items-center space-x-2 text-[0.75rem] uppercase tracking-tighter text-tertiary">
-                <span className="w-2 h-2 bg-primary" />
-                <span>
-                  {activeSubjectName
-                    ? `Context: ${activeSubjectName}`
-                    : 'No subject selected — select one from the sidebar'}
-                </span>
+              <div className="flex items-center gap-4 text-[0.75rem] uppercase tracking-tighter text-tertiary">
+                {activeSubjectId && activeSubject ? (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 bg-primary" />
+                      <span>Context: {activeSubjectName}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-on-surface/40">
+                      <span className={`w-2 h-2 rounded-full ${activeSubject.papers_uploaded > 0 ? 'bg-green-500' : 'bg-yellow-500'}`} />
+                      <span>
+                        {activeSubject.papers_uploaded > 0
+                          ? `Knowledge base: ${activeSubject.papers_uploaded} paper${activeSubject.papers_uploaded !== 1 ? 's' : ''}`
+                          : 'No materials uploaded yet'}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 bg-on-surface/20" />
+                    <span>No subject selected — select one from the sidebar</span>
+                  </div>
+                )}
               </div>
             </header>
 
@@ -94,7 +123,17 @@ export default function DesktopAITutor() {
                   <p className="text-on-surface/50 text-lg">No messages yet.</p>
                   {!activeSubjectId && subjects.length > 0 && (
                     <p className="text-on-surface/30 text-sm max-w-xs">
-                      Select a subject from the sidebar to give the tutor context, then ask your question.
+                      Select a subject from the sidebar. The tutor will load its knowledge base from your uploaded materials.
+                    </p>
+                  )}
+                  {activeSubjectId && activeSubject && activeSubject.papers_uploaded === 0 && (
+                    <p className="text-on-surface/30 text-sm max-w-xs">
+                      No materials uploaded for this subject yet. Upload papers or notes to give the tutor a knowledge base.
+                    </p>
+                  )}
+                  {activeSubjectId && activeSubject && activeSubject.papers_uploaded > 0 && (
+                    <p className="text-on-surface/30 text-sm max-w-xs">
+                      Knowledge base ready. Ask anything about {activeSubjectName}.
                     </p>
                   )}
                 </div>

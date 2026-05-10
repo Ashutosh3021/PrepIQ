@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict
 import os
 import logging
 
@@ -21,6 +21,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# ── In-memory subject summary cache ──────────────────────────────────────────
+# key: subject_id → summarized knowledge base string
+_subject_summary_cache: Dict[str, str] = {}
+
 # Dependency for protected routes
 async def get_current_user(
     authorization: str = Header(None),
@@ -35,47 +39,139 @@ router = APIRouter(
     tags=["Chat"]
 )
 
-# AI Tutor System Prompt
-TUTOR_SYSTEM_PROMPT = """Act as a highly intelligent, slightly sarcastic but supportive teacher. Your role is to guide the student through concepts using active questioning and structured reasoning.
+# ── AI Tutor System Prompt ────────────────────────────────────────────────────
+TUTOR_SYSTEM_PROMPT = """You are an expert academic tutor. Your personality is calm, patient, and supportive, with a touch of gentle warmth. You speak clearly and concisely, using simple language. Your teaching style is Socratic: you guide students to discover answers through thoughtful questions rather than just providing solutions.
 
 Rules you must follow strictly:
+- Always start by asking a diagnostic question to assess the student's current understanding.
+- Never give the full answer immediately. Break problems into small, logical steps.
+- After each step, ask a guiding question to keep the student engaged and thinking.
+- Only provide the complete answer if the student explicitly asks for it (e.g., "Tell me the full answer" or "I give up").
+- When the student makes a mistake, do not correct them directly. Instead, ask a question that leads them to recognize the error themselves.
+- Use analogies and real-world examples when helpful, but keep them brief.
+- Acknowledge correct answers with genuine, measured encouragement (e.g., "That's right," "Good reasoning," "Exactly").
+- Maintain a warm, encouraging tone. Use occasional light humor, but never sarcasm or condescension.
+- If the student seems frustrated, offer reassurance and suggest breaking the problem down further.
+- Keep responses concise. Avoid long paragraphs. Prefer bullet points or numbered steps when listing multiple items.
+- End each response with a question that moves the student to the next logical step.
 
-Always ask at least one diagnostic question before giving any explanation.
+Teaching guidelines:
+- For math/science problems: ask what formulas or principles might apply, then guide through substitution and calculation.
+- For conceptual questions: ask the student to explain the concept in their own words first, then fill gaps with targeted questions.
+- For test preparation: ask about the student's current confidence level, then suggest targeted practice.
 
-Do not reveal the full answer immediately.
+Your ultimate goal is to make the student feel supported, capable, and eager to learn. You are not a solution machine – you are a thinking coach."""
 
-Teach through a step-by-step reasoning process.
 
-Make the student think. Ask guiding questions after each step.
+def _build_subject_knowledge_base(subject_id: str, db: Session) -> str:
+    """
+    Pull all extracted content for a subject from the DB and return as a
+    single text block ready for summarization.
+    Includes: question texts, unit names, and raw_text from papers.
+    """
+    # Gather raw text from uploaded papers
+    papers = db.query(models.QuestionPaper).filter(
+        models.QuestionPaper.subject_id == subject_id
+    ).all()
 
-Only provide the complete answer if the student explicitly says: "Tell me the full answer."
+    parts = []
+    for paper in papers:
+        if paper.raw_text and paper.raw_text.strip():
+            parts.append(paper.raw_text[:5000])  # cap per paper
 
-Use light, clever sarcasm (subtle, not rude) to keep the tone engaging.
+    # Gather extracted questions / concepts
+    questions = db.query(models.Question).join(models.QuestionPaper).filter(
+        models.QuestionPaper.subject_id == subject_id
+    ).limit(100).all()
 
-Break complex ideas into connected stages so each concept builds logically on the previous one.
+    if questions:
+        q_block = "\n".join(
+            f"- [{q.question_type or 'item'}] {q.question_text[:300]}"
+            for q in questions
+        )
+        parts.append(f"Extracted items:\n{q_block}")
 
-If the student gives a wrong answer, do not immediately correct it. Instead, ask a question that exposes the flaw and leads them to self-correct.
+    return "\n\n".join(parts) if parts else ""
 
-Keep explanations clear, precise, and structured. No fluff.
 
-Teaching Style Guidelines:
+async def _summarize_with_bart(text: str) -> Optional[str]:
+    """
+    Primary summarizer: facebook/bart-large-cnn via Bytez.
+    Returns summary string or None on failure.
+    """
+    try:
+        from ..ml.external_api_wrapper import get_external_api
+        api = get_external_api()
+        if not api or not api.bytez_sdk:
+            return None
 
-Start by assessing prior knowledge.
+        # BART has a ~1024 token input limit — chunk if needed
+        chunk = text[:3000]
+        result = api.text_summarization(chunk)
+        if result.get("success") and result.get("output"):
+            summary = result["output"]
+            if isinstance(summary, str) and len(summary.strip()) > 20:
+                logger.info(f"BART summarization succeeded ({len(summary)} chars)")
+                return summary.strip()
+        return None
+    except Exception as exc:
+        logger.warning(f"BART summarization failed: {exc}")
+        return None
 
-Use analogies when helpful, but keep them tight.
 
-Encourage reasoning over memorization.
+async def _summarize_with_gemini(text: str, subject_name: str) -> str:
+    """
+    Fallback summarizer: Gemini.
+    Always returns a string (empty string on total failure).
+    """
+    try:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key or not GEMINI_AVAILABLE:
+            return ""
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        prompt = (
+            f"You are summarizing study material for the subject '{subject_name}'.\n"
+            f"Create a concise knowledge base summary (max 500 words) covering the key concepts, "
+            f"topics, definitions, and important points from the following content.\n\n"
+            f"CONTENT:\n{text[:8000]}"
+        )
+        response = model.generate_content(prompt)
+        summary = response.text.strip() if hasattr(response, "text") else ""
+        logger.info(f"Gemini fallback summarization succeeded ({len(summary)} chars)")
+        return summary
+    except Exception as exc:
+        logger.warning(f"Gemini summarization fallback failed: {exc}")
+        return ""
 
-Keep the student mentally involved at every step.
 
-Never dump information in one block.
+async def _get_subject_summary(subject_id: str, subject_name: str, db: Session) -> str:
+    """
+    Returns a cached or freshly generated summary for the subject.
+    Pipeline: raw content → BART (primary) → Gemini (fallback).
+    """
+    if subject_id in _subject_summary_cache:
+        return _subject_summary_cache[subject_id]
 
-Example behavior:
-If asked a math question, first ask what they already know about the topic.
-If asked a programming question, first ask how they think the logic should flow.
-If asked a theory question, first ask for their interpretation.
+    raw_text = _build_subject_knowledge_base(subject_id, db)
 
-You are not a solution machine. You are a thinking trainer."""
+    if not raw_text.strip():
+        summary = f"No uploaded materials found for {subject_name} yet."
+    else:
+        # Step 1: try BART
+        summary = await _summarize_with_bart(raw_text)
+
+        # Step 2: fallback to Gemini
+        if not summary:
+            logger.info("BART unavailable/failed — using Gemini summarization fallback")
+            summary = await _summarize_with_gemini(raw_text, subject_name)
+
+        # Step 3: last resort — truncated raw text
+        if not summary:
+            summary = raw_text[:1500]
+
+    _subject_summary_cache[subject_id] = summary
+    return summary
 
 @router.post("/message", response_model=schemas.ChatResponse)
 async def send_message(
@@ -258,96 +354,122 @@ async def ai_tutor_chat(
     db: Session = Depends(get_db)
 ):
     """
-    AI Tutor endpoint using Gemini 2.5 Flash with teaching persona.
-    Provides Socratic teaching style with diagnostic questions.
+    AI Tutor endpoint.
+    Pipeline:
+      1. If subject_id provided → build knowledge base from DB content
+      2. Summarize with BART (primary) → fallback to Gemini
+      3. Inject summary + TUTOR_SYSTEM_PROMPT into Gemini tutor model
+      4. Return Socratic teaching response
     """
     try:
         message = request.message
         conversation_history = request.conversation_history or []
-        
+        subject_id = request.subject_id
+
         if not message:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Message is required"
             )
-        
-        # Check if Gemini is available
+
         if not GEMINI_AVAILABLE:
-            # Fallback response if Gemini not installed
             return {
-                "response": "I apologize, but the AI tutor is currently unavailable. Please ensure the Gemini API is configured correctly.",
+                "response": "AI tutor is currently unavailable. Please ensure the Gemini API is configured.",
                 "context": None
             }
-        
-        # Configure Gemini
+
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            logger.error("GEMINI_API_KEY not found in environment variables")
             return {
-                "response": "I'm having trouble accessing my teaching capabilities right now. Please try again later.",
+                "response": "I'm having trouble accessing my teaching capabilities. Please try again later.",
                 "context": None
             }
-        
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        
-        # Build conversation context from history
-        context = ""
-        if conversation_history:
-            context = "\n\nPrevious conversation:\n"
-            for msg in conversation_history[-5:]:  # Last 5 messages
-                role = "Student" if msg.get("role") == "user" else "Tutor"
-                context += f"{role}: {msg.get('content', '')}\n"
-        
-        # Create the full prompt with system instructions
-        full_prompt = f"""{TUTOR_SYSTEM_PROMPT}
 
-{context}
+        # ── Step 1: Get subject context (summary) ─────────────────────────────
+        subject_context_block = ""
+        subject_name = "this subject"
 
-Student's current question: {message}
-
-Respond as the AI Tutor:"""
-        
-        # Generate response
-        response = model.generate_content(full_prompt)
-        
-        # Extract the response text
-        tutor_response = response.text if hasattr(response, 'text') else str(response)
-        
-        # Only save to chat history if subject_id provided (deduplicated - don't also save via chat_with_bot)
-        subject_id = request.subject_id
         if subject_id:
-            # Check if this message was already saved (avoid duplicate)
-            existing_count = db.query(models.ChatHistory).filter(
+            subject = db.query(models.Subject).filter(
+                models.Subject.id == subject_id,
+                models.Subject.user_id == current_user["id"]
+            ).first()
+
+            if subject:
+                subject_name = subject.name
+                summary = await _get_subject_summary(subject_id, subject_name, db)
+                if summary:
+                    subject_context_block = (
+                        f"\n\n--- SUBJECT KNOWLEDGE BASE: {subject_name} ---\n"
+                        f"{summary}\n"
+                        f"--- END KNOWLEDGE BASE ---\n"
+                    )
+
+        # ── Step 2: Build conversation history block ───────────────────────────
+        history_block = ""
+        if conversation_history:
+            history_block = "\n\nPrevious conversation:\n"
+            for msg in conversation_history[-5:]:
+                role = "Student" if msg.get("role") == "user" else "Tutor"
+                history_block += f"{role}: {msg.get('content', '')}\n"
+
+        # ── Step 3: Build full prompt ──────────────────────────────────────────
+        full_prompt = (
+            f"{TUTOR_SYSTEM_PROMPT}"
+            f"{subject_context_block}"
+            f"{history_block}"
+            f"\nStudent's current question: {message}"
+            f"\n\nRespond as the AI Tutor:"
+        )
+
+        # ── Step 4: Generate response ──────────────────────────────────────────
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(full_prompt)
+        tutor_response = response.text if hasattr(response, "text") else str(response)
+
+        # ── Step 5: Persist to chat history ───────────────────────────────────
+        if subject_id:
+            existing = db.query(models.ChatHistory).filter(
                 models.ChatHistory.user_id == current_user["id"],
                 models.ChatHistory.user_message == message,
                 models.ChatHistory.bot_response == tutor_response
             ).count()
-            
-            if existing_count == 0:
-                chat_entry = models.ChatHistory(
+            if existing == 0:
+                db.add(models.ChatHistory(
                     user_id=current_user["id"],
                     subject_id=subject_id,
                     user_message=message,
-                    bot_response=tutor_response
-                )
-                db.add(chat_entry)
+                    bot_response=tutor_response,
+                ))
                 db.commit()
-        
+
         return {
             "response": tutor_response,
             "context": {
                 "conversation_length": len(conversation_history) + 1,
                 "tutor_mode": "socratic",
-                "model": "gemini-2.5-flash"
+                "subject": subject_name,
+                "knowledge_base_active": bool(subject_context_block),
+                "model": "gemini-2.5-flash",
             }
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"AI Tutor error: {str(e)}")
         return {
-            "response": "I apologize, but I'm having trouble formulating a response right now. Let me try a different approach - what specific aspect of this topic would you like to explore first?",
+            "response": "I'm having trouble formulating a response right now. What specific aspect of this topic would you like to explore first?",
             "context": None
         }
+
+
+@router.post("/tutor/invalidate-cache")
+async def invalidate_subject_cache(
+    subject_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Invalidate the summary cache for a subject (call after uploading new materials)."""
+    _subject_summary_cache.pop(subject_id, None)
+    return {"message": f"Cache cleared for subject {subject_id}"}

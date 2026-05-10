@@ -14,6 +14,8 @@ interface TutorResponse {
     conversation_length: number;
     tutor_mode: string;
     model: string;
+    subject?: string;
+    knowledge_base_active?: boolean;
   } | null;
 }
 
