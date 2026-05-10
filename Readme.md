@@ -1,153 +1,230 @@
-# 🚀 PrepIQ
+# PrepIQ — AI-Powered Exam Preparation Platform
 
-> **AI-Powered Exam Preparation Platform**  
-> Predict exam questions, generate smart tests, and learn with an AI tutor.
+> Predict exam questions. Generate smart mock tests. Learn with a Socratic AI tutor.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Frontend](https://img.shields.io/badge/frontend-Next.js_16-black?logo=next.js)
-![Backend](https://img.shields.io/badge/backend-FastAPI-teal?logo=fastapi)
-![Database](https://img.shields.io/badge/database-PostgreSQL_(Supabase)-blue?logo=postgresql)
-![AI](https://img.shields.io/badge/AI-Gemini_+_Bytez-orange?logo=google)
-![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen)
+![Frontend](https://img.shields.io/badge/Next.js_16-black?style=flat&logo=next.js)
+![Backend](https://img.shields.io/badge/FastAPI-teal?style=flat&logo=fastapi)
+![Database](https://img.shields.io/badge/PostgreSQL_(Supabase)-blue?style=flat&logo=postgresql)
+![AI](https://img.shields.io/badge/Gemini_2.5_Flash-orange?style=flat&logo=google)
+![License](https://img.shields.io/badge/license-MIT-blue?style=flat)
 
 ---
 
-## 📊 Project Status
+## What is PrepIQ?
+
+PrepIQ analyzes your past exam papers using a pipeline of 11+ ML and NLP models to surface high-probability questions, generate personalized mock tests, and guide your revision with an AI tutor that teaches — not just answers.
+
+Built for students who want to study smarter, not just harder.
+
+---
+
+## Full System Architecture
 
 ```mermaid
-gantt
-    title PrepIQ Development Progress
-    dateFormat  YYYY-MM-DD
-    section Core
-    Backend API           :done, 2025-01-01, 30d
-    Frontend UI           :done, 2025-02-01, 25d
-    ML Integration        :active, 2025-03-01, 20d
-    section Features
-    Question Prediction   :done, 2025-02-15, 10d
-    AI Tutor              :active, 2025-03-10, 15d
-    Analytics Dashboard   :pending, 2025-04-01, 10d
+flowchart TD
+    User["👤 Student"]
+
+    subgraph Frontend["Frontend — Next.js 16 + React 19 + TypeScript"]
+        UI_Dashboard["Dashboard"]
+        UI_Upload["Upload Papers"]
+        UI_Predictions["Predictions"]
+        UI_Tests["Mock Tests"]
+        UI_Tutor["AI Tutor Chat"]
+        UI_Analytics["Analytics"]
+    end
+
+    subgraph Backend["Backend — FastAPI + Python"]
+        Auth["Auth Router\n(Supabase JWT)"]
+        UploadRouter["Upload Router"]
+        PredictRouter["Predictions Router"]
+        TestRouter["Test Generator"]
+        ChatRouter["AI Tutor Router"]
+        AnalysisRouter["Analysis Router"]
+
+        subgraph MLPipeline["ML Pipeline"]
+            OCR["EasyOCR\n(Text Extraction)"]
+            Layout["YOLOv8\n(Layout Detection)"]
+            QImportance["Question Importance\nPredictor (TF-IDF + Transformer)"]
+            QAnalyzer["Question Analyzer\n(TF-IDF + LDA + KMeans)"]
+            Correlation["Correlation Analyzer\n(scikit-learn)"]
+            SyllabusMap["Syllabus Analyzer\n(NLP)"]
+            FocusID["Focus Area Identifier\n(Random Forest)"]
+            TopicRec["Topic Recommender\n(Hybrid CF)"]
+            ProgressFc["Progress Forecaster\n(LSTM/RNN)"]
+        end
+
+        subgraph AILayer["AI / LLM Layer"]
+            Gemini["Google Gemini 2.5 Flash\n(Tutor · Summarize · Generate · Translate)"]
+            subgraph Bytez["Bytez API Gateway (175k+ models)"]
+                RoBERTa["deepset/roberta-base-squad2\n(QA)"]
+                BART["facebook/bart-large-cnn\n(Summarization)"]
+                FinBERT["ProsusAI/finbert\n(Classification)"]
+                Llama3["meta-llama/Llama-3-8B\n(Generation)"]
+                EmbGemma["google/embeddinggemma-300m\n(Similarity)"]
+                Madlad["google/madlad400-3b-mt\n(Translation)"]
+                BLIP["Salesforce/blip-large\n(Image Captioning)"]
+                Llama2["meta-llama/Llama-2-7b-chat\n(Conversation)"]
+            end
+        end
+    end
+
+    subgraph Data["Data Layer — Supabase"]
+        PG["PostgreSQL"]
+        SupaAuth["Supabase Auth"]
+        Storage["File Storage"]
+    end
+
+    User -->|interacts| Frontend
+    Frontend -->|REST API calls| Backend
+    Auth --> SupaAuth
+    UploadRouter --> OCR
+    UploadRouter --> Layout
+    UploadRouter --> Storage
+    OCR --> QImportance
+    Layout --> QImportance
+    QImportance --> Correlation
+    QImportance --> QAnalyzer
+    QAnalyzer --> SyllabusMap
+    Correlation --> PredictRouter
+    SyllabusMap --> PredictRouter
+    FocusID --> AnalysisRouter
+    TopicRec --> AnalysisRouter
+    ProgressFc --> AnalysisRouter
+    PredictRouter --> Gemini
+    ChatRouter --> Gemini
+    ChatRouter --> RoBERTa
+    TestRouter --> Llama3
+    AnalysisRouter --> FinBERT
+    AnalysisRouter --> EmbGemma
+    Backend --> PG
 ```
 
 ---
 
-## 🎯 Tech Stack
+## Features
+
+- **Question Prediction** — ML pipeline analyzes historical papers to surface recurring patterns with confidence scores
+- **Smart Mock Tests** — Generates practice tests weighted by prediction probability
+- **AI Tutor** — Socratic chatbot powered by Gemini 2.5 Flash that guides you to answers without giving them away
+- **Analytics Dashboard** — Visualizes weak areas, topic frequency, and revision progress
+- **Subject Management** — Organize subjects, papers, and study plans in one place
+
+---
+
+## AI Models Used
+
+### Google Gemini 2.5 Flash
+| Task | Details |
+|------|---------|
+| AI Tutor | Socratic teaching persona — guides students without revealing answers |
+| Summarization | Condenses study materials into concise notes |
+| Text Generation | Creates mock questions and concept explanations |
+| Translation | Translates study materials between languages |
+
+### Bytez API (serverless model gateway)
+| Model | Task |
+|-------|------|
+| deepset/roberta-base-squad2 | Question answering from document context |
+| facebook/bart-large-cnn | Long-form text summarization |
+| ProsusAI/finbert | Text classification and topic analysis |
+| meta-llama/Llama-3-8B | Question and content generation |
+| google/embeddinggemma-300m | Semantic similarity for duplicate detection |
+| google/madlad400-3b-mt | Multi-language translation |
+| Salesforce/blip-image-captioning-large | Image captioning for diagram extraction |
+| meta-llama/Llama-2-7b-chat | Conversational AI interactions |
+
+### Local ML Engines (Python)
+| Engine | Task |
+|--------|------|
+| Question Importance Predictor (TF-IDF + Transformer) | Ranks questions by exam likelihood |
+| Question Analyzer (TF-IDF + LDA + KMeans) | Topic modeling and clustering |
+| Correlation Analyzer (scikit-learn) | Patterns in historical exam data |
+| Syllabus Analyzer (NLP) | Maps syllabus topics to question bank |
+| Focus Area Identifier (Random Forest) | Identifies student weak areas |
+| Topic Recommender (Hybrid CF) | Personalized topic suggestions |
+| Progress Forecaster (LSTM/RNN) | Predicts future learning progress |
+
+---
+
+## Tech Stack
 
 | Layer | Technology |
 |-------|------------|
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS |
 | Backend | FastAPI, Python, SQLAlchemy |
-| Database | PostgreSQL (Supabase) |
-| Auth | Supabase Auth, JWT |
-| AI/ML | Google Gemini, Bytez API, Lightweight ML |
+| Database | PostgreSQL via Supabase |
+| Auth | Supabase Auth + JWT |
+| AI / LLM | Google Gemini 2.5 Flash, Bytez API |
+| ML / NLP | RoBERTa, YOLOv8, EasyOCR, scikit-learn, LSTM |
 
 ---
 
-## ✨ Features
+## API Endpoints
 
-- 🧠 **Question Prediction** – AI analyzes past papers to predict likely exam questions  
-- 📝 **Smart Mock Tests** – Generate practice tests from your uploaded materials  
-- 🤖 **AI Tutor** – Socratic teaching chatbot that guides you to answers  
-- 📈 **Analytics Dashboard** – Visualize patterns, trends, and weak areas  
-- 📚 **Subject Management** – Organize subjects, papers, and study plans  
-
----
-
-## 🖼️ Gallery (App Screenshots)
-
-*Place your actual screenshots here – replace the placeholder images with your own.*
-
-![Dashboard Preview](https://via.placeholder.com/800x400?text=📸+Screenshot:+Dashboard+%28coming+soon%29)
-*Dashboard – overview of your progress*
-
-![AI Tutor Chat](https://via.placeholder.com/800x400?text=🤖+Screenshot:+AI+Tutor+%28coming+soon%29)
-*AI Tutor – Socratic learning in action*
-
-![Predictions Page](https://via.placeholder.com/800x400?text=🔮+Screenshot:+Predictions+%28coming+soon%29)
-*Question prediction results with confidence scores*
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/auth/signup` | User registration |
+| POST | `/auth/login` | User login |
+| GET | `/subjects` | List subjects |
+| POST | `/upload/` | Upload question paper |
+| GET | `/predictions/{id}/latest` | Get predictions with confidence scores |
+| POST | `/tests/generate` | Generate weighted mock test |
+| POST | `/chat/tutor` | AI tutor session |
+| GET | `/wizard/status` | Setup wizard status |
 
 ---
 
-## 🧠 Meme of the Day (because debugging is hard)
+## Project Structure
 
-![AI Meme](https://media.makeameme.org/created/ai-will-take-5c4b6d.jpg)
-
-> *“AI will take your exam… but only after you fix the environment variables.”*  
-> – Every developer ever
+```
+PrepIQ/
+├── backend/
+│   ├── app/
+│   │   ├── routers/       # API route handlers
+│   │   ├── services/      # Business logic + ML pipeline
+│   │   ├── core/          # Config & security
+│   │   ├── models.py      # Database models
+│   │   ├── schemas.py     # Pydantic schemas
+│   │   └── main.py        # FastAPI entry point
+│   └── requirements.txt
+│
+└── frontend/
+    ├── app/
+    │   ├── page.tsx           # Landing page
+    │   └── protected/         # Auth-gated routes
+    │       ├── dashboard/
+    │       ├── subjects/
+    │       ├── predictions/
+    │       ├── tests/
+    │       ├── chat/
+    │       └── upload/
+    └── src/
+        ├── components/
+        ├── lib/               # API client + utilities
+        └── hooks/
+```
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
 # Backend
 cd backend
 pip install -r requirements.txt
-cp .env.example .env  # Configure env vars
+cp .env.example .env
 uvicorn app.main:app --reload
 
-# Frontend  
+# Frontend
 cd frontend
 npm install
 cp .env.example .env.local
 npm run dev
 ```
 
----
+### Environment Variables
 
-## 📁 Project Structure
-
-```
-PrepIQ/
-├── backend/
-│   ├── app/
-│   │   ├── routers/       # API endpoints
-│   │   │   ├── auth.py
-│   │   │   ├── subjects.py
-│   │   │   ├── predictions.py
-│   │   │   ├── tests.py
-│   │   │   ├── upload.py
-│   │   │   ├── chat.py
-│   │   │   ├── analysis.py
-│   │   │   └── wizard.py
-│   │   ├── services/      # Business logic
-│   │   ├── core/          # Config & security
-│   │   ├── models.py      # Database models
-│   │   ├── schemas.py     # Pydantic schemas
-│   │   └── main.py        # FastAPI app
-│   └── requirements.txt
-│
-├── frontend/
-│   ├── app/
-│   │   ├── page.tsx           # Landing page
-│   │   ├── login/
-│   │   ├── signup/
-│   │   ├── wizard/
-│   │   ├── auth/callback/
-│   │   └── protected/         # Protected routes
-│   │       ├── layout.tsx
-│   │       ├── dashboard/
-│   │       ├── subjects/
-│   │       ├── predictions/
-│   │       ├── tests/
-│   │       ├── chat/
-│   │       ├── upload/
-│   │       └── profile/
-│   ├── src/
-│   │   ├── components/     # React components
-│   │   ├── lib/           # API client, utilities
-│   │   └── hooks/         # Custom hooks
-│   └── public/
-│
-├── .env                   # Environment config
-├── .env.example          # Environment template
-└── bugs.md              # Known issues
-```
-
----
-
-## 🔧 Environment Variables
-
-### Backend (.env)
+**Backend `.env`**
 ```env
 DATABASE_URL=postgresql://...
 SUPABASE_URL=https://...
@@ -157,7 +234,7 @@ GEMINI_API_KEY=...
 BYTEZ_API_KEY=...
 ```
 
-### Frontend (.env.local)
+**Frontend `.env.local`**
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8000
 NEXT_PUBLIC_SUPABASE_URL=https://...
@@ -166,34 +243,16 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 
 ---
 
-## 📡 API Endpoints
+## Deployment
 
-| Endpoint | Description |
-|----------|-------------|
-| `POST /auth/signup` | User registration |
-| `POST /auth/login` | User login |
-| `GET /subjects` | List subjects |
-| `POST /subjects` | Create subject |
-| `POST /upload/` | Upload question paper |
-| `GET /predictions/{id}/latest` | Get predictions |
-| `POST /tests/generate` | Generate mock test |
-| `POST /chat/tutor` | AI tutor chat |
-| `GET /wizard/status` | Setup wizard status |
+| Service | Platform |
+|---------|----------|
+| Frontend | Vercel |
+| Backend | Railway |
+| Database | Supabase |
 
 ---
 
-## ☁️ Deployment
+## License
 
-- **Frontend**: Vercel (push to `main`)  
-- **Backend**: Render / Railway  
-- **Database**: Supabase PostgreSQL  
-
----
-
-## 📄 License
-
-MIT © Ashutosh Patra
-
----
-
-*Made with ❤️ for students who want to beat the exam stress.*
+MIT © [Ashutosh Patra](https://github.com/Ashutosh3021)
