@@ -694,23 +694,28 @@ class PrepIQService:
             "optimization_strategy": study_plan_result["optimization_strategy"]
         }
     
-    def get_user_study_plan(self, db: Session, user_id: str) -> Dict[str, Any]:
-        """Get the current study plan for a user"""
+    def get_user_study_plan(self, db: Session, user_id: str, subject_id: str = None) -> Dict[str, Any]:
+        """Get the current study plan for a user, optionally filtered by subject"""
         # Get the latest active plan for the user
-        study_plan = db.query(models.StudyPlan).filter(
+        query = db.query(models.StudyPlan).filter(
             models.StudyPlan.user_id == user_id
-        ).order_by(models.StudyPlan.created_at.desc()).first()
+        )
+        
+        if subject_id:
+            query = query.filter(models.StudyPlan.subject_id == subject_id)
+        
+        study_plan = query.order_by(models.StudyPlan.created_at.desc()).first()
         
         if not study_plan:
             raise ValueError("No study plan found for user")
         
         return {
-            "plan_id": study_plan.id,
-            "subject_id": study_plan.subject_id,
+            "plan_id": str(study_plan.id),
+            "subject_id": str(study_plan.subject_id),
             "total_days": study_plan.total_days,
-            "daily_schedule": study_plan.daily_schedule_json,
+            "daily_schedule": study_plan.daily_schedule_json or [],
             "days_completed": study_plan.days_completed,
-            "completion_percentage": study_plan.completion_percentage,
+            "completion_percentage": float(study_plan.completion_percentage or 0),
             "on_track": study_plan.on_track
         }
     

@@ -109,7 +109,7 @@ class ExternalAPIWrapper:
         self.models_available = True  # Mark as available even with fallbacks
         logger.info("Fallback models initialized")
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=4))
     def _call_bytez_model(self, model_type: str, input_data: Any) -> Dict[str, Any]:
         """Call a Bytez model with retry logic"""
         if not self.bytez_sdk:
@@ -131,9 +131,21 @@ class ExternalAPIWrapper:
                     "error": str(results.error)
                 }
             
+            output = results.output if hasattr(results, 'output') else results
+
+            # Guard: treat nan/None output as failure so callers use fallback
+            if output is None:
+                return {"success": False, "output": None, "error": "Empty output from model"}
+            if isinstance(output, float) and np.isnan(output):
+                return {"success": False, "output": None, "error": "Model returned nan"}
+            if isinstance(output, (list, np.ndarray)):
+                arr = np.array(output, dtype=float)
+                if np.all(np.isnan(arr)):
+                    return {"success": False, "output": None, "error": "Model returned all-nan array"}
+
             return {
                 "success": True,
-                "output": results.output if hasattr(results, 'output') else results,
+                "output": output,
                 "error": None
             }
         except Exception as e:
@@ -297,56 +309,25 @@ class ExternalAPIWrapper:
         return self.text_generation(prompt, max_length)
     
     def sentence_similarity(self, sentences: List[str]) -> Dict[str, Any]:
-        """Sentence similarity using Bytez API embeddings"""
-        if self.bytez_sdk and len(sentences) >= 2:
-            try:
-                # Get embeddings for both sentences
-                model = self._get_model('sentence_similarity')
-                if model:
-                    # Get embeddings
-                    emb1_result = model.run(sentences[0])
-                    emb2_result = model.run(sentences[1])
-                    
-                    if emb1_result and emb2_result:
-                        emb1 = emb1_result.output if hasattr(emb1_result, 'output') else emb1_result
-                        emb2 = emb2_result.output if hasattr(emb2_result, 'output') else emb2_result
-                        
-                        # Convert to numpy arrays if needed
-                        if isinstance(emb1, list):
-                            emb1 = np.array(emb1)
-                        if isinstance(emb2, list):
-                            emb2 = np.array(emb2)
-                        
-                        # Calculate cosine similarity
-                        similarity = cosine_similarity([emb1], [emb2])[0][0]
-                        
-                        return {
-                            "success": True,
-                            "output": [float(similarity)],
-                            "error": None
-                        }
-            except Exception as e:
-                logger.warning(f"Bytez sentence similarity failed: {e}, using fallback")
-        
-        # Fallback: basic word overlap similarity
+        """Sentence similarity — uses word-overlap fallback (Bytez embeddings are unreliable)."""
+        # NOTE: Bytez sentence_similarity returns nan embeddings for this model,
+        # causing cosine_similarity to crash and retry indefinitely.
+        # We skip Bytez entirely and use the fast word-overlap fallback.
         if len(sentences) >= 2:
             words1 = set(sentences[0].lower().split())
             words2 = set(sentences[1].lower().split())
-            if words1 or words2:
-                similarity = len(words1.intersection(words2)) / len(words1.union(words2))
-            else:
-                similarity = 0.0
+            union = words1.union(words2)
+            similarity = len(words1.intersection(words2)) / len(union) if union else 0.0
             return {
                 "success": True,
                 "output": [float(similarity)],
-                "error": None
+                "error": None,
             }
-        else:
-            return {
-                "success": True,
-                "output": [1.0],  # Perfect similarity for single sentence
-                "error": None
-            }
+        return {
+            "success": True,
+            "output": [1.0],
+            "error": None,
+        }
     
     async def sentence_similarity_async(self, sentences: List[str]) -> Dict[str, Any]:
         """Async sentence similarity"""

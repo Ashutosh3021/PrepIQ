@@ -108,6 +108,29 @@ async def get_current_study_plan(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
+@router.get("/subject/{subject_id}", response_model=schemas.StudyPlanResponse)
+async def get_study_plan_by_subject(
+    subject_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get study plan for a specific subject"""
+    service = get_prepiq_service()
+    try:
+        result = service.get_user_study_plan(db=db, user_id=current_user["id"], subject_id=subject_id)
+
+        return {
+            "plan_id": result["plan_id"],
+            "subject_id": result["subject_id"],
+            "total_days": result["total_days"],
+            "daily_schedule": [
+                _build_schedule_day(item) for item in result["daily_schedule"]
+            ],
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
 @router.put("/{plan_id}", response_model=schemas.StudyPlanUpdateResponse)
 async def update_study_plan(
     plan_id: str,

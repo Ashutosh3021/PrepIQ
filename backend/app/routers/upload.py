@@ -1,13 +1,15 @@
 """
 Upload and Analysis Router
-Handles file uploads and processes them through the ML pipeline:
-EasyOCR → YOLOv8 → GroundingDINO → Analysis
+Handles file uploads and processes them through the ML pipeline.
+Text extraction is delegated to PDFParser (pdf_parser.py) which supports
+PDF, DOCX, PPTX, XLSX, CSV, images, and plain text.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Header, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict
 import os
 import shutil
+import re
 from pathlib import Path
 from datetime import datetime
 import logging
@@ -23,6 +25,7 @@ upload_progress: Dict[str, dict] = {}
 
 from ..database import get_db
 from .. import models, schemas
+from ..pdf_parser import PDFParser
 
 # Import model coordinator using absolute imports
 try:
@@ -98,82 +101,60 @@ async def upload_and_analyze(
             )
         
         saved_files = []
-        extracted_data = {
-            "text_content": [],
-            "detected_objects": [],
-            "circuit_diagrams": [],
-            "questions": []
-        }
-        
+        all_text_content: List[str] = []
+
         logger.info(f"Starting upload processing for user {current_user['id']}, subject {subject_id}")
-        
-        # Process each file
+
+        # ── Step 1: Save + extract text from every file ───────────────────────
         for file_idx, file in enumerate(files):
-            upload_progress[upload_id]["current_file"] = file.filename
+            upload_progress[upload_id]["current_file"] = file.filename or f"file_{file_idx+1}"
             upload_progress[upload_id]["current_step"] = f"Saving file {file_idx + 1}/{len(files)}"
-            upload_progress[upload_id]["overall_progress"] = int((file_idx / len(files)) * 100)
-            
+            upload_progress[upload_id]["overall_progress"] = int((file_idx / len(files)) * 40)
+
             timestamp = datetime.now().timestamp()
-            file_path = UPLOAD_DIR / f"{timestamp}_{file.filename}"
-            
-            # Save file
+            safe_name = (file.filename or f"upload_{file_idx}").replace(" ", "_")
+            file_path = UPLOAD_DIR / f"{timestamp}_{safe_name}"
+
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             saved_files.append(str(file_path))
-            
             logger.info(f"Saved file: {file.filename}")
-            
-            # Process based on file type
-            if file.content_type and file.content_type.startswith("image"):
-                upload_progress[upload_id]["current_step"] = f"Processing image: {file.filename}"
-                upload_progress[upload_id]["overall_progress"] = int(((file_idx + 0.3) / len(files)) * 100)
-                
-                if model_coordinator:
-                    image_result = await model_coordinator.process_image_pipeline(str(file_path))
-                    extracted_data["text_content"].extend(image_result.get("text", []))
-                    extracted_data["detected_objects"].extend(image_result.get("objects", []))
-                    extracted_data["circuit_diagrams"].extend(image_result.get("circuits", []))
-                    logger.info(f"Image pipeline status: {image_result.get('pipeline_status', [])}")
+
+            # ── Extract text via PDFParser (handles PDF/DOCX/PPTX/XLSX/images/txt)
+            upload_progress[upload_id]["current_step"] = f"Extracting text: {file.filename}"
+            upload_progress[upload_id]["overall_progress"] = int(((file_idx + 0.5) / len(files)) * 40)
+            try:
+                text = PDFParser.extract_text(str(file_path))
+                if text and text.strip():
+                    all_text_content.append(text)
+                    logger.info(f"Extracted {len(text)} chars from {file.filename}")
                 else:
-                    image_result = await process_image_pipeline(str(file_path))
-                    extracted_data["text_content"].extend(image_result.get("text", []))
-                    extracted_data["detected_objects"].extend(image_result.get("objects", []))
-                    extracted_data["circuit_diagrams"].extend(image_result.get("circuits", []))
-                
-            elif file.content_type and file.content_type.startswith("text"):
-                upload_progress[upload_id]["current_step"] = f"Reading text file: {file.filename}"
-                upload_progress[upload_id]["overall_progress"] = int(((file_idx + 0.3) / len(files)) * 100)
-                
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        extracted_data["text_content"].append(content)
-                        logger.info(f"Extracted text from {file.filename}")
-                except Exception as e:
-                    logger.warning(f"Could not read text file {file.filename}: {e}")
-                    upload_progress[upload_id]["errors"].append(f"Error reading {file.filename}: {str(e)}")
-                
-            elif file.content_type and "pdf" in file.content_type:
-                upload_progress[upload_id]["current_step"] = f"Extracting PDF: {file.filename}"
-                upload_progress[upload_id]["overall_progress"] = int(((file_idx + 0.3) / len(files)) * 100)
-                
-                pdf_result = await process_pdf(str(file_path))
-                extracted_data["text_content"].extend(pdf_result.get("text", []))
-            
+                    logger.warning(f"No text extracted from {file.filename}")
+                    upload_progress[upload_id]["errors"].append(
+                        f"No text found in {file.filename} — file may be image-only or empty"
+                    )
+            except Exception as exc:
+                logger.error(f"Text extraction failed for {file.filename}: {exc}")
+                upload_progress[upload_id]["errors"].append(
+                    f"Could not extract text from {file.filename}: {str(exc)}"
+                )
+
             upload_progress[upload_id]["files_processed"] = file_idx + 1
-            upload_progress[upload_id]["overall_progress"] = int(((file_idx + 0.5) / len(files)) * 100)
-        
-        # Extract questions from content
-        upload_progress[upload_id]["current_step"] = "Extracting questions..."
-        upload_progress[upload_id]["overall_progress"] = 70
-        logger.info("Extracting questions from content...")
-        extracted_data["questions"] = extract_questions(extracted_data["text_content"])
-        upload_progress[upload_id]["questions_extracted"] = len(extracted_data["questions"])
-        
-        # Create a QuestionPaper record
+
+        # ── Step 2: Extract questions via Gemini AI ───────────────────────────
+        upload_progress[upload_id]["current_step"] = "Extracting questions with AI..."
+        upload_progress[upload_id]["overall_progress"] = 60
+        logger.info(f"Sending {len(all_text_content)} text block(s) to Gemini for question extraction...")
+
+        combined_text = "\n\n".join(all_text_content)
+        parsed_questions = await _extract_questions_with_gemini(combined_text) if combined_text.strip() else []
+        upload_progress[upload_id]["questions_extracted"] = len(parsed_questions)
+        logger.info(f"Extracted {len(parsed_questions)} questions via Gemini")
+
+        # ── Step 3: Save QuestionPaper + Questions to DB ──────────────────────
         upload_progress[upload_id]["current_step"] = "Saving to database..."
         upload_progress[upload_id]["overall_progress"] = 80
-        
+
         question_paper = models.QuestionPaper(
             subject_id=subject_id,
             file_name=files[0].filename if files else "uploaded_material",
@@ -184,32 +165,29 @@ async def upload_and_analyze(
         db.add(question_paper)
         db.commit()
         db.refresh(question_paper)
-        
-        # Save questions to database
-        logger.info(f"Saving {len(extracted_data['questions'])} questions to database...")
-        saved_questions = []
-        for q_idx, q_data in enumerate(extracted_data["questions"]):
+
+        logger.info(f"Saving {len(parsed_questions)} questions to database...")
+        for q_idx, q_data in enumerate(parsed_questions):
             question = models.Question(
                 paper_id=question_paper.id,
                 question_text=q_data["text"],
                 marks=q_data.get("marks", 0),
-                unit_name=q_data.get("unit", "Unknown"),
-                question_type=q_data["type"]
+                unit_name=q_data.get("unit") or "Unknown",
+                question_type=q_data.get("question_type", "Mixed/other"),
             )
             db.add(question)
-            saved_questions.append(question)
-            
-            # Update progress for each question saved
-            if q_idx % 5 == 0:
-                upload_progress[upload_id]["overall_progress"] = 80 + int((q_idx / len(extracted_data["questions"])) * 15)
-        
+            if q_idx % 10 == 0:
+                upload_progress[upload_id]["overall_progress"] = 80 + int(
+                    (q_idx / max(len(parsed_questions), 1)) * 15
+                )
+
         db.commit()
         
-        # Generate analysis
+        # ── Step 4: Generate analysis ─────────────────────────────────────────
         upload_progress[upload_id]["current_step"] = "Generating analysis..."
         upload_progress[upload_id]["overall_progress"] = 95
         logger.info("Generating analysis...")
-        analysis_result = await generate_upload_analysis(subject_id, extracted_data, db)
+        analysis_result = await generate_upload_analysis(subject_id, parsed_questions, db)
 
         # Clean up local temp files
         for fp in saved_files:
@@ -226,16 +204,16 @@ async def upload_and_analyze(
         return {
             "success": True,
             "upload_id": upload_id,
-            "message": f"Processed {len(files)} files successfully",
+            "message": f"Processed {len(files)} file{'' if len(files) == 1 else 's'} successfully",
             "files": [],
             "extracted_data": {
-                "text_content": extracted_data["text_content"][:5],
-                "detected_objects": extracted_data["detected_objects"],
-                "circuit_diagrams": extracted_data["circuit_diagrams"],
-                "questions_count": len(extracted_data["questions"]),
-                "questions": extracted_data["questions"][:20]
+                "questions_count": len(parsed_questions),
+                "questions": [
+                    {"text": q["text"], "type": q.get("question_type", ""), "marks": q.get("marks", 0)}
+                    for q in parsed_questions[:20]
+                ],
             },
-            "analysis": analysis_result
+            "analysis": analysis_result,
         }
 
     except HTTPException:
@@ -256,314 +234,125 @@ async def upload_and_analyze(
         )
 
 
-async def process_image_pipeline(image_path: str):
+async def _extract_questions_with_gemini(text: str) -> list:
     """
-    Process image through the cascade:
-    1. Lightweight text extraction (PIL + heuristics)
-    2. Lightweight object detection (PIL + heuristics)
-    3. Fallback: mark for manual review
-    
-    Note: For full ML capabilities (EasyOCR, YOLOv8, Transformers),
-    set ENABLE_HEAVY_ML=true and ensure packages are installed.
+    Send extracted document text to Gemini and parse out all exam questions.
+    Falls back to PDFParser regex if Gemini is unavailable or fails.
     """
-    result = {
-        "text": [],
-        "objects": [],
-        "circuits": []
-    }
-    
-    enable_heavy_ml = os.getenv("ENABLE_HEAVY_ML", "false").lower() == "true"
-    logger.info(f"Processing image: {image_path} (Heavy ML: {enable_heavy_ml})")
-    
+    import os, json as _json
+    api_key = os.getenv("GEMINI_API_KEY")
+
+    if not api_key:
+        logger.warning("GEMINI_API_KEY not set — falling back to regex question parser")
+        return PDFParser.parse_questions_from_text(text)
+
     try:
-        # Step 1: Try heavy ML first if enabled, otherwise use lightweight
-        if enable_heavy_ml:
-            try:
-                import easyocr
-                reader = easyocr.Reader(['en'], gpu=False)
-                ocr_results = reader.readtext(image_path)
-                
-                if ocr_results:
-                    extracted_text = ' '.join([text for (_, text, _) in ocr_results])
-                    result["text"].append(extracted_text)
-                    logger.info(f"✅ EasyOCR extracted {len(ocr_results)} text regions")
-            except ImportError:
-                logger.warning("EasyOCR not installed. Using lightweight fallback.")
-                from ..ml_utils import extract_text_from_image
-                text_result = extract_text_from_image(image_path)
-                result["text"].extend(text_result.get("text", []))
-            except Exception as e:
-                logger.warning(f"EasyOCR error: {e}")
-                from ..ml_utils import extract_text_from_image
-                text_result = extract_text_from_image(image_path)
-                result["text"].extend(text_result.get("text", []))
-        else:
-            # Use lightweight fallback
-            from ..ml_utils import extract_text_from_image
-            text_result = extract_text_from_image(image_path)
-            result["text"].extend(text_result.get("text", []))
-            logger.info(f"✅ Lightweight text extraction: {text_result.get('method', 'unknown')}")
-        
-        # Step 2: Try heavy ML object detection if enabled, otherwise use lightweight
-        if enable_heavy_ml:
-            try:
-                from ultralytics import YOLO
-                model = YOLO('yolov8n.pt')
-                yolo_results = model(image_path, verbose=False)
-                
-                for r in yolo_results:
-                    if len(r.boxes) > 0:
-                        for box in r.boxes:
-                            class_id = int(box.cls[0])
-                            confidence = float(box.conf[0])
-                            class_name = model.names[class_id]
-                            result["objects"].append({
-                                "label": class_name,
-                                "confidence": round(confidence, 2)
-                            })
-                
-                logger.info(f"✅ YOLOv8 detected {len(result['objects'])} objects")
-            except ImportError:
-                logger.warning("Ultralytics not installed. Using lightweight fallback.")
-                from ..ml_utils import detect_objects_in_image
-                obj_result = detect_objects_in_image(image_path)
-                result["objects"].extend(obj_result.get("objects", []))
-            except Exception as e:
-                logger.warning(f"YOLOv8 error: {e}")
-                from ..ml_utils import detect_objects_in_image
-                obj_result = detect_objects_in_image(image_path)
-                result["objects"].extend(obj_result.get("objects", []))
-        else:
-            # Use lightweight fallback
-            from ..ml_utils import detect_objects_in_image
-            obj_result = detect_objects_in_image(image_path)
-            result["objects"].extend(obj_result.get("objects", []))
-            logger.info(f"✅ Lightweight object detection: {obj_result.get('method', 'unknown')}")
-        
-        # Step 3: Circuit detection (if text detection failed or low confidence)
-        # Use lightweight analysis or try transformers if enabled
-        if not result["text"] or len(result["text"][0]) < 50:
-            if enable_heavy_ml:
-                try:
-                    from transformers import pipeline
-                    from PIL import Image
-                    
-                    detector = pipeline(
-                        "zero-shot-object-detection",
-                        model="google/owlvit-base-patch32"
-                    )
-                    
-                    image = Image.open(image_path)
-                    circuit_results = detector(
-                        image,
-                        candidate_labels=["circuit diagram", "electronic schematic", "wiring diagram", "electrical circuit"],
-                        threshold=0.1
-                    )
-                    
-                    if circuit_results:
-                        result["circuits"] = [
-                            {
-                                "label": r["label"],
-                                "score": round(r["score"], 2),
-                                "box": r["box"]
-                            }
-                            for r in circuit_results
-                        ]
-                        logger.info(f"✅ Transformers found {len(result['circuits'])} circuit elements")
-                except ImportError:
-                    logger.warning("Transformers not installed. Using lightweight circuit detection.")
-                    # Mark image for manual review
-                    result["circuits"].append({
-                        "label": "pending_review",
-                        "confidence": 0.3,
-                        "note": "Manual review recommended"
-                    })
-                except Exception as e:
-                    logger.warning(f"Transformers error: {e}")
-                    result["circuits"].append({
-                        "label": "pending_review",
-                        "confidence": 0.3,
-                        "note": "Processing error - manual review recommended"
-                    })
-            else:
-                # Use lightweight detection - mark for manual review
-                logger.info("Circuit detection: using lightweight mode, marking for review")
-                result["circuits"].append({
-                    "label": "pending_review",
-                    "confidence": 0.3,
-                    "note": "Enable ENABLE_HEAVY_ML for advanced detection"
-                })
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"Image processing error: {e}")
-        return result
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        # Truncate to avoid token limits (~30k chars ≈ ~7500 tokens)
+        truncated = text[:30_000]
+
+        system_prompt = """Analyze the provided exam paper text and extract every question it contains.
+
+For each question return a JSON object with these fields:
+- "text": the full question text (string, required)
+- "marks": marks/points value as integer, 0 if not specified
+- "question_type": one of "Conceptual/explanation", "Calculation/problem", "Proof/derivation", "Definition", "Comparison", "Mixed/other"
+- "difficulty": one of "Easy", "Medium", "Hard" based on marks and complexity
+- "unit": unit or module reference if mentioned (string or null)
+
+Return ONLY a valid JSON array of question objects. No markdown, no explanation, no code fences.
+If no questions are found, return an empty array [].
+
+Rules:
+- Include ALL questions: numbered, lettered, roman-numeral, sub-parts
+- Do NOT include instructions, headers, or boilerplate text
+- Merge multi-line questions into a single "text" string
+- If marks are in parentheses like (5) or [10M], extract them as integers"""
+
+        response = model.generate_content(
+            f"{system_prompt}\n\nEXAM PAPER TEXT:\n{truncated}"
+        )
+
+        raw = response.text.strip()
+        # Strip markdown code fences if Gemini wraps in ```json ... ```
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw)
+
+        questions_raw = _json.loads(raw)
+        if not isinstance(questions_raw, list):
+            raise ValueError("Gemini returned non-list JSON")
+
+        # Normalise to the same shape PDFParser returns
+        questions = []
+        for q in questions_raw:
+            if not isinstance(q, dict) or not q.get("text", "").strip():
+                continue
+            questions.append({
+                "text":          q["text"].strip(),
+                "marks":         int(q.get("marks") or 0),
+                "question_type": q.get("question_type") or "Mixed/other",
+                "difficulty":    q.get("difficulty") or "Medium",
+                "unit":          q.get("unit") or None,
+                "keywords":      [],
+            })
+
+        logger.info(f"Gemini extracted {len(questions)} questions")
+        return questions
+
+    except Exception as exc:
+        logger.error(f"Gemini question extraction failed: {exc} — falling back to regex parser")
+        return PDFParser.parse_questions_from_text(text)
 
 
-async def process_pdf(pdf_path: str):
-    """Extract text from PDF"""
-    result = {"text": []}
-    
-    try:
-        import PyPDF2
-        with open(pdf_path, 'rb') as file:
-            reader = PyPDF2.PdfReader(file)
-            text = ""
-            for page in reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-            
-            if text:
-                result["text"].append(text)
-                logger.info(f"✅ Extracted text from PDF ({len(text)} chars)")
-    except ImportError:
-        logger.warning("PyPDF2 not installed. Skipping PDF processing.")
-    except Exception as e:
-        logger.error(f"PDF processing error: {e}")
-    
-    return result
-
-
-def extract_questions(text_content: List[str]):
-    """Extract questions from text content"""
-    questions = []
-    
-    import re
-    
-    for content in text_content:
-        lines = content.split('\n')
-        for line in lines:
-            line = line.strip()
-            # Detect question patterns
-            if line.endswith('?') or any(marker in line.lower() for marker in ['q.', 'question', 'marks:', '(', ')', 'explain', 'describe', 'calculate']):
-                if len(line) > 20 and len(line) < 500:  # Filter length
-                    questions.append({
-                        "text": line,
-                        "type": detect_question_type(line),
-                        "marks": extract_marks(line),
-                        "unit": extract_unit(line)
-                    })
-    
-    return questions
-
-
-def detect_question_type(text: str) -> str:
-    """Detect if question is theory, numerical, or diagram-based"""
-    text_lower = text.lower()
-    
-    if any(word in text_lower for word in ['calculate', 'compute', 'find the value', 'solve', 'determine the', 'evaluate']):
-        return "numerical"
-    elif any(word in text_lower for word in ['diagram', 'draw', 'sketch', 'show', 'figure', 'circuit']):
-        return "diagram"
-    elif any(word in text_lower for word in ['explain', 'describe', 'discuss', 'what', 'why', 'how', 'define', 'state']):
-        return "theory"
-    else:
-        return "mixed"
-
-
-def extract_marks(text: str) -> int:
-    """Extract marks from question text"""
-    import re
-    
-    patterns = [
-        r'\((\d+)\)',
-        r'\[(\d+)\]',
-        r'(\d+)\s*marks?',
-        r'marks?\s*[:\-]?\s*(\d+)'
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text.lower())
-        if match:
-            return int(match.group(1))
-    
-    return 0
-
-
-def extract_unit(text: str) -> str:
-    """Extract unit information from question text"""
-    import re
-    
-    # Look for unit patterns like "Unit 1", "Unit-1", "Unit1"
-    patterns = [
-        r'unit\s*(\d+)',
-        r'unit[-:]\s*(\d+)',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text.lower())
-        if match:
-            return f"Unit {match.group(1)}"
-    
-    return "Unknown"
-
-
-async def generate_upload_analysis(subject_id: str, extracted_data: dict, db: Session):
-    """Generate comprehensive analysis from extracted data"""
-    
+async def generate_upload_analysis(subject_id: str, parsed_questions: list, db: Session):
+    """Generate summary analysis from parsed questions."""
     analysis = {
         "subject_id": subject_id,
         "timestamp": datetime.now().isoformat(),
         "summary": {
-            "total_questions": len(extracted_data["questions"]),
-            "theory_questions": len([q for q in extracted_data["questions"] if q["type"] == "theory"]),
-            "numerical_questions": len([q for q in extracted_data["questions"] if q["type"] == "numerical"]),
-            "diagram_questions": len([q for q in extracted_data["questions"] if q["type"] == "diagram"]),
-            "detected_objects": len(extracted_data["detected_objects"]),
-            "circuit_diagrams": len(extracted_data["circuit_diagrams"])
+            "total_questions": len(parsed_questions),
+            "theory_questions":     len([q for q in parsed_questions if "Conceptual" in q.get("question_type", "") or "Definition" in q.get("question_type", "")]),
+            "numerical_questions":  len([q for q in parsed_questions if "Calculation" in q.get("question_type", "")]),
+            "proof_questions":      len([q for q in parsed_questions if "Proof" in q.get("question_type", "")]),
         },
-        "topics": [],
         "patterns": {},
-        "predictions": {}
+        "predictions": {},
     }
-    
-    # Analyze question patterns
-    if extracted_data["questions"]:
-        # Count by type
-        type_counts = {}
-        marks_distribution = {}
-        
-        for q in extracted_data["questions"]:
-            q_type = q.get("type", "unknown")
-            type_counts[q_type] = type_counts.get(q_type, 0) + 1
-            
-            marks = q.get("marks", 0)
-            if marks > 0:
-                marks_distribution[marks] = marks_distribution.get(marks, 0) + 1
-        
+
+    if parsed_questions:
+        type_counts: Dict[str, int] = {}
+        marks_dist:  Dict[int, int] = {}
+        for q in parsed_questions:
+            qt = q.get("question_type", "Mixed/other")
+            type_counts[qt] = type_counts.get(qt, 0) + 1
+            m = q.get("marks", 0)
+            if m:
+                marks_dist[m] = marks_dist.get(m, 0) + 1
+
         analysis["patterns"] = {
-            "question_types": type_counts,
-            "marks_distribution": marks_distribution
+            "question_types":    type_counts,
+            "marks_distribution": marks_dist,
         }
-        
-        # Simple prediction logic based on frequency
-        analysis["predictions"] = {
-            "high_probability": [],
-            "medium_probability": [],
-            "low_probability": []
-        }
-        
-        # Group similar questions (simplified)
-        question_texts = [q["text"] for q in extracted_data["questions"]]
+
         from collections import Counter
-        question_counts = Counter(question_texts)
-        
-        for question, count in question_counts.items():
+        text_counts = Counter(q["text"] for q in parsed_questions)
+        high, medium = [], []
+        for text, count in text_counts.items():
             if count >= 2:
-                analysis["predictions"]["high_probability"].append({
-                    "question": question,
-                    "confidence": min(70 + (count - 2) * 10, 95),
-                    "reason": f"Appeared {count} times"
-                })
+                high.append({"question": text, "confidence": min(70 + (count - 2) * 10, 95), "reason": f"Appeared {count} times"})
             else:
-                analysis["predictions"]["medium_probability"].append({
-                    "question": question,
-                    "confidence": 50,
-                    "reason": "Appeared once"
-                })
-    
+                medium.append({"question": text, "confidence": 50, "reason": "Appeared once"})
+
+        analysis["predictions"] = {
+            "high_probability":   high[:10],
+            "medium_probability": medium[:20],
+            "low_probability":    [],
+        }
+
     return analysis
 
 

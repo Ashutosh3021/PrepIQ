@@ -71,12 +71,18 @@ except Exception as e:
     external_api = None
 
 # BERTopic for advanced topic modeling (optional heavy dependency)
+# Wrapped in a broad try/except because BERTopic internally imports
+# sentence_transformers.models.StaticEmbedding which doesn't exist in
+# older sentence-transformers versions, causing a noisy ImportError.
 try:
-    from bertopic import BERTopic
-    from umap import UMAP
-    from hdbscan import HDBSCAN
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.simplefilter("ignore")
+        from bertopic import BERTopic
+        from umap import UMAP
+        from hdbscan import HDBSCAN
     BERTOPIC_AVAILABLE = True
-except ImportError:
+except Exception:
     BERTOPIC_AVAILABLE = False
     BERTopic = None
     UMAP = None
@@ -144,20 +150,21 @@ class EnhancedQuestionAnalyzer:
         
         # LDA model for topic modeling
         self.lda_model = LatentDirichletAllocation(
-            n_components=10,  # Number of topics to extract
+            n_components=10,
             random_state=42,
-            max_iter=100,  # Increased iterations for better convergence
-            learning_method='online',  # Better for larger datasets
+            max_iter=100,
+            learning_method='online',
             learning_offset=50.,
-            doc_topic_prior=0.1,  # Symmetric Dirichlet prior
-            topic_word_prior=0.01  # Symmetric Dirichlet prior
+            doc_topic_prior=0.1,
+            topic_word_prior=0.01,
+            n_jobs=1,  # avoid joblib wmic CPU detection on Windows
         )
         
         # K-means clustering for question types
         self.kmeans_model = KMeans(
             n_clusters=5,
             random_state=42,
-            n_init=10
+            n_init=10,
         )
         
         # Initialize BERTopic if available
@@ -336,23 +343,32 @@ class EnhancedQuestionAnalyzer:
         return intersection / union if union != 0 else 0.0
     
     def find_similar_questions(self, questions: List[Dict[str, Any]], threshold: float = 0.7) -> List[Dict[str, Any]]:
-        """Find semantically similar questions"""
+        """Find semantically similar questions using bulk TF-IDF cosine similarity (fast, no API calls)."""
         similar_pairs = []
-        
-        for i in range(len(questions)):
-            for j in range(i + 1, len(questions)):
-                text1 = questions[i].get('text', '')
-                text2 = questions[j].get('text', '')
-                
-                similarity = self.calculate_semantic_similarity(text1, text2)
-                
-                if similarity >= threshold:
-                    similar_pairs.append({
-                        'question1': questions[i],
-                        'question2': questions[j],
-                        'similarity_score': similarity
-                    })
-        
+        if len(questions) < 2:
+            return similar_pairs
+
+        texts = [q.get('text', '') for q in questions]
+
+        # Bulk vectorise once, then compute the full similarity matrix in one shot
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            from sklearn.metrics.pairwise import cosine_similarity as _cos_sim
+            vect = TfidfVectorizer(stop_words='english', max_features=500)
+            mat = vect.fit_transform(texts)
+            sim_matrix = _cos_sim(mat)
+
+            for i in range(len(questions)):
+                for j in range(i + 1, len(questions)):
+                    if sim_matrix[i, j] >= threshold:
+                        similar_pairs.append({
+                            'question1': questions[i],
+                            'question2': questions[j],
+                            'similarity_score': float(sim_matrix[i, j]),
+                        })
+        except Exception as e:
+            logger.warning(f"Bulk similarity failed, skipping: {e}")
+
         return similar_pairs
     
     def analyze_patterns(self, questions: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -422,10 +438,10 @@ class EnhancedQuestionAnalyzer:
                     "model_available": True
                 }
             except Exception as e:
-                logger.error(f"Error in BERTopic analysis: {str(e)}")
-                bertopic_analysis = {"model_available": False, "error": str(e)}
+                logger.debug(f"BERTopic analysis skipped: {e}")
+                bertopic_analysis = {"model_available": False}
         else:
-            bertopic_analysis = {"model_available": False, "message": "BERTopic model not available"}
+            bertopic_analysis = {"model_available": False}
         
         # Analyze frequencies of topics
         topic_frequencies = {}

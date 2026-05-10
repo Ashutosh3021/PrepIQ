@@ -6,6 +6,11 @@ import os
 import sys
 import asyncio
 
+# ── Windows: fix joblib/loky wmic CPU detection crash ────────────────────────
+# Must be set BEFORE any sklearn/joblib import. joblib reads this env var to
+# skip the wmic subprocess call that fails when wmic is unavailable.
+os.environ.setdefault("LOKY_MAX_CPU_COUNT", "4")
+
 # Fix for Windows asyncio ProactorEventLoop connection reset errors
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())

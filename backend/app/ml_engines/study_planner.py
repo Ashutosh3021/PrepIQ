@@ -198,14 +198,14 @@ class StudyPlanner:
         current_date = start_date
         
         # Calculate topics per day based on total topics and days
-        topics_per_day = max(1, len(sorted_topics) // total_days)
+        topics_per_day = max(1, len(sorted_topics) // max(total_days, 1))
         
         topic_idx = 0
         for day in range(1, total_days + 1):
             day_topics = []
             
             # Assign topics for this day
-            topics_for_day = min(topics_per_day, len(sorted_topics) - topic_idx)
+            topics_for_day = max(1, min(topics_per_day, len(sorted_topics) - topic_idx))
             
             # Adjust assignment based on topic importance and weak areas
             if topic_idx < len(sorted_topics):
@@ -230,16 +230,26 @@ class StudyPlanner:
                 topic_idx += len(selected_indices)
             
             # Add review sessions for previously studied topics
-            if day > 1:
+            if day > 1 and daily_schedule:
                 review_topics = self._select_review_topics(daily_schedule, day)
                 day_topics.extend(review_topics)
+            
+            # Ensure at least one topic per day
+            if not day_topics:
+                day_topics.append({
+                    'name': f'Review & Practice',
+                    'unit': 'General',
+                    'importance': 0.5,
+                    'is_weak_area': False,
+                    'study_duration_hours': 1.0
+                })
             
             daily_schedule.append({
                 "day": day,
                 "date": current_date.strftime("%Y-%m-%d"),
-                "topics": day_topics,
-                "recommended_hours": sum([t.get('study_duration_hours', 1) for t in day_topics]),
-                "focus_topics": [t['name'] for t in day_topics if t.get('is_weak_area')],
+                "topics": [t['name'] for t in day_topics],  # Convert to list of strings
+                "recommended_hours": float(sum([t.get('study_duration_hours', 1.0) for t in day_topics])),
+                "priority_topics": [t['name'] for t in day_topics if t.get('is_weak_area')],
                 "spaced_repetition_session": len([t for t in day_topics if t.get('is_review', False)]) > 0
             })
             
@@ -254,21 +264,24 @@ class StudyPlanner:
         if not remaining_topics or max_topics <= 0:
             return []
         
+        # Ensure max_topics doesn't exceed available topics
+        max_topics = min(max_topics, len(remaining_topics))
+        
         # Prioritize weak areas first, then high importance topics
         priority_indices = []
         
         # Find weak areas in remaining topics
-        weak_area_indices = [i for i, topic in enumerate(remaining_topics) if topic['is_weak_area']]
+        weak_area_indices = [i for i, topic in enumerate(remaining_topics) if topic.get('is_weak_area', False)]
         
         # Find high importance topics
         high_importance_indices = [i for i, topic in enumerate(remaining_topics) 
-                                  if not remaining_topics[i]['is_weak_area'] and 
-                                  remaining_topics[i]['importance'] > 0.7]
+                                  if not remaining_topics[i].get('is_weak_area', False) and 
+                                  remaining_topics[i].get('importance', 0) > 0.7]
         
         # Find medium importance topics
         medium_importance_indices = [i for i, topic in enumerate(remaining_topics) 
-                                    if not remaining_topics[i]['is_weak_area'] and 
-                                    0.4 <= remaining_topics[i]['importance'] <= 0.7]
+                                    if not remaining_topics[i].get('is_weak_area', False) and 
+                                    0.4 <= remaining_topics[i].get('importance', 0) <= 0.7]
         
         # Select topics based on priority
         selected = []
@@ -279,23 +292,31 @@ class StudyPlanner:
         
         # Add high importance topics
         remaining_slots = max_topics - len(selected)
-        high_to_add = min(remaining_slots, len(high_importance_indices))
-        selected.extend(high_importance_indices[:high_to_add])
+        if remaining_slots > 0:
+            high_to_add = min(remaining_slots, len(high_importance_indices))
+            selected.extend(high_importance_indices[:high_to_add])
         
         # Add medium importance topics
         remaining_slots = max_topics - len(selected)
-        medium_to_add = min(remaining_slots, len(medium_importance_indices))
-        selected.extend(medium_importance_indices[:medium_to_add])
+        if remaining_slots > 0:
+            medium_to_add = min(remaining_slots, len(medium_importance_indices))
+            selected.extend(medium_importance_indices[:medium_to_add])
         
         # Fill remaining slots with any topics
         remaining_slots = max_topics - len(selected)
-        all_other_indices = [i for i in range(len(remaining_topics)) 
-                           if i not in weak_area_indices 
-                           and i not in high_importance_indices 
-                           and i not in medium_importance_indices]
+        if remaining_slots > 0:
+            all_other_indices = [i for i in range(len(remaining_topics)) 
+                               if i not in weak_area_indices 
+                               and i not in high_importance_indices 
+                               and i not in medium_importance_indices]
+            
+            remaining_to_add = min(remaining_slots, len(all_other_indices))
+            selected.extend(all_other_indices[:remaining_to_add])
         
-        remaining_to_add = min(remaining_slots, len(all_other_indices))
-        selected.extend(all_other_indices[:remaining_to_add])
+        # If still not enough, just take the first max_topics
+        if len(selected) < max_topics:
+            all_indices = [i for i in range(len(remaining_topics)) if i not in selected]
+            selected.extend(all_indices[:max_topics - len(selected)])
         
         return selected[:max_topics]
     
@@ -304,6 +325,9 @@ class StudyPlanner:
         Select topics for review based on spaced repetition algorithm
         """
         review_topics = []
+        
+        if not previous_schedule:
+            return review_topics
         
         # Determine which days to review based on spaced repetition intervals
         review_intervals = []
@@ -316,11 +340,21 @@ class StudyPlanner:
         for day_idx in review_intervals:
             if day_idx < len(previous_schedule):
                 day_schedule = previous_schedule[day_idx]
-                for topic in day_schedule.get('topics', []):
-                    # Add as review topic with different properties
-                    review_topic = topic.copy()
-                    review_topic['is_review'] = True
-                    review_topic['study_duration_hours'] *= 0.5  # Less time for review
+                topics_list = day_schedule.get('topics', [])
+                
+                # Handle both list of strings and list of dicts
+                for topic in topics_list:
+                    if isinstance(topic, dict):
+                        review_topic = topic.copy()
+                        review_topic['is_review'] = True
+                        review_topic['study_duration_hours'] = review_topic.get('study_duration_hours', 1.0) * 0.5
+                    else:
+                        # Topic is a string
+                        review_topic = {
+                            'name': str(topic),
+                            'is_review': True,
+                            'study_duration_hours': 0.5
+                        }
                     review_topics.append(review_topic)
         
         return review_topics

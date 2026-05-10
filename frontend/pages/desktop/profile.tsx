@@ -3,9 +3,8 @@ import Head from 'next/head';
 import { DesktopLayout } from '@/components/desktop';
 import { Skeleton } from '@/components/common';
 import { useAuth } from '@/lib/context/AuthContext';
-import { userService } from '@/lib/services/user.service';
+import { useProfile } from '@/lib/hooks/useProfile';
 import { apiFetch } from '@/lib/services/base.service';
-import type { User } from '@/lib/types/user.types';
 
 // ── Dashboard stats shape (subset we need for the profile page) ──────────────
 interface ProfileStats {
@@ -50,8 +49,8 @@ function relativeTime(iso: string): string {
 
 export default function DesktopProfile() {
   const { user: authUser } = useAuth();
+  const { profile, isLoading: profileLoading } = useProfile();
 
-  const [profile, setProfile] = useState<User | null>(null);
   const [stats, setStats] = useState<ProfileStats | null>(null);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,8 +63,7 @@ export default function DesktopProfile() {
   useEffect(() => {
     async function load() {
       try {
-        const [profileData, statsData, activityData] = await Promise.all([
-          userService.getProfile(),
+        const [statsData, activityData] = await Promise.all([
           apiFetch<ProfileStats>('/dashboard/stats', {
             subjects_count: 0,
             completion_percentage: 0,
@@ -74,11 +72,10 @@ export default function DesktopProfile() {
           }),
           apiFetch<ActivityItem[]>('/dashboard/recent-activity', []),
         ]);
-        setProfile(profileData);
         setStats(statsData);
         setActivity(activityData.slice(0, 3));
       } catch {
-        // Non-fatal — show whatever we have from auth context
+        // Non-fatal
       } finally {
         setLoading(false);
       }
@@ -86,7 +83,7 @@ export default function DesktopProfile() {
     load();
   }, []);
 
-  if (loading) {
+  if (profileLoading || loading) {
     return (
       <DesktopLayout>
         <Skeleton className="h-64 w-full mb-12" />

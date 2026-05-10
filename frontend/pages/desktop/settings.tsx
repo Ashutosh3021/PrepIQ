@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/router';
 import { DesktopLayout } from '@/components/desktop';
 import { Skeleton } from '@/components/common';
-import { userService } from '@/lib/services/user.service';
-import { apiFetch } from '@/lib/services/base.service';
-import type { User } from '@/lib/types/user.types';
+import { useAuth } from '@/lib/context/AuthContext';
+import { useProfile } from '@/lib/hooks/useProfile';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -35,15 +35,28 @@ function readThemeSettings() {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function DesktopSettings() {
-  // ── Profile state ──────────────────────────────────────────────────────────
-  const [profile, setProfile] = useState<User | null>(null);
-  const [profileLoading, setProfileLoading] = useState(true);
+  const { signOut } = useAuth();
+  const router = useRouter();
+  const { profile, isLoading: profileLoading, updateProfile } = useProfile();
+
+  // ── Profile form state ─────────────────────────────────────────────────────
   const [fullName, setFullName] = useState('');
   const [collegeName, setCollegeName] = useState('');
   const [program, setProgram] = useState('');
   const [yearOfStudy, setYearOfStudy] = useState('');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState('');
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  // Sync form fields when profile loads
+  useEffect(() => {
+    if (profile) {
+      setFullName(profile.full_name ?? '');
+      setCollegeName(profile.college_name ?? '');
+      setProgram(profile.program ?? '');
+      setYearOfStudy(String(profile.year_of_study ?? ''));
+    }
+  }, [profile]);
 
   // ── Notification / theme state (localStorage) ──────────────────────────────
   const [weeklyDigest, setWeeklyDigest] = useState(true);
@@ -52,24 +65,12 @@ export default function DesktopSettings() {
   const [themeIdx, setThemeIdx] = useState(0);
   const [typographyIdx, setTypographyIdx] = useState(0);
 
-  // ── Load profile on mount ──────────────────────────────────────────────────
+  // Restore localStorage preferences on mount
   useEffect(() => {
-    userService.getProfile().then((data) => {
-      setProfile(data);
-      setFullName(data.full_name ?? '');
-      setCollegeName(data.college_name ?? '');
-      setProgram(data.program ?? '');
-      setYearOfStudy(String(data.year_of_study ?? ''));
-    }).catch(() => {
-      // Non-fatal — form stays empty
-    }).finally(() => setProfileLoading(false));
-
-    // Restore localStorage preferences
     const notif = readNotifSettings();
     setWeeklyDigest(notif.weeklyDigest);
     setAiAlerts(notif.aiAlerts);
     setCommunityInvites(notif.communityInvites);
-
     const theme = readThemeSettings();
     setThemeIdx(theme.theme);
     setTypographyIdx(theme.typography);
@@ -80,14 +81,11 @@ export default function DesktopSettings() {
     setSaveStatus('saving');
     setSaveError('');
     try {
-      await apiFetch('/wizard/update', {}, {
-        method: 'PUT',
-        body: JSON.stringify({
-          full_name: fullName.trim() || undefined,
-          college_name: collegeName.trim() || undefined,
-          program: program.trim() || undefined,
-          year_of_study: yearOfStudy ? Number(yearOfStudy) : undefined,
-        }),
+      await updateProfile({
+        full_name: fullName.trim() || undefined,
+        college_name: collegeName.trim() || undefined,
+        program: program || undefined,
+        year_of_study: yearOfStudy ? Number(yearOfStudy) : undefined,
       });
 
       // Persist notification + theme preferences to localStorage
@@ -99,6 +97,17 @@ export default function DesktopSettings() {
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : 'Save failed. Please try again.');
       setSaveStatus('error');
+    }
+  };
+
+  // ── Logout ─────────────────────────────────────────────────────────────────
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await signOut();
+      router.push('/');
+    } catch {
+      setLoggingOut(false);
     }
   };
 
@@ -193,23 +202,6 @@ export default function DesktopSettings() {
                 </div>
               ) : (
                 <div className="bg-surface-container-low p-10 grid grid-cols-2 gap-x-12 gap-y-8">
-                  {/* Email — read-only, managed by Supabase OAuth */}
-                  <div className="col-span-2 space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
-                      Email Address
-                    </label>
-                    <input
-                      className="w-full bg-surface border-none border-b-2 border-outline-variant/20 p-3 text-sm text-on-surface/50 cursor-not-allowed"
-                      type="email"
-                      value={profile?.email ?? ''}
-                      disabled
-                      title="Email is managed by your OAuth provider and cannot be changed here."
-                    />
-                    <p className="text-[10px] text-on-surface/40">
-                      Managed by your Google / GitHub account — cannot be changed here.
-                    </p>
-                  </div>
-
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
                       Full Name
@@ -240,28 +232,32 @@ export default function DesktopSettings() {
                     <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
                       Program
                     </label>
-                    <input
-                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm transition-all duration-150"
-                      type="text"
+                    <select
+                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm transition-all duration-150 appearance-none cursor-pointer"
                       value={program}
                       onChange={(e) => setProgram(e.target.value)}
-                      placeholder="e.g. B.Tech, B.Sc"
-                    />
+                    >
+                      <option value="">Select program…</option>
+                      {['BTech', 'BE', 'BSc', 'BCA', 'MCA', 'MTech', 'MSc', 'MBA', 'Other'].map((p) => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </select>
                   </div>
 
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
                       Year of Study
                     </label>
-                    <input
-                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm transition-all duration-150"
-                      type="number"
-                      min={1}
-                      max={6}
+                    <select
+                      className="w-full bg-surface border-none border-b-2 border-outline-variant/40 focus:border-primary focus:ring-0 p-3 text-sm transition-all duration-150 appearance-none cursor-pointer"
                       value={yearOfStudy}
                       onChange={(e) => setYearOfStudy(e.target.value)}
-                      placeholder="1–6"
-                    />
+                    >
+                      <option value="">Select year…</option>
+                      {[1, 2, 3, 4, 5, 6].map((y) => (
+                        <option key={y} value={y}>Year {y}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               )}
@@ -394,6 +390,37 @@ export default function DesktopSettings() {
                 </div>
               </div>
             </section>
+
+            {/* ── Logout ── */}
+            <section className="pt-8 border-t border-outline-variant/20">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-on-surface">Sign Out</p>
+                  <p className="text-xs text-on-surface/60 mt-1">
+                    You will be redirected to the login page.
+                  </p>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  disabled={loggingOut}
+                  className="flex items-center gap-3 border border-outline-variant/40 text-on-surface/70 px-8 py-3 text-xs font-bold uppercase tracking-widest hover:border-error hover:text-error transition-all duration-150 disabled:opacity-40"
+                >
+                  {loggingOut ? (
+                    <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                      <polyline points="16 17 21 12 16 7" />
+                      <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                  )}
+                  {loggingOut ? 'Signing out…' : 'Sign Out'}
+                </button>
+              </div>
+            </section>
+
           </div>
         </div>
       </DesktopLayout>

@@ -8,10 +8,13 @@ import { getAccessToken } from '@/lib/services/base.service';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface UploadResult {
-  paper_id: string;
-  status: 'completed' | 'failed' | string;
+  success: boolean;
+  upload_id: string;
   message: string;
-  questions_count: number;
+  extracted_data?: {
+    questions_count: number;
+    questions?: unknown[];
+  };
 }
 
 interface UploadProgress {
@@ -442,25 +445,29 @@ export default function DesktopUpload() {
                 <p className="text-xs font-bold uppercase tracking-widest text-on-surface/60">
                   Upload Results
                 </p>
-                {results.map((r) => (
-                  <div
-                    key={r.paper_id}
-                    className={`p-4 text-sm border-l-2 ${
-                      r.status === 'completed'
-                        ? 'bg-green-50 border-green-500 text-green-800'
-                        : 'bg-red-50 border-red-400 text-red-700'
-                    }`}
-                  >
-                    <p className="font-bold mb-0.5">
-                      {r.status === 'completed' ? '✓' : '✗'} {r.message}
-                    </p>
-                    {r.status === 'completed' && (
-                      <p className="text-xs opacity-70">
-                        {r.questions_count} question{r.questions_count !== 1 ? 's' : ''} extracted
+                {results.map((r, idx) => {
+                  const succeeded = r.success === true;
+                  const questionsCount = r.extracted_data?.questions_count ?? 0;
+                  return (
+                    <div
+                      key={r.upload_id ?? idx}
+                      className={`p-4 text-sm border-l-2 ${
+                        succeeded
+                          ? 'bg-green-50 border-green-500 text-green-800'
+                          : 'bg-red-50 border-red-400 text-red-700'
+                      }`}
+                    >
+                      <p className="font-bold mb-0.5">
+                        {succeeded ? '✓' : '✗'} {r.message}
                       </p>
-                    )}
-                  </div>
-                ))}
+                      {succeeded && (
+                        <p className="text-xs opacity-70">
+                          {questionsCount} question{questionsCount !== 1 ? 's' : ''} extracted
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </section>

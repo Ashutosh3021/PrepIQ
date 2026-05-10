@@ -379,6 +379,18 @@ async def update_wizard_data(
             )
         
         # Update allowed fields if provided
+        if update_data.full_name is not None:
+            db_user.full_name = update_data.full_name.strip()
+
+        if update_data.college_name is not None:
+            db_user.college_name = update_data.college_name.strip()
+
+        if update_data.program is not None:
+            db_user.program = update_data.program.strip()
+
+        if update_data.year_of_study is not None:
+            db_user.year_of_study = update_data.year_of_study
+
         if hasattr(update_data, 'exam_name') and update_data.exam_name:
             db_user.exam_name = update_data.exam_name.strip()
         
@@ -434,9 +446,9 @@ async def update_wizard_data(
         logger.info(f"User {current_user['id']} updated wizard data")
         
         return {
-            "id": str(current_user["id"]),
-            "email": current_user["email"],
-            "full_name": current_user.get("full_name", ""),
+            "id": str(db_user.id),
+            "email": db_user.email,
+            "full_name": db_user.full_name or "",
             "access_token": None
         }
         

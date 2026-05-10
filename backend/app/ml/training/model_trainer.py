@@ -212,7 +212,7 @@ class ModelTrainer:
                 param_grid,
                 cv=config.get('cv_folds', 3),
                 scoring='accuracy' if hasattr(model, 'predict') else 'neg_mean_squared_error',
-                n_jobs=-1
+                n_jobs=1  # avoid joblib wmic CPU detection on Windows
             )
             
             grid_search.fit(X, y)

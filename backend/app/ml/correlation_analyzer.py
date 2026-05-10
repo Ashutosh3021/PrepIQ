@@ -44,12 +44,12 @@ class CorrelationAnalyzer:
             row = {
                 'question_id': q.get('id', ''),
                 'text_length': len(q.get('text', '')),
-                'marks': q.get('marks', 0),
+                'marks': float(q.get('marks') or 0),   # Decimal → float
                 'unit': q.get('unit', 'Unknown'),
                 'difficulty': q.get('difficulty', 'medium'),
                 'question_type': q.get('question_type', 'unknown'),
-                'year': q.get('year', datetime.now().year),
-                'semester': q.get('semester', 1)
+                'year': int(q.get('year') or datetime.now().year),
+                'semester': int(q.get('semester') or 1),
             }
             
             # Convert categorical variables to numeric
@@ -77,7 +77,12 @@ class CorrelationAnalyzer:
         # Add derived features
         if not df.empty:
             df['marks_per_word'] = df['marks'] / (df['text_length'] + 1)
-            df['year_month'] = pd.to_datetime(df[['year', 'semester']].assign(day=1))
+            # Build a proper date: semester 1 → month 1, semester 2 → month 7
+            df['year_month'] = pd.to_datetime({
+                'year':  df['year'],
+                'month': df['semester'].map({1: 1, 2: 7}).fillna(1).astype(int),
+                'day':   1,
+            })
         
         return df
     

@@ -25,7 +25,8 @@ class FocusAreaIdentifier(ClassificationModel):
             min_samples_split=5,
             min_samples_leaf=2,
             random_state=42,
-            class_weight='balanced'
+            class_weight='balanced',
+            n_jobs=1,  # avoid joblib wmic CPU detection on Windows
         )
         self.scaler = StandardScaler()
         self.feature_columns = [
