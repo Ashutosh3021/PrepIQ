@@ -5,6 +5,8 @@ import { Skeleton } from '@/components/common';
 import { useTutor } from '@/lib/hooks/useTutor';
 import { useSubjects } from '@/lib/hooks/useSubjects';
 import { tutorService } from '@/lib/services/tutor.service';
+import TutorThinkingLoader from '@/components/desktop/TutorThinkingLoader';
+import TypewriterText from '@/components/desktop/TypewriterText';
 
 export default function DesktopAITutor() {
   const [input, setInput] = useState('');
@@ -163,7 +165,7 @@ export default function DesktopAITutor() {
                   )}
                 </div>
               ) : (
-                messages.map((msg) => (
+                messages.map((msg, msgIdx) => (
                   <div
                     key={msg.id}
                     className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
@@ -180,30 +182,27 @@ export default function DesktopAITutor() {
                           : 'bg-primary text-white'
                       }`}
                     >
-                      {msg.content.split('\n\n').map((paragraph, idx) => (
-                        <p key={idx} className={idx > 0 ? 'mt-4 text-sm' : 'text-sm'}>
-                          {paragraph}
-                        </p>
-                      ))}
+                      {msg.sender === 'ai' && msgIdx === messages.length - 1 ? (
+                        // Most recent AI message — typewriter reveal
+                        <TypewriterText
+                          text={msg.content}
+                          speed={38}
+                          className="text-sm whitespace-pre-wrap"
+                        />
+                      ) : (
+                        // Older messages — show instantly
+                        msg.content.split('\n\n').map((paragraph, idx) => (
+                          <p key={idx} className={idx > 0 ? 'mt-4 text-sm' : 'text-sm'}>
+                            {paragraph}
+                          </p>
+                        ))
+                      )}
                     </div>
                   </div>
                 ))
               )}
-              {isLoading && (
-                <div className="flex items-start gap-3">
-                  <div className="p-4 md:p-6 bg-surface border-l-4 border-primary">
-                    <div className="flex gap-1">
-                      {[0, 1, 2].map((i) => (
-                        <span
-                          key={i}
-                          className="w-2 h-2 bg-primary/40 rounded-full animate-bounce"
-                          style={{ animationDelay: `${i * 0.15}s` }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
+              {/* Thinking loader — shown while waiting for AI response */}
+              {isLoading && <TutorThinkingLoader />}
               <div className="h-12" />
             </div>
 
