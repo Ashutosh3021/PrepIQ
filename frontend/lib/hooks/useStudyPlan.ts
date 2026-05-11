@@ -4,7 +4,7 @@ import { studyPlanService, StudyPlan, StudyPlanRequest, StudyPlanUpdate } from '
 export function useStudyPlan(subjectId?: string) {
   const { data, error, isLoading, mutate } = useSWR<StudyPlan>(
     subjectId ? `/plan/subject/${subjectId}` : null,
-    () => (subjectId ? studyPlanService.getBySubject(subjectId) : null),
+    subjectId ? () => studyPlanService.getBySubject(subjectId) : null,
     {
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
