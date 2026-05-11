@@ -115,7 +115,7 @@ export default function DesktopUpload() {
 
   const pollProgress = async (uploadId: string, token: string) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? '';
+      const apiUrl = `${process.env.NEXT_PUBLIC_API_URL ?? ''}/api/v1`;
       const res = await fetch(`${apiUrl}/upload/status/${uploadId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -147,7 +147,7 @@ export default function DesktopUpload() {
     setUploadProgress(null);
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? '';
+      const apiUrl = `${process.env.NEXT_PUBLIC_API_URL ?? ''}/api/v1`;
       const formData = new FormData();
       selectedFiles.forEach((f) => formData.append('files', f));
       formData.append('subject_id', selectedSubjectId);

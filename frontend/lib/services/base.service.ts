@@ -9,7 +9,9 @@
 import { supabase } from '@/lib/supabase';
 
 const IS_MOCK = process.env.NEXT_PUBLIC_API_MODE === 'mock';
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
+// Append /api/v1 so every apiFetch path resolves to the correct backend prefix.
+// NEXT_PUBLIC_API_URL should be the bare origin, e.g. https://host.railway.app
+const BASE_URL = `${process.env.NEXT_PUBLIC_API_URL ?? ''}/api/v1`;
 
 /** Standard API response envelope from backend */
 interface ApiResponse<T> {
