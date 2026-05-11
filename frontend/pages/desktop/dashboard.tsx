@@ -188,8 +188,8 @@ export default function DesktopDashboard() {
         )}
 
         {/* Hero Section — M-19: real user name */}
-        <section className="mb-16">
-          <h1 className="text-6xl font-serif italic text-on-surface mb-2 tracking-tight">
+        <section className="mb-8 md:mb-16">
+          <h1 className="text-4xl md:text-6xl font-serif italic text-on-surface mb-2 tracking-tight">
             {greeting}, {displayName}
           </h1>
           <p className="text-on-surface/60 font-medium uppercase tracking-widest text-xs">
@@ -200,7 +200,7 @@ export default function DesktopDashboard() {
         </section>
 
         {/* Stats Row */}
-        <section className="grid grid-cols-1 md:grid-cols-4 gap-0 mb-12 border-t border-l border-outline-variant/20">
+        <section className="grid grid-cols-2 md:grid-cols-4 gap-0 mb-8 md:mb-12 border-t border-l border-outline-variant/20">
           <StatWidget
             label="Subjects"
             value={String(stats?.subjects_count ?? subjects?.length ?? 0).padStart(2, '0')}
@@ -227,24 +227,24 @@ export default function DesktopDashboard() {
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-12 items-start">
           {/* Left: Today's Focus + Secondary Row */}
           <div className="lg:col-span-2">
-            <div className="bg-surface-container-highest p-12 relative overflow-hidden">
+            <div className="bg-surface-container-highest p-6 md:p-12 relative overflow-hidden">
               <div className="relative z-10">
-                <span className="text-xs font-bold uppercase tracking-[0.2em] text-primary mb-12 block">
+                <span className="text-xs font-bold uppercase tracking-[0.2em] text-primary mb-4 md:mb-12 block">
                   Current Focus Module
                 </span>
-                <h2 className="text-5xl font-serif italic text-on-surface mb-4">
+                <h2 className="text-3xl md:text-5xl font-serif italic text-on-surface mb-3 md:mb-4">
                   {stats?.focus_area && stats.focus_area !== 'N/A'
                     ? stats.focus_area
                     : 'Add a subject to get started'}
                 </h2>
-                <p className="text-lg text-on-surface/70 mb-12 max-w-md font-light leading-relaxed">
+                <p className="text-base md:text-lg text-on-surface/70 mb-6 md:mb-12 max-w-md font-light leading-relaxed">
                   {stats?.days_to_exam != null
                     ? `${stats.days_to_exam} days until your exam. Keep going!`
                     : 'Upload past papers to generate AI-powered predictions.'}
                 </p>
                 <Link
                   href="/desktop/start-test"
-                  className="bg-primary text-on-primary px-10 py-5 font-bold uppercase tracking-widest text-sm inline-flex items-center group hover:bg-primary/90 transition-colors"
+                  className="bg-primary text-on-primary px-6 md:px-10 py-3 md:py-5 font-bold uppercase tracking-widest text-sm inline-flex items-center group hover:bg-primary/90 transition-colors"
                 >
                   Start Studying
                   <span className="ml-3 group-hover:translate-x-1 transition-transform">

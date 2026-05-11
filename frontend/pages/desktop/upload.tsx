@@ -215,20 +215,20 @@ export default function DesktopUpload() {
       </Head>
       <DesktopLayout>
         {/* Header */}
-        <div className="mb-12 flex flex-col md:flex-row md:items-end md:justify-between gap-6">
+        <div className="mb-8 md:mb-12 flex flex-col md:flex-row md:items-end md:justify-between gap-4 md:gap-6">
           <div className="max-w-2xl">
-            <span className="text-xs font-bold tracking-[0.2em] uppercase text-primary mb-4 block">
+            <span className="text-xs font-bold tracking-[0.2em] uppercase text-primary mb-3 block">
               Archive Management
             </span>
-            <h1 className="text-5xl md:text-6xl font-serif italic leading-tight">
+            <h1 className="text-3xl md:text-5xl lg:text-6xl font-serif italic leading-tight">
               Enrich your library with
               <br />
               new study materials.
             </h1>
           </div>
-          <div className="text-right flex flex-col items-end">
-            <p className="text-sm text-on-surface/60 max-w-[240px] mb-4 italic">
-              Upload PDFs, Word documents, or PowerPoint files. Multiple files supported.
+          <div className="flex flex-col items-start md:items-end">
+            <p className="text-sm text-on-surface/60 max-w-[240px] mb-3 italic">
+              Upload PDFs, Word documents, or PowerPoint files.
             </p>
             <div className="flex items-center gap-2 text-primary font-bold">
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -272,26 +272,26 @@ export default function DesktopUpload() {
 
             {/* Drop zone */}
             <div
-              className="bg-surface-container-highest p-12 flex flex-col border border-dashed border-primary/30 relative cursor-pointer"
+              className="bg-surface-container-highest p-4 md:p-12 flex flex-col border border-dashed border-primary/30 relative cursor-pointer"
               onClick={() => fileInputRef.current?.click()}
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => { e.preventDefault(); validateAndSetFiles(e.dataTransfer.files); }}
             >
               <div className="absolute inset-0 border-[3px] border-dashed border-primary/20 pointer-events-none" />
-              <div className="flex flex-col items-center justify-center py-16 text-center relative z-10">
-                <div className="w-16 h-16 bg-primary text-white flex items-center justify-center mb-6">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <div className="flex flex-col items-center justify-center py-8 md:py-16 text-center relative z-10">
+                <div className="w-12 h-12 md:w-16 md:h-16 bg-primary text-white flex items-center justify-center mb-4 md:mb-6">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                     <polyline points="17 8 12 3 7 8" />
                     <line x1="12" y1="3" x2="12" y2="15" />
                   </svg>
                 </div>
-                <h2 className="text-2xl font-semibold mb-2">Drop files here or click to browse</h2>
+                <h2 className="text-lg md:text-2xl font-semibold mb-2">Drop files here or click to browse</h2>
                 <p className="text-on-surface/60 text-sm mb-2 font-medium">PDF · DOCX · DOC · PPTX · PPT</p>
-                <p className="text-on-surface/40 text-xs mb-8">Multiple files supported · Max {MAX_MB} MB each</p>
+                <p className="text-on-surface/40 text-xs mb-6 md:mb-8">Multiple files supported · Max {MAX_MB} MB each</p>
                 <button
                   type="button"
-                  className="bg-primary text-white px-10 py-4 font-bold uppercase tracking-widest text-xs hover:bg-primary/90 transition-colors"
+                  className="bg-primary text-white px-6 md:px-10 py-3 md:py-4 font-bold uppercase tracking-widest text-xs hover:bg-primary/90 transition-colors"
                   onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
                 >
                   Select Files from Device

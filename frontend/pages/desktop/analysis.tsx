@@ -88,19 +88,19 @@ export default function DesktopAnalysis() {
       </Head>
       <DesktopLayout>
         {/* Header Section */}
-        <div className="flex flex-col md:flex-row justify-between items-baseline mb-16 gap-8">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-baseline mb-8 md:mb-16 gap-4 md:gap-8">
           <div className="max-w-2xl">
-            <h1 className="text-6xl font-serif italic mb-4 leading-tight">
+            <h1 className="text-4xl md:text-6xl font-serif italic mb-4 leading-tight">
               AI Analysis Results
             </h1>
-            <p className="text-on-surface/70 text-lg font-light tracking-wide uppercase text-sm">
+            <p className="text-on-surface/70 font-light tracking-wide uppercase text-sm">
               {analysis
                 ? `${analysis.studyInsights.total_subjects} subject${analysis.studyInsights.total_subjects !== 1 ? 's' : ''} · ${analysis.studyInsights.total_questions_analyzed} questions analysed`
                 : 'No data yet — upload papers to generate analysis'}
             </p>
           </div>
           <div className="flex gap-4">
-            <button className="bg-primary text-on-primary px-8 py-3 font-bold flex items-center gap-2 hover:bg-primary/90 transition-colors">
+            <button className="bg-primary text-on-primary px-6 py-3 font-bold flex items-center gap-2 hover:bg-primary/90 transition-colors text-sm">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 <polyline points="7 10 12 15 17 10" />
@@ -112,9 +112,9 @@ export default function DesktopAnalysis() {
         </div>
 
         {/* Dashboard Bento Grid */}
-        <div className="grid grid-cols-12 gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 md:gap-8">
           {/* Overall Score Gauge */}
-          <div className="col-span-12 lg:col-span-4 bg-surface-container-high p-10 flex flex-col items-center justify-center relative">
+          <div className="col-span-1 md:col-span-12 lg:col-span-4 bg-surface-container-high p-8 md:p-10 flex flex-col items-center justify-center relative">
             <div className="absolute top-6 left-6">
               <span className="text-xs font-extrabold uppercase tracking-widest text-on-surface/70">
                 Overall Proficiency
@@ -162,8 +162,8 @@ export default function DesktopAnalysis() {
           </div>
 
           {/* Topic Weightage Bar Chart */}
-          <div className="col-span-12 lg:col-span-8 bg-surface-container p-10">
-            <div className="flex justify-between items-center mb-10">
+          <div className="col-span-1 md:col-span-12 lg:col-span-8 bg-surface-container p-6 md:p-10">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 md:mb-10">
               <h3 className="text-xl font-bold uppercase tracking-widest">
                 Subject Performance
               </h3>
@@ -208,10 +208,10 @@ export default function DesktopAnalysis() {
             </div>
           </div>
 
-          {/* Recommended Study Roadmap — driven by high-priority topics */}
-          <div className="col-span-12 grid grid-cols-1 md:grid-cols-3 gap-8">
+          {/* Recommended Study Roadmap */}
+          <div className="col-span-1 md:col-span-12 grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-8">
             <div className="md:col-span-3">
-              <h2 className="text-4xl font-serif italic mt-8">Recommended Study Roadmap</h2>
+              <h2 className="text-3xl md:text-4xl font-serif italic mt-4 md:mt-8">Recommended Study Roadmap</h2>
               <div className="h-px bg-outline-variant w-full mt-4 opacity-20" />
             </div>
             {weaknesses.length > 0 ? (
@@ -259,8 +259,8 @@ export default function DesktopAnalysis() {
             )}
           </div>
 
-          {/* Cognitive Behavioral Insights — driven by high-mastery topics */}
-          <div className="col-span-12 lg:col-span-7 bg-surface-container p-10">
+          {/* Cognitive Behavioral Insights */}
+          <div className="col-span-1 md:col-span-12 lg:col-span-7 bg-surface-container p-6 md:p-10">
             <h3 className="text-xl font-bold uppercase tracking-widest mb-6">
               Cognitive Behavioral Insights
             </h3>
@@ -287,8 +287,8 @@ export default function DesktopAnalysis() {
             </div>
           </div>
 
-          {/* Visual Content / Data Decoration */}
-          <div className="col-span-12 lg:col-span-5 relative h-[350px]">
+          {/* Visual Content */}
+          <div className="col-span-1 md:col-span-12 lg:col-span-5 relative h-[250px] md:h-[350px]">
             <div className="w-full h-full bg-surface-container-high flex items-center justify-center grayscale brightness-110">
               <span className="text-on-surface/20 text-sm uppercase tracking-widest">
                 Minimalist Library

@@ -35,11 +35,11 @@ export default function DesktopStudyPlan() {
       </Head>
       <DesktopLayout>
         {/* Header */}
-        <header className="mb-16">
+        <header className="mb-8 md:mb-16">
           <span className="text-xs font-bold uppercase tracking-widest text-primary mb-2 block">
             Academic Atelier / Study Planning
           </span>
-          <h1 className="text-6xl md:text-7xl font-serif italic leading-none mb-4">
+          <h1 className="text-4xl md:text-6xl lg:text-7xl font-serif italic leading-none mb-4">
             Study Plan
           </h1>
           <p className="text-on-surface/70 max-w-2xl text-base leading-relaxed">

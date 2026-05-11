@@ -131,25 +131,25 @@ export default function DesktopSettings() {
       </Head>
       <DesktopLayout>
         {/* Header */}
-        <header className="mb-16 border-b border-primary/10 pb-8 flex justify-between items-end">
+        <header className="mb-8 md:mb-16 border-b border-primary/10 pb-6 md:pb-8 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
           <div>
-            <h1 className="font-serif italic text-6xl text-on-surface">Settings</h1>
-            <p className="text-primary mt-4 font-medium uppercase tracking-widest text-xs">
+            <h1 className="font-serif italic text-4xl md:text-6xl text-on-surface">Settings</h1>
+            <p className="text-primary mt-2 md:mt-4 font-medium uppercase tracking-widest text-xs">
               Manage your academic profile &amp; preferences
             </p>
           </div>
-          <div className="flex gap-4">
+          <div className="flex gap-3 w-full sm:w-auto">
             <button
               onClick={handleDiscard}
               disabled={saveStatus === 'saving'}
-              className="bg-transparent border border-primary text-primary px-8 py-3 font-semibold uppercase text-xs tracking-widest hover:bg-primary hover:text-on-primary transition-all duration-150 disabled:opacity-40"
+              className="flex-1 sm:flex-none bg-transparent border border-primary text-primary px-5 md:px-8 py-3 font-semibold uppercase text-xs tracking-widest hover:bg-primary hover:text-on-primary transition-all duration-150 disabled:opacity-40"
             >
               Discard
             </button>
             <button
               onClick={handleSave}
               disabled={saveStatus === 'saving'}
-              className="bg-primary text-on-primary px-8 py-3 font-semibold uppercase text-xs tracking-widest hover:bg-primary/90 transition-all duration-150 disabled:opacity-40 flex items-center gap-2"
+              className="flex-1 sm:flex-none bg-primary text-on-primary px-5 md:px-8 py-3 font-semibold uppercase text-xs tracking-widest hover:bg-primary/90 transition-all duration-150 disabled:opacity-40 flex items-center justify-center gap-2"
             >
               {saveStatus === 'saving' && (
                 <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -167,9 +167,9 @@ export default function DesktopSettings() {
           </div>
         )}
 
-        <div className="grid grid-cols-12 gap-12">
-          {/* Side Navigation */}
-          <aside className="col-span-3">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 md:gap-12">
+          {/* Side Navigation — hidden on mobile, shown md+ */}
+          <aside className="hidden md:block md:col-span-3">
             <nav className="flex flex-col gap-2">
               {[
                 { href: '#profile', label: 'Profile Information' },
@@ -185,7 +185,7 @@ export default function DesktopSettings() {
           </aside>
 
           {/* Settings Content */}
-          <div className="col-span-9 space-y-24">
+          <div className="col-span-1 md:col-span-9 space-y-12 md:space-y-24">
 
             {/* ── 01. Profile Information ── */}
             <section className="space-y-8" id="profile">
@@ -201,7 +201,7 @@ export default function DesktopSettings() {
                   <Skeleton className="h-12 w-full" />
                 </div>
               ) : (
-                <div className="bg-surface-container-low p-10 grid grid-cols-2 gap-x-12 gap-y-8">
+                <div className="bg-surface-container-low p-6 md:p-10 grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-8">
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
                       Full Name

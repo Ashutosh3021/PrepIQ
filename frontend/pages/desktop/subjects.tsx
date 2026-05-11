@@ -278,18 +278,18 @@ export default function DesktopSubjects() {
         )}
 
         {/* Header Row */}
-        <header className="flex flex-col md:flex-row justify-between items-end mb-16 gap-6">
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-end mb-8 md:mb-16 gap-4 md:gap-6">
           <div className="flex flex-col">
             <span className="text-xs font-bold uppercase tracking-widest text-primary mb-2">
               Academic Atelier / {new Date().getFullYear()}
             </span>
-            <h1 className="text-6xl md:text-7xl font-serif italic leading-none">My Subjects</h1>
+            <h1 className="text-4xl md:text-6xl lg:text-7xl font-serif italic leading-none">My Subjects</h1>
           </div>
-          <div className="flex flex-col items-end gap-3">
-            <div className="flex gap-4">
+          <div className="flex flex-col items-start md:items-end gap-3 w-full md:w-auto">
+            <div className="flex gap-3 w-full md:w-auto">
               <button
                 onClick={() => setShowAddModal(true)}
-                className="bg-primary text-on-primary px-6 py-3 text-sm font-semibold uppercase tracking-wider hover:bg-primary/90 transition-all flex items-center gap-2"
+                className="flex-1 md:flex-none bg-primary text-on-primary px-4 md:px-6 py-3 text-sm font-semibold uppercase tracking-wider hover:bg-primary/90 transition-all flex items-center justify-center gap-2"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="12" y1="5" x2="12" y2="19" />
@@ -300,7 +300,7 @@ export default function DesktopSubjects() {
               <button
                 onClick={handleSyncFromWizard}
                 disabled={syncing}
-                className="border border-primary text-primary px-6 py-3 text-sm font-semibold uppercase tracking-wider hover:bg-primary hover:text-on-primary transition-all flex items-center gap-2 disabled:opacity-40"
+                className="flex-1 md:flex-none border border-primary text-primary px-4 md:px-6 py-3 text-sm font-semibold uppercase tracking-wider hover:bg-primary hover:text-on-primary transition-all flex items-center justify-center gap-2 disabled:opacity-40"
               >
                 {syncing ? (
                   <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -313,11 +313,12 @@ export default function DesktopSubjects() {
                     <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
                   </svg>
                 )}
-                <span>{syncing ? 'Syncing…' : 'Sync from Wizard'}</span>
+                <span className="hidden sm:inline">{syncing ? 'Syncing…' : 'Sync from Wizard'}</span>
+                <span className="sm:hidden">{syncing ? '…' : 'Sync'}</span>
               </button>
             </div>
             {syncMessage && (
-              <p className="text-xs text-on-surface/60 max-w-xs text-right">{syncMessage}</p>
+              <p className="text-xs text-on-surface/60 max-w-xs">{syncMessage}</p>
             )}
           </div>
         </header>
