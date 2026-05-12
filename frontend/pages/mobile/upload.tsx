@@ -1,17 +1,21 @@
 import React, { useState } from 'react';
 import Head from 'next/head';
 import { MobileLayout } from '@/components/mobile';
-
-const subjects = [
-  'Mathematics Analysis',
-  'Quantum Physics',
-  'Organic Chemistry',
-  'Macroeconomics',
-];
+import { Skeleton } from '@/components/common';
+import { useSubjects } from '@/lib/hooks/useSubjects';
 
 export default function MobileUpload() {
-  const [selectedFile, setSelectedFile] = useState<string | null>('advanced_calculus_finals.pdf');
-  const [selectedSubject, setSelectedSubject] = useState(subjects[0]);
+  const { subjects, isLoading: subjectsLoading } = useSubjects();
+
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [selectedSubjectId, setSelectedSubjectId] = useState('');
+
+  // Seed first subject once loaded
+  React.useEffect(() => {
+    if (subjects.length > 0 && !selectedSubjectId) {
+      setSelectedSubjectId(subjects[0].id);
+    }
+  }, [subjects, selectedSubjectId]);
 
   return (
     <>
@@ -56,14 +60,10 @@ export default function MobileUpload() {
                   </div>
                   <div>
                     <p className="text-xs font-semibold text-on-surface truncate max-w-[180px] uppercase tracking-tighter">{selectedFile}</p>
-                    <p className="text-[10px] text-on-surface-variant uppercase">2.4 MB &bull; PDF</p>
+                    <p className="text-[10px] text-on-surface-variant uppercase">PDF</p>
                   </div>
                 </div>
-                <button
-                  onClick={() => setSelectedFile(null)}
-                  className="w-8 h-8 flex items-center justify-center text-on-surface hover:text-error transition-colors"
-                  aria-label="Remove file"
-                >
+                <button onClick={() => setSelectedFile(null)} className="w-8 h-8 flex items-center justify-center text-on-surface hover:text-error transition-colors" aria-label="Remove file">
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M18 6 6 18" />
                     <path d="m6 6 12 12" />
@@ -75,26 +75,37 @@ export default function MobileUpload() {
             {/* Subject Selection */}
             <div className="space-y-2">
               <label className="text-[10px] font-bold text-on-surface-variant ml-1 uppercase tracking-[0.2em]">Catalogue Subject</label>
-              <div className="relative">
-                <select
-                  value={selectedSubject}
-                  onChange={(e) => setSelectedSubject(e.target.value)}
-                  className="w-full bg-transparent border border-outline-variant h-12 px-4 text-on-surface text-sm appearance-none focus:ring-1 focus:ring-on-surface focus:border-on-surface transition-all cursor-pointer"
-                >
-                  {subjects.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-on-surface-variant">
-                    <path d="m6 9 6 6 6-6" />
-                  </svg>
+              {subjectsLoading ? (
+                <Skeleton className="h-12 w-full" />
+              ) : (
+                <div className="relative">
+                  <select
+                    value={selectedSubjectId}
+                    onChange={(e) => setSelectedSubjectId(e.target.value)}
+                    className="w-full bg-transparent border border-outline-variant h-12 px-4 text-on-surface text-sm appearance-none focus:ring-1 focus:ring-on-surface focus:border-on-surface transition-all cursor-pointer"
+                  >
+                    {subjects.length === 0 ? (
+                      <option value="">No subjects yet — add one first</option>
+                    ) : (
+                      subjects.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))
+                    )}
+                  </select>
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-on-surface-variant">
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Primary Action */}
-            <button className="w-full bg-primary hover:bg-on-surface text-white h-12 font-bold uppercase tracking-[0.2em] text-xs transition-colors">
+            <button
+              disabled={subjects.length === 0}
+              className="w-full bg-primary hover:bg-on-surface text-white h-12 font-bold uppercase tracking-[0.2em] text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
               Execute Analysis
             </button>
           </div>
@@ -103,7 +114,6 @@ export default function MobileUpload() {
           <section className="mt-12 pb-8 space-y-4">
             <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-on-surface-variant border-b border-outline-variant pb-2">Systems &amp; Logic</h2>
             <div className="space-y-4">
-              {/* Topic Extraction */}
               <div className="bg-transparent p-5 border border-outline-variant flex gap-4 items-start">
                 <div className="p-2 border border-outline-variant flex-shrink-0">
                   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-on-surface">
@@ -117,8 +127,6 @@ export default function MobileUpload() {
                   <p className="text-xs text-on-surface-variant leading-relaxed">Structural identification of core concepts, axioms, and notations within the dataset.</p>
                 </div>
               </div>
-
-              {/* Probability Mapping */}
               <div className="bg-transparent p-5 border border-outline-variant flex gap-4 items-start">
                 <div className="p-2 border border-outline-variant flex-shrink-0">
                   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-on-surface">

@@ -4,10 +4,15 @@ import Link from 'next/link';
 import { MobileLayout } from '@/components/mobile';
 import { Skeleton } from '@/components/common';
 import { useAnalysis } from '@/lib/hooks/useAnalysis';
+import { useSubjects } from '@/lib/hooks/useSubjects';
+import { deriveSubjectProgress } from '@/lib/types/subject.types';
 
 export default function MobileProgress() {
-  // BUG-H12 (mobile): no argument — hook takes none
-  const { analysis, isLoading, error } = useAnalysis();
+  const { analysis, isLoading: analysisLoading, error: analysisError } = useAnalysis();
+  const { subjects, isLoading: subjectsLoading } = useSubjects();
+
+  const isLoading = analysisLoading || subjectsLoading;
+  const error = analysisError;
 
   if (isLoading) {
     return (
@@ -22,21 +27,39 @@ export default function MobileProgress() {
   if (error) {
     return (
       <MobileLayout title="Progress">
-        <div className="text-red-600 p-4">Failed to load progress</div>
+        <div className="flex flex-col items-center justify-center min-h-[400px] text-center px-4">
+          <h2 className="text-xl font-bold text-on-surface mb-2">Failed to load progress</h2>
+          <p className="text-on-surface/60 mb-6 text-sm">{error.message || 'An unexpected error occurred'}</p>
+          <button onClick={() => window.location.reload()} className="bg-primary text-on-primary px-6 py-3 font-bold uppercase tracking-widest text-sm">
+            Try Again
+          </button>
+        </div>
       </MobileLayout>
     );
   }
 
-  // BUG-H13 (mobile): derive display values from the real Analysis type
-  const subjectProgress = analysis?.subjectPerformance.map((s, i) => ({
+  // Derive subject progress from real subjects
+  const subjectProgress = subjects.map((s) => ({
+    subjectId: s.id,
+    name: s.name,
+    progress: deriveSubjectProgress(s),
+  }));
+
+  // Also use analysis subjectPerformance if available (richer data)
+  const analysisProgress = analysis?.subjectPerformance.map((s, i) => ({
     subjectId: `${s.subject}-${i}`,
     name: s.subject,
     progress: Math.round(Math.min(100, Math.max(0, s.performance))),
   })) ?? [];
-  const completion = subjectProgress.length > 0
-    ? Math.round(subjectProgress.reduce((sum, s) => sum + s.progress, 0) / subjectProgress.length)
+
+  // Prefer analysis data if available, else fall back to subjects
+  const displayProgress = analysisProgress.length > 0 ? analysisProgress : subjectProgress;
+
+  const completion = displayProgress.length > 0
+    ? Math.round(displayProgress.reduce((sum, s) => sum + s.progress, 0) / displayProgress.length)
     : 0;
-  // No predictions or testHistory in the Analysis type — use empty arrays as fallback
+
+  const focusSubject = subjects[0]?.name ?? 'Your Subjects';
   const predictions: { predictedScore: number }[] = [];
   const testHistory: { testId: string; date: string; title: string; score: number }[] = [];
 
@@ -54,7 +77,7 @@ export default function MobileProgress() {
               <div className="flex flex-col items-center gap-2">
                 <span className="text-on-surface-variant/60 font-medium tracking-widest text-[10px] uppercase mb-2 block">Current Mastery Journey</span>
                 <h1 className="text-4xl font-serif italic leading-tight tracking-tight text-on-surface">
-                  Advanced Quantum Physics
+                  {focusSubject}
                 </h1>
               </div>
               <button className="mt-6 bg-primary text-on-primary font-bold h-12 px-8 flex items-center gap-3 hover:bg-on-primary-fixed-variant mx-auto">
@@ -157,8 +180,8 @@ export default function MobileProgress() {
               </svg>
             </div>
             <div className="space-y-6">
-              {subjectProgress.length > 0 ? (
-                subjectProgress.map((topic) => (
+              {displayProgress.length > 0 ? (
+                displayProgress.map((topic) => (
                   <div key={topic.subjectId}>
                     <div className="flex justify-between items-end mb-2">
                       <div>
@@ -178,44 +201,7 @@ export default function MobileProgress() {
                   </div>
                 ))
               ) : (
-                <>
-                  <div>
-                    <div className="flex justify-between items-end mb-2">
-                      <div>
-                        <h3 className="font-bold text-xs uppercase tracking-wider text-on-surface">Foundations of Wave Mechanics</h3>
-                        <p className="text-[10px] uppercase text-on-surface-variant/60">4 core concepts mastered</p>
-                      </div>
-                      <span className="text-primary text-sm font-bold">92%</span>
-                    </div>
-                    <div className="h-px w-full bg-outline-variant/20 relative">
-                      <div className="absolute top-0 left-0 h-0.5 bg-primary w-[92%]" />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between items-end mb-2">
-                      <div>
-                        <h3 className="font-bold text-xs uppercase tracking-wider text-on-surface">The Schr&ouml;dinger Equation</h3>
-                        <p className="text-[10px] uppercase text-on-surface-variant/60">2 core concepts remaining</p>
-                      </div>
-                      <span className="text-primary text-sm font-bold">55%</span>
-                    </div>
-                    <div className="h-px w-full bg-outline-variant/20 relative">
-                      <div className="absolute top-0 left-0 h-0.5 bg-primary w-[55%]" />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between items-end mb-2">
-                      <div>
-                        <h3 className="font-bold text-xs uppercase tracking-wider text-on-surface">Quantum Field Theory Basics</h3>
-                        <p className="text-[10px] uppercase text-on-surface-variant/60">Not yet started</p>
-                      </div>
-                      <span className="text-on-surface-variant/40 text-sm font-bold">12%</span>
-                    </div>
-                    <div className="h-px w-full bg-outline-variant/20 relative">
-                      <div className="absolute top-0 left-0 h-0.5 bg-on-surface-variant/20 w-[12%]" />
-                    </div>
-                  </div>
-                </>
+                <p className="text-sm text-on-surface/50 text-center py-6">No subject data yet. Add subjects and upload papers to see progress.</p>
               )}
             </div>
             <div className="mt-8 flex justify-center border-t border-outline-variant/20 pt-6">

@@ -4,9 +4,15 @@ import Link from 'next/link';
 import { MobileLayout } from '@/components/mobile';
 import { Skeleton } from '@/components/common';
 import { useSubjects } from '@/lib/hooks/useSubjects';
+import { useProfile } from '@/lib/hooks/useProfile';
+import { deriveSubjectProgress } from '@/lib/types/subject.types';
 
 export default function MobileDashboard() {
-  const { subjects, isLoading, error } = useSubjects();
+  const { subjects, isLoading: subjectsLoading, error: subjectsError } = useSubjects();
+  const { profile, isLoading: profileLoading } = useProfile();
+
+  const isLoading = subjectsLoading || profileLoading;
+  const error = subjectsError;
 
   if (isLoading) {
     return (
@@ -52,6 +58,21 @@ export default function MobileDashboard() {
     );
   }
 
+  // Derived values
+  const displayName = profile?.full_name || profile?.email?.split('@')[0] || 'Student';
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+
+  const daysToExam = profile?.exam_date
+    ? Math.max(0, Math.ceil((new Date(profile.exam_date).getTime() - Date.now()) / 86400000))
+    : null;
+
+  const avgProgress = subjects.length > 0
+    ? Math.round(subjects.reduce((sum, s) => sum + deriveSubjectProgress(s), 0) / subjects.length)
+    : 0;
+
+  const focusSubject = subjects[0]?.name ?? null;
+
   return (
     <>
       <Head>
@@ -63,12 +84,16 @@ export default function MobileDashboard() {
           {/* Welcome Banner */}
           <section className="bg-surface-container-low p-6 border border-outline-variant/20 relative overflow-hidden">
             <div className="space-y-2 z-10">
-              <h1 className="font-serif italic text-3xl text-on-surface">Good morning, Rahul</h1>
-              <p className="text-xs uppercase tracking-widest text-secondary">Advanced Neurobiology &bull; Spring 2024</p>
+              <h1 className="font-serif italic text-3xl text-on-surface">{greeting}, {displayName}</h1>
+              <p className="text-xs uppercase tracking-widest text-secondary">
+                {focusSubject ? `${focusSubject} \u2022 ${new Date().getFullYear()}` : 'Welcome back'}
+              </p>
             </div>
-            <div className="mt-4 px-4 py-2 bg-primary text-on-primary text-xs font-bold uppercase tracking-tighter z-10 inline-block">
-              47 days to exam
-            </div>
+            {daysToExam !== null && (
+              <div className="mt-4 px-4 py-2 bg-primary text-on-primary text-xs font-bold uppercase tracking-tighter z-10 inline-block">
+                {daysToExam} days to exam
+              </div>
+            )}
             <div className="absolute -right-4 -bottom-4 opacity-5 font-serif italic text-[8rem] select-none pointer-events-none">
               IQ
             </div>
@@ -80,7 +105,7 @@ export default function MobileDashboard() {
             <div className="bg-surface p-4 border border-outline-variant/20 flex flex-col justify-between aspect-square">
               <p className="text-[10px] uppercase tracking-widest text-secondary">Enrolled Subjects</p>
               <div className="flex items-baseline gap-2">
-                <span className="text-4xl font-light">08</span>
+                <span className="text-4xl font-light">{String(subjects.length).padStart(2, '0')}</span>
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
                   <path d="M5 12h14" />
                   <path d="m12 5 7 7-7 7" />
@@ -93,18 +118,20 @@ export default function MobileDashboard() {
               <p className="text-[10px] uppercase tracking-widest text-secondary">Total Progress</p>
               <div className="relative h-12 w-full flex items-end">
                 <div className="w-full bg-surface-container-highest h-3">
-                  <div className="bg-primary h-full w-[68%]" />
+                  <div className="bg-primary h-full" style={{ width: `${avgProgress}%` }} />
                 </div>
               </div>
-              <p className="font-bold text-xl">68%</p>
+              <p className="font-bold text-xl">{avgProgress}%</p>
             </div>
 
             {/* Focus Area */}
             <div className="bg-surface p-4 border border-outline-variant/20 flex flex-col justify-between aspect-square">
               <p className="text-[10px] uppercase tracking-widest text-secondary">Focus Area</p>
               <div className="space-y-1">
-                <p className="font-serif italic text-lg leading-tight">Cellular Pathways</p>
-                <p className="text-[10px] text-primary uppercase font-bold">Review Needed</p>
+                <p className="font-serif italic text-lg leading-tight">
+                  {focusSubject ?? 'No subjects yet'}
+                </p>
+                {focusSubject && <p className="text-[10px] text-primary uppercase font-bold">Review Needed</p>}
               </div>
             </div>
 
@@ -116,7 +143,7 @@ export default function MobileDashboard() {
                   <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12c0 2.76 1.12 5.26 2.93 7.07L12 22z" />
                   <path d="M12 6v6l4 2" />
                 </svg>
-                <span className="text-3xl">14</span>
+                <span className="text-3xl">{(profile as any)?.streak_days ?? '—'}</span>
               </div>
             </div>
           </section>
@@ -131,8 +158,14 @@ export default function MobileDashboard() {
               </div>
               <div className="bg-surface-container-highest p-6 space-y-4 border border-outline-variant/20">
                 <div className="space-y-2">
-                  <h3 className="font-serif italic text-2xl">Module 04: Synaptic Plasticity</h3>
-                  <p className="text-sm text-on-surface-variant leading-relaxed">Focusing on long-term potentiation and memory formation mechanisms. Estimated time: 45 mins.</p>
+                  <h3 className="font-serif italic text-2xl">
+                    {focusSubject ? `Study: ${focusSubject}` : 'Add a subject to get started'}
+                  </h3>
+                  <p className="text-sm text-on-surface-variant leading-relaxed">
+                    {focusSubject
+                      ? 'Upload past papers and generate AI predictions to boost your preparation.'
+                      : 'Go to Subjects to add your first subject and start your prep journey.'}
+                  </p>
                 </div>
                 <Link
                   href="/mobile/start-test"
@@ -153,62 +186,34 @@ export default function MobileDashboard() {
                 <div className="h-px flex-grow bg-outline-variant opacity-30" />
               </div>
               <div className="space-y-3">
-                {/* Activity Item 1 */}
-                <Link href="/mobile/tests" className="flex gap-3 p-3 border border-outline-variant/10 items-center group hover:bg-surface-container-low transition-colors">
-                  <div className="w-10 h-10 bg-surface-container flex items-center justify-center flex-shrink-0">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
-                      <path d="M15.5 2H8.5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z" />
-                      <path d="M9 12h6" />
-                      <path d="M9 16h6" />
-                      <path d="M9 8h6" />
-                    </svg>
-                  </div>
-                  <div className="flex-grow min-w-0">
-                    <p className="text-sm font-semibold">Mock Test: Organic Chemistry</p>
-                    <p className="text-[10px] text-secondary">Yesterday &bull; 84% Score</p>
-                  </div>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-outline-variant opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                    <path d="m9 18 6-6-6-6" />
-                  </svg>
-                </Link>
-
-                {/* Activity Item 2 */}
-                <Link href="/mobile/subjects" className="flex gap-3 p-3 border border-outline-variant/10 items-center group hover:bg-surface-container-low transition-colors">
-                  <div className="w-10 h-10 bg-surface-container flex items-center justify-center flex-shrink-0">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                      <path d="M14 2v6h6" />
-                      <path d="M16 13H8" />
-                      <path d="M16 17H8" />
-                      <path d="M10 9H8" />
-                    </svg>
-                  </div>
-                  <div className="flex-grow min-w-0">
-                    <p className="text-sm font-semibold">Flashcards: Molecular Bio</p>
-                    <p className="text-[10px] text-secondary">2 days ago &bull; 12 New Cards</p>
-                  </div>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-outline-variant opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                    <path d="m9 18 6-6-6-6" />
-                  </svg>
-                </Link>
-
-                {/* Activity Item 3 */}
-                <Link href="/mobile/upload" className="flex gap-3 p-3 border border-outline-variant/10 items-center group hover:bg-surface-container-low transition-colors">
-                  <div className="w-10 h-10 bg-surface-container flex items-center justify-center flex-shrink-0">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="17 8 12 3 7 8" />
-                      <line x1="12" y1="3" x2="12" y2="15" />
-                    </svg>
-                  </div>
-                  <div className="flex-grow min-w-0">
-                    <p className="text-sm font-semibold">Uploaded Lecture Notes</p>
-                    <p className="text-[10px] text-secondary">3 days ago &bull; PDF Processed</p>
-                  </div>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-outline-variant opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                    <path d="m9 18 6-6-6-6" />
-                  </svg>
-                </Link>
+                {subjects.length === 0 ? (
+                  <p className="text-sm text-on-surface/50 text-center py-6">No recent activity yet.</p>
+                ) : (
+                  subjects.slice(0, 3).map((subject) => (
+                    <Link
+                      key={subject.id}
+                      href="/mobile/subjects"
+                      className="flex gap-3 p-3 border border-outline-variant/10 items-center group hover:bg-surface-container-low transition-colors"
+                    >
+                      <div className="w-10 h-10 bg-surface-container flex items-center justify-center flex-shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                          <path d="M14 2v6h6" />
+                        </svg>
+                      </div>
+                      <div className="flex-grow min-w-0">
+                        <p className="text-sm font-semibold truncate">{subject.name}</p>
+                        <p className="text-[10px] text-secondary">
+                          {subject.papers_uploaded} paper{subject.papers_uploaded !== 1 ? 's' : ''} uploaded
+                          {subject.predictions_generated > 0 && ` \u2022 ${subject.predictions_generated} predictions`}
+                        </p>
+                      </div>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-outline-variant opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                        <path d="m9 18 6-6-6-6" />
+                      </svg>
+                    </Link>
+                  ))
+                )}
               </div>
             </div>
           </section>
