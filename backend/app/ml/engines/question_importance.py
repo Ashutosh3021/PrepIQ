@@ -530,3 +530,8 @@ class LightweightQuestionAnalyzer(EnhancedQuestionAnalyzer):
         """Use TF-IDF similarity instead of transformers."""
         tfidf_matrix = self.vectorizer.fit_transform(questions)
         return cosine_similarity(tfidf_matrix)
+
+
+# Legacy alias — keeps any code that imports QuestionImportanceEngine working
+# without needing to update call sites.
+QuestionImportanceEngine = EnhancedQuestionAnalyzer
