@@ -142,6 +142,12 @@ async def lifespan(app: FastAPI):
                 logger.warning(var)
             logger.warning("[INFO] Application will run with limited functionality")
 
+    # Always warn about the four critical keys regardless of environment
+    _critical_keys = ["DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "GEMINI_API_KEY"]
+    for key in _critical_keys:
+        if not os.getenv(key):
+            logger.warning("[WARN] Environment variable not set: %s — dependent features will be unavailable", key)
+
     # BUG-L01: also refuse to start in production with the default insecure key
     _insecure_default = "default-insecure-change-me"
     if settings.ENVIRONMENT == "production" and settings.SECRET_KEY == _insecure_default:
@@ -157,7 +163,8 @@ async def lifespan(app: FastAPI):
         logger.info("[OK] Database connection verified")
     except Exception as e:
         logger.error(f"[ERROR] Database connection failed: {e}")
-        raise RuntimeError("Cannot start without database connection")
+        if settings.ENVIRONMENT == "production":
+            raise RuntimeError("Cannot start without database connection")
 
     # BUG-H10: pre-warm PrepIQService during startup so the first request
     # does not hang for 10-30 seconds while ML models load.
