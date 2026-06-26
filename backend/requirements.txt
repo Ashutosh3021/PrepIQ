@@ -47,9 +47,9 @@ scipy==1.13.1
 nltk==3.8.1
 sentence-transformers==3.0.1
 
-# CPU-only. Install with: pip install torch==2.2.2+cpu --index-url https://download.pytorch.org/whl/cpu
+# CPU-only torch — installed via build command with PyTorch index URL
 torch==2.2.2+cpu
-torchvision==0.17.2+cpu
+torchvision==0.17.2+cpu  
 torchaudio==2.2.2+cpu
 
 # Optional heavy ML (only loaded when ENABLE_HEAVY_ML=true or explicitly imported)
