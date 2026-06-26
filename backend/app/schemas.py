@@ -228,6 +228,49 @@ class PredictionUpdate(BaseModel):
     notes: Optional[str] = None
     feedback: Optional[str] = None
 
+
+class PredictedQuestionFull(BaseModel):
+    """Richer question shape returned by the two-tier prediction system."""
+    question_number: int = 0
+    text: str = ""
+    topic: Optional[str] = None
+    unit: Optional[str] = None
+    marks: int = 5
+    probability: str = "moderate"
+    confidence_score: float = 0.0
+    reasoning: str = ""
+    source: Optional[str] = None
+
+
+class SubjectPredictionResponse(BaseModel):
+    """Response shape for GET /predictions/subject/{subject_id}.
+
+    Always HTTP 200.  Check ``fallback_used`` to decide what banner the
+    frontend should display.
+    """
+    id: Optional[str] = None
+    subject_id: str
+    predictions: List[PredictedQuestionFull] = []
+    total_marks: int = 0
+    coverage_percentage: int = 0
+    unit_coverage: Dict[str, int] = {}
+    generated_at: Optional[datetime] = None
+
+    # Fallback metadata
+    fallback_used: bool = False
+    fallback_reason: Optional[str] = None   # "no_papers" | None
+    warning: Optional[str] = None           # shown by frontend banner
+    message: Optional[str] = None           # shown when no papers uploaded
+    source: Optional[str] = None            # "gemini" | "ml_fallback" | "syllabus_fallback" | "no_data"
+
+    @field_validator("id", "subject_id", mode="before")
+    @classmethod
+    def _coerce_uuid(cls, v):
+        import uuid as _uuid
+        if isinstance(v, _uuid.UUID):
+            return str(v)
+        return v
+
 # Chat Schemas
 class ChatRequest(BaseModel):
     subject_id: str

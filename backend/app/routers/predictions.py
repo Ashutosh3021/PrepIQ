@@ -24,6 +24,79 @@ router = APIRouter(
 )
 
 
+@router.get("/subject/{subject_id}", response_model=schemas.SubjectPredictionResponse)
+async def get_predictions_for_subject(
+    subject_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Generate (or retrieve) predictions for a subject.
+
+    Always returns HTTP 200.  Inspect ``fallback_used`` and ``message`` to
+    decide what the frontend should display.
+
+    * 0 papers  → empty predictions list with instructional message
+    * 1-2 papers → Gemini cold-start from subject knowledge, warning banner
+    * 3+ papers  → full ML + Gemini pipeline (ML fallback if Gemini fails)
+    """
+    # Verify subject belongs to the authenticated user
+    subject = db.query(models.Subject).filter(
+        models.Subject.id == subject_id,
+        models.Subject.user_id == current_user["id"],
+    ).first()
+    if not subject:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
+
+    service = get_prepiq_service()
+    try:
+        result = service.generate_predictions(
+            db=db,
+            subject_id=subject_id,
+            user_id=current_user["id"],
+        )
+    except Exception as e:
+        # Should not reach here under normal operation, but guard defensively
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Prediction generation error: {str(e)}",
+        )
+
+    # Normalise predictions to SubjectPredictionResponse shape
+    coerced: List[schemas.PredictedQuestionFull] = []
+    for p in result.get("predictions", []):
+        try:
+            coerced.append(
+                schemas.PredictedQuestionFull(
+                    question_number=int(p.get("question_number", 0)),
+                    text=str(p.get("text", "")),
+                    topic=p.get("topic") or p.get("unit") or "General",
+                    unit=p.get("unit") or p.get("topic") or "General",
+                    marks=int(p.get("marks", 5)),
+                    probability=str(p.get("probability", "moderate")),
+                    confidence_score=float(p.get("confidence_score", 0.0)),
+                    reasoning=str(p.get("reasoning", "")),
+                    source=p.get("source"),
+                )
+            )
+        except Exception:
+            continue
+
+    return schemas.SubjectPredictionResponse(
+        id=result.get("id"),
+        subject_id=subject_id,
+        predictions=coerced,
+        total_marks=int(result.get("total_marks", 0)),
+        coverage_percentage=int(result.get("coverage_percentage", 0)),
+        unit_coverage=result.get("unit_coverage", {}),
+        generated_at=result.get("generated_at"),
+        fallback_used=bool(result.get("fallback_used", False)),
+        fallback_reason=result.get("fallback_reason"),
+        warning=result.get("warning"),
+        message=result.get("message"),
+        source=result.get("source"),
+    )
+
+
 @router.post("/generate", response_model=schemas.PredictionGenerationResponse)
 async def generate_prediction(
     prediction_request: schemas.PredictionRequest,
@@ -38,32 +111,35 @@ async def generate_prediction(
     if not subject:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
 
-    papers = db.query(models.QuestionPaper).filter(
-        models.QuestionPaper.subject_id == prediction_request.subject_id,
-        models.QuestionPaper.processing_status == "completed"
-    ).all()
-
-    if not papers:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No processed papers found for this subject. Please upload and process papers first."
-        )
-
-    # H-22: run the service FIRST, then create the DB record only on success.
-    # This avoids leaving an orphaned empty record when the service raises.
+    # NOTE: the service now handles all paper-count tiers (0, 1-2, 3+) internally.
+    # We no longer block here on "no papers" — the service returns a structured
+    # response for every case. Only a hard 500 surfaces as an error.
     service = get_prepiq_service()
     try:
         result = service.generate_predictions(
             db,
             prediction_request.subject_id,
             current_user["id"],
-            existing_prediction_id=None,  # service will create its own record
+            existing_prediction_id=None,
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error generating prediction: {str(e)}"
         )
+
+    # Tier 0 (no papers) returns id=None — surface a helpful message instead
+    # of crashing the response model validation.
+    if result.get("id") is None:
+        return {
+            "prediction_id": "none",
+            "status": "no_data",
+            "message": result.get(
+                "message",
+                "Upload at least one past paper to get predictions.",
+            ),
+            "progress": 0,
+        }
 
     # The service already committed a Prediction row; fetch the latest one.
     prediction = (
@@ -82,12 +158,10 @@ async def generate_prediction(
             detail="Prediction record not found after generation."
         )
 
-    # BUG-H16: service already committed the correct data — no second write needed.
-    # Just return the prediction that was committed by the service.
     return {
         "prediction_id": prediction.id,
         "status": "completed",
-        "message": "Prediction generated successfully.",
+        "message": result.get("warning") or "Prediction generated successfully.",
         "progress": 100,
     }
 

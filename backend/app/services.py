@@ -236,27 +236,215 @@ class PrepIQService:
         similarity = intersection / union
         return similarity >= threshold
     
-    def generate_predictions(self, db: Session, subject_id: str, user_id: str, existing_prediction_id: str = None) -> Dict[str, Any]:
-        """Generate predictions for a subject using enhanced ML and NLP analysis"""
-        # Get all processed papers for the subject
-        papers = db.query(models.QuestionPaper).filter(
-            models.QuestionPaper.subject_id == subject_id,
-            models.QuestionPaper.processing_status == "completed"
-        ).all()
-        
-        if not papers:
-            raise ValueError("No processed papers found for this subject")
-        
-        # Get subject information for syllabus analysis
+    # ------------------------------------------------------------------
+    # Tier-2 helper: cold-start prediction via Gemini (< 3 papers)
+    # ------------------------------------------------------------------
+    def _cold_start_prediction(
+        self,
+        db: Session,
+        subject_id: str,
+        user_id: str,
+        subject: models.Subject,
+        paper_count: int,
+    ) -> Dict[str, Any]:
+        """Generate predictions from Gemini subject-knowledge when < 3 papers exist."""
+        subject_name = subject.name if subject else "Unknown Subject"
+        syllabus_text = ""
+        if subject and subject.syllabus_json:
+            syllabus_text = (
+                json.dumps(subject.syllabus_json)
+                if isinstance(subject.syllabus_json, dict)
+                else str(subject.syllabus_json)
+            )
+
+        warning_msg = "Generated from subject knowledge, not your past papers"
+
+        # Build the cold-start prompt
+        prompt = (
+            f"You are an exam prediction engine. The student has not uploaded enough past papers "
+            f"yet for this subject: {subject_name}. "
+            f"Based on standard {subject_name} exam patterns for engineering students, predict the "
+            f"10 most likely exam topics and questions."
+            + (f"\n\nSyllabus context:\n{syllabus_text[:2000]}" if syllabus_text else "")
+            + '\n\nReturn JSON only:\n'
+            '{"predictions": [{"question_text": "...", "topic": "...", "confidence_score": 0.0, "reasoning": "..."}], '
+            f'"warning": "{warning_msg}"}}'
+        )
+
+        final_predictions: List[Dict[str, Any]] = []
+        gemini_ok = False
+
+        if self.prediction_engine and self.prediction_engine.model:
+            try:
+                import google.generativeai as genai
+                response = self.prediction_engine.model.generate_content(prompt)
+                raw = response.text.strip()
+                # Strip markdown code fences if present
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                gemini_result = json.loads(raw)
+                raw_preds = gemini_result.get("predictions", [])
+                for i, p in enumerate(raw_preds):
+                    final_predictions.append({
+                        "question_number": i + 1,
+                        "text": p.get("question_text", p.get("text", "")),
+                        "topic": p.get("topic", "General"),
+                        "unit": p.get("topic", "General"),
+                        "marks": 5,
+                        "probability": "moderate",
+                        "confidence_score": float(p.get("confidence_score", 0.5)),
+                        "reasoning": p.get("reasoning", ""),
+                        "source": "syllabus_fallback",
+                    })
+                gemini_ok = True
+                logger.info(
+                    f"Cold-start Gemini prediction returned {len(final_predictions)} items "
+                    f"for subject {subject_id}"
+                )
+            except Exception as e:
+                logger.warning(f"Cold-start Gemini call failed: {e}")
+
+        if not gemini_ok:
+            # Bare-minimum fallback so the endpoint still returns 200
+            final_predictions = [
+                {
+                    "question_number": i + 1,
+                    "text": f"Upload more past papers to unlock AI-powered predictions for {subject_name}.",
+                    "topic": "General",
+                    "unit": "General",
+                    "marks": 5,
+                    "probability": "low",
+                    "confidence_score": 0.1,
+                    "reasoning": "Insufficient data; Gemini unavailable.",
+                    "source": "syllabus_fallback",
+                }
+                for i in range(3)
+            ]
+
+        # Sort by confidence DESC
+        final_predictions.sort(key=lambda x: x.get("confidence_score", 0), reverse=True)
+
+        total_predicted_marks = sum(p.get("marks", 5) for p in final_predictions)
+        unit_coverage: Dict[str, int] = {}
+        for p in final_predictions:
+            u = p.get("unit", "General")
+            unit_coverage[u] = unit_coverage.get(u, 0) + 1
+
+        # Persist to DB so get_latest_prediction works normally
+        meta = {
+            "source": "syllabus_fallback",
+            "fallback_used": True,
+            "warning": warning_msg,
+            "paper_count": paper_count,
+        }
+        prediction_record = models.Prediction(
+            subject_id=subject_id,
+            user_id=user_id,
+            predicted_questions_json=json.dumps(final_predictions),
+            total_questions=len(final_predictions),
+            total_predicted_marks=total_predicted_marks,
+            unit_coverage_json=unit_coverage,
+            ml_analysis_json=json.dumps(meta),
+            prediction_accuracy_score=0.0,
+        )
+        db.add(prediction_record)
+        db.commit()
+        db.refresh(prediction_record)
+
+        return {
+            "id": str(prediction_record.id),
+            "subject_id": subject_id,
+            "predictions": final_predictions,
+            "predicted_questions": final_predictions,  # compat alias
+            "total_marks": total_predicted_marks,
+            "coverage_percentage": 0,
+            "unit_coverage": unit_coverage,
+            "generated_at": datetime.now(timezone.utc),
+            "analysis_method": "syllabus_fallback",
+            "fallback_used": True,
+            "warning": warning_msg,
+            "source": "syllabus_fallback",
+        }
+
+    # ------------------------------------------------------------------
+    # Main prediction entry-point (two-tier)
+    # ------------------------------------------------------------------
+    def generate_predictions(
+        self,
+        db: Session,
+        subject_id: str,
+        user_id: str,
+        existing_prediction_id: str = None,
+    ) -> Dict[str, Any]:
+        """Generate predictions for a subject — two-tier system.
+
+        Tier 0 (count == 0): return empty structured response, no Gemini call.
+        Tier 2 (1 <= count < 3): Gemini cold-start from subject/syllabus knowledge.
+        Tier 1 (count >= 3): full ML → Gemini pipeline with ML fallback.
+        """
+        # ── Count completed papers ────────────────────────────────────────────
+        paper_count = (
+            db.query(models.QuestionPaper)
+            .filter(
+                models.QuestionPaper.subject_id == subject_id,
+                models.QuestionPaper.processing_status == "completed",
+            )
+            .count()
+        )
+
+        # ── Tier 0: no papers at all ─────────────────────────────────────────
+        if paper_count == 0:
+            return {
+                "id": None,
+                "subject_id": subject_id,
+                "predictions": [],
+                "predicted_questions": [],
+                "total_marks": 0,
+                "coverage_percentage": 0,
+                "unit_coverage": {},
+                "generated_at": datetime.now(timezone.utc),
+                "fallback_used": True,
+                "fallback_reason": "no_papers",
+                "message": (
+                    "Upload at least one past paper to get predictions. "
+                    "Add 3+ papers for AI-powered predictions."
+                ),
+                "source": "no_data",
+            }
+
         subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
-        
-        # Extract all questions from papers for ML analysis
-        all_questions = []
+
+        # ── Tier 2: cold-start (1 or 2 papers) ───────────────────────────────
+        if paper_count < 3:
+            logger.info(
+                f"Cold-start prediction for subject {subject_id} "
+                f"(only {paper_count} paper(s) uploaded)"
+            )
+            return self._cold_start_prediction(
+                db=db,
+                subject_id=subject_id,
+                user_id=user_id,
+                subject=subject,
+                paper_count=paper_count,
+            )
+
+        # ── Tier 1: full ML + Gemini pipeline (>= 3 papers) ─────────────────
+        papers = (
+            db.query(models.QuestionPaper)
+            .filter(
+                models.QuestionPaper.subject_id == subject_id,
+                models.QuestionPaper.processing_status == "completed",
+            )
+            .all()
+        )
+
+        # Collect all questions from questions table, filtered by subject
+        all_questions: List[Dict[str, Any]] = []
         for paper in papers:
-            questions = db.query(models.Question).filter(
-                models.Question.paper_id == paper.id
-            ).all()
-            for q in questions:
+            qs = db.query(models.Question).filter(models.Question.paper_id == paper.id).all()
+            for q in qs:
                 all_questions.append({
                     "text": q.question_text,
                     "number": q.question_number,
@@ -265,36 +453,43 @@ class PrepIQService:
                     "type": q.question_type,
                     "difficulty": q.difficulty,
                     "keywords": [],
-                    "length": q.text_length
+                    "length": q.text_length,
                 })
-        
+
         if not all_questions:
             raise ValueError("No questions extracted from processed papers")
-        
-        # Use enhanced ML model to analyze patterns and generate predictions
-        enhanced_analysis = {}
-        ml_predictions = []
+
+        # ── ML analysis: topic clusters + importance scores ───────────────────
+        enhanced_analysis: Dict[str, Any] = {}
+        ml_predictions: List[Dict[str, Any]] = []
         if self.enhanced_question_analyzer:
             try:
                 enhanced_analysis = self.enhanced_question_analyzer.analyze_patterns(all_questions)
                 ml_predictions = self.enhanced_question_analyzer.predict_exam_questions(
                     historical_questions=all_questions,
-                    num_predictions=10
+                    num_predictions=10,
                 )
             except Exception as e:
                 logger.warning(f"EnhancedQuestionAnalyzer failed during prediction: {e}")
-        
-        # Perform syllabus-to-question correlation analysis
+
+        # Tag ML predictions with their source
+        for p in ml_predictions:
+            p.setdefault("source", "ml")
+
+        # ── Syllabus / correlation analysis ───────────────────────────────────
         syllabus_content = ""
         if subject and subject.syllabus_json:
-            syllabus_content = json.dumps(subject.syllabus_json) if isinstance(subject.syllabus_json, dict) else str(subject.syllabus_json)
-        
-        # Perform correlation analysis
-        correlation_results = {}
-        high_impact_topics = []
+            syllabus_content = (
+                json.dumps(subject.syllabus_json)
+                if isinstance(subject.syllabus_json, dict)
+                else str(subject.syllabus_json)
+            )
+
+        correlation_results: Dict[str, Any] = {}
+        high_impact_topics: List[Dict[str, Any]] = []
         if self.correlation_analyzer:
             try:
-                syllabus_topics = {}
+                syllabus_topics: Dict[str, Any] = {}
                 if syllabus_content and self.syllabus_analyzer:
                     try:
                         syllabus_topics = self.syllabus_analyzer.calculate_topic_importance(
@@ -304,79 +499,91 @@ class PrepIQService:
                         logger.warning(f"SyllabusAnalyzer failed: {e}")
                 correlation_results = self.correlation_analyzer.comprehensive_correlation_analysis(
                     questions=all_questions,
-                    syllabus_topics=syllabus_topics
+                    syllabus_topics=syllabus_topics,
                 )
-                high_impact_topics = self.correlation_analyzer.predict_high_impact_topics(correlation_results)
+                high_impact_topics = self.correlation_analyzer.predict_high_impact_topics(
+                    correlation_results
+                )
             except Exception as e:
                 logger.warning(f"CorrelationAnalyzer failed during prediction: {e}")
-        
-        # Generate traditional AI predictions with enhanced context
-        all_text = ""
-        for paper in papers:
-            if paper.raw_text:
-                all_text += paper.raw_text + "\n"
-        
-        ai_predictions = self.prediction_engine.predict_exam_topics(
-            study_material=all_text,
-            db=db,
-            subject_id=subject_id
-        )
-        
-        # Combine enhanced ML and AI predictions
-        combined_predictions = ml_predictions + ai_predictions.get("predictions", [])
-        
-        # Sort by confidence score (if available) and limit to top 10
-        combined_predictions.sort(key=lambda x: x.get("confidence_score", 0), reverse=True)
-        final_predictions = combined_predictions[:10]
-        
-        # Calculate total predicted marks
-        total_predicted_marks = sum([pred.get("marks", 5) for pred in final_predictions])
-        
-        # Calculate unit coverage
-        unit_coverage = {}
-        for pred in final_predictions:
-            unit = pred.get("unit", "General")
-            unit_coverage[unit] = unit_coverage.get(unit, 0) + 1
-        
-        # Use existing prediction or create new one
+
+        # ── Gemini prediction (Tier 1) ────────────────────────────────────────
+        all_text = "\n".join(p.raw_text for p in papers if p.raw_text)
+
+        gemini_predictions: List[Dict[str, Any]] = []
+        gemini_failed = False
+        try:
+            if self.prediction_engine is None:
+                raise ValueError("PredictionEngine not initialised")
+            ai_result = self.prediction_engine.predict_exam_topics(
+                study_material=all_text,
+                db=db,
+                subject_id=subject_id,
+            )
+            gemini_predictions = ai_result.get("predictions", [])
+            for p in gemini_predictions:
+                p.setdefault("source", "gemini")
+        except Exception as e:
+            logger.warning(f"Gemini prediction failed, using ML fallback: {e}")
+            gemini_failed = True
+
+        # ── Combine and rank ──────────────────────────────────────────────────
+        if gemini_failed or not gemini_predictions:
+            # ML-only fallback
+            combined = ml_predictions
+            prediction_source = "ml_fallback"
+            logger.info(
+                f"Using ML fallback for subject {subject_id} "
+                f"({len(combined)} ML predictions)"
+            )
+        else:
+            combined = ml_predictions + gemini_predictions
+            prediction_source = "gemini"
+
+        combined.sort(key=lambda x: x.get("confidence_score", 0), reverse=True)
+        final_predictions = combined[:10]
+
+        # Ensure every prediction carries its source tag
+        for p in final_predictions:
+            p.setdefault("source", prediction_source)
+
+        # ── Aggregate metrics ─────────────────────────────────────────────────
+        total_predicted_marks = sum(p.get("marks", 5) for p in final_predictions)
+        unit_coverage: Dict[str, int] = {}
+        for p in final_predictions:
+            u = p.get("unit", "General")
+            unit_coverage[u] = unit_coverage.get(u, 0) + 1
+
+        ml_analysis_payload = {
+            "source": prediction_source,
+            "fallback_used": gemini_failed,
+            "enhanced_pattern_analysis": enhanced_analysis,
+            "correlation_analysis": correlation_results,
+            "high_impact_topics": high_impact_topics,
+            "confidence_scores": [p.get("confidence_score", 0) for p in final_predictions],
+        }
+
+        # ── Persist prediction record ─────────────────────────────────────────
         if existing_prediction_id:
-            prediction_record = db.query(models.Prediction).filter(
-                models.Prediction.id == existing_prediction_id
-            ).first()
+            prediction_record = (
+                db.query(models.Prediction)
+                .filter(models.Prediction.id == existing_prediction_id)
+                .first()
+            )
             if prediction_record:
                 prediction_record.predicted_questions_json = json.dumps(final_predictions)
                 prediction_record.total_questions = len(final_predictions)
                 prediction_record.total_predicted_marks = total_predicted_marks
                 prediction_record.unit_coverage_json = unit_coverage
-                prediction_record.ml_analysis_json = json.dumps({
-                    "enhanced_pattern_analysis": enhanced_analysis,
-                    "correlation_analysis": correlation_results,
-                    "high_impact_topics": high_impact_topics,
-                    "confidence_scores": [pred.get("confidence_score", 0) for pred in final_predictions]
-                })
-                prediction_record.prediction_accuracy_score = self._calculate_prediction_accuracy(ml_predictions)
+                prediction_record.ml_analysis_json = json.dumps(ml_analysis_payload)
+                prediction_record.prediction_accuracy_score = self._calculate_prediction_accuracy(
+                    ml_predictions
+                )
                 db.commit()
             else:
-                # Fallback to creating new record
-                prediction_record = models.Prediction(
-                    subject_id=subject_id,
-                    user_id=user_id,
-                    predicted_questions_json=json.dumps(final_predictions),
-                    total_questions=len(final_predictions),
-                    total_predicted_marks=total_predicted_marks,
-                    unit_coverage_json=unit_coverage,
-                    ml_analysis_json=json.dumps({
-                        "enhanced_pattern_analysis": enhanced_analysis,
-                        "correlation_analysis": correlation_results,
-                        "high_impact_topics": high_impact_topics,
-                        "confidence_scores": [pred.get("confidence_score", 0) for pred in final_predictions]
-                    }),
-                    prediction_accuracy_score=self._calculate_prediction_accuracy(ml_predictions)
-                )
-                db.add(prediction_record)
-                db.commit()
-        else:
-            # Create prediction record (legacy behavior)
+                existing_prediction_id = None  # fall through to create
+
+        if not existing_prediction_id:
             prediction_record = models.Prediction(
                 subject_id=subject_id,
                 user_id=user_id,
@@ -384,28 +591,31 @@ class PrepIQService:
                 total_questions=len(final_predictions),
                 total_predicted_marks=total_predicted_marks,
                 unit_coverage_json=unit_coverage,
-                ml_analysis_json=json.dumps({
-                    "enhanced_pattern_analysis": enhanced_analysis,
-                    "correlation_analysis": correlation_results,
-                    "high_impact_topics": high_impact_topics,
-                    "confidence_scores": [pred.get("confidence_score", 0) for pred in final_predictions]
-                }),
-                prediction_accuracy_score=self._calculate_prediction_accuracy(ml_predictions)
+                ml_analysis_json=json.dumps(ml_analysis_payload),
+                prediction_accuracy_score=self._calculate_prediction_accuracy(ml_predictions),
             )
             db.add(prediction_record)
             db.commit()
-        
+            db.refresh(prediction_record)
+
         return {
+            "id": str(prediction_record.id),
+            "subject_id": subject_id,
             "predictions": final_predictions,
+            "predicted_questions": final_predictions,  # compat alias for existing router helpers
             "total_marks": total_predicted_marks,
-            "coverage_percentage": len(set(unit_coverage.keys())) / max(len(unit_coverage.keys()), 1) * 100,
+            "coverage_percentage": round(
+                len(unit_coverage) / max(len(unit_coverage), 1) * 100
+            ),
             "unit_coverage": unit_coverage,
             "generated_at": datetime.now(timezone.utc),
-            "analysis_method": "Enhanced ML-NLP prediction with syllabus correlation and impact analysis",
-            "accuracy_score": prediction_record.prediction_accuracy_score,
+            "analysis_method": "Enhanced ML-NLP prediction with syllabus correlation",
+            "accuracy_score": float(prediction_record.prediction_accuracy_score or 0),
             "enhanced_analysis": enhanced_analysis,
             "correlation_analysis": correlation_results,
-            "high_impact_topics": high_impact_topics
+            "high_impact_topics": high_impact_topics,
+            "fallback_used": gemini_failed,
+            "source": prediction_source,
         }
     
     def _calculate_prediction_accuracy(self, predictions: List[Dict[str, Any]]) -> float:
