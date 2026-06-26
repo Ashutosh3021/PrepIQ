@@ -157,24 +157,24 @@ async def lifespan(app: FastAPI):
             "Set JWT_SECRET to a strong random value (openssl rand -base64 32)."
         )
     
-    # Verify database connection
+    # Verify database connection (non-blocking — failure is logged but doesn't
+    # prevent the port from opening; Render's health check will catch real outages)
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         logger.info("[OK] Database connection verified")
     except Exception as e:
         logger.error(f"[ERROR] Database connection failed: {e}")
-        if settings.ENVIRONMENT == "production":
-            raise RuntimeError("Cannot start without database connection")
+        # Do NOT raise here in production — let the service start and serve
+        # /health immediately. Individual request handlers will surface DB errors.
+        # Raising here would block uvicorn from opening the port, causing Render
+        # to time out and kill the process.
 
-    # BUG-H10: pre-warm PrepIQService during startup so the first request
-    # does not hang for 10-30 seconds while ML models load.
-    try:
-        from app.dependencies import get_prepiq_service
-        get_prepiq_service()
-        logger.info("[OK] PrepIQService initialized")
-    except Exception as e:
-        logger.warning(f"[WARN] PrepIQService pre-warm failed (non-fatal): {e}")
+    # ML models are loaded lazily on first request (not pre-warmed here).
+    # Pre-warming during lifespan blocks uvicorn from opening the port, which
+    # causes Render's health scanner to time out and kill the process before
+    # startup completes. On the free tier, a ~30s cold-start on first request
+    # is acceptable and preferable to a failed deploy.
     
     yield
     
