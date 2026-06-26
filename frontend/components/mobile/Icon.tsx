@@ -64,6 +64,15 @@ const iconPaths: Record<string, React.ReactNode> = {
       <polyline points="15 18 9 12 15 6" />
     </>
   ),
+  crosshair: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="22" y1="12" x2="18" y2="12" />
+      <line x1="6" y1="12" x2="2" y2="12" />
+      <line x1="12" y1="6" x2="12" y2="2" />
+      <line x1="12" y1="22" x2="12" y2="18" />
+    </>
+  ),
 };
 
 const Icon: React.FC<IconProps> = ({ name, className, size = 24 }) => {
