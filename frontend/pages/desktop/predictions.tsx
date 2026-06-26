@@ -214,9 +214,17 @@ export default function DesktopPredictions() {
                   id="subject-select"
                   className="w-full bg-surface-container-low border-b-2 border-primary/20 focus:border-primary appearance-none py-3 px-4 text-on-surface text-sm font-medium focus:ring-0 cursor-pointer"
                   value={selectedSubjectId ?? ''}
-                  onChange={(e) =>
-                    setSelectedSubjectId(e.target.value ? Number(e.target.value) : null)
-                  }
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val || val === '') {
+                      setSelectedSubjectId(null);
+                      return;
+                    }
+                    const parsed = parseInt(val, 10);
+                    if (!isNaN(parsed)) {
+                      setSelectedSubjectId(parsed);
+                    }
+                  }}
                 >
                   <option value="">Select a subject…</option>
                   {subjects.map((s) => (

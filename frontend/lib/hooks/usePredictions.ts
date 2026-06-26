@@ -8,17 +8,22 @@ function cacheKey(userId: string, subjectId: number) {
 
 export function usePredictions(subjectId: number | null) {
   const { user } = useAuth();
+  // Guard: only enable the fetch when subjectId is a valid, non-NaN number
+  const validSubjectId =
+    subjectId !== null && subjectId !== undefined && !isNaN(subjectId)
+      ? subjectId
+      : null;
   const key =
-    user?.id && subjectId != null ? cacheKey(user.id, subjectId) : null;
+    user?.id && validSubjectId != null ? cacheKey(user.id, validSubjectId) : null;
 
   const { data, error, isLoading, mutate } = useSWR<PredictionResponse>(
     key,
-    () => predictionsService.getBySubject(subjectId!)
+    () => predictionsService.getBySubject(validSubjectId!)
   );
 
   const refresh = async (): Promise<void> => {
-    if (!subjectId) return;
-    const fresh = await predictionsService.refresh(subjectId);
+    if (!validSubjectId) return;
+    const fresh = await predictionsService.refresh(validSubjectId);
     // Update local SWR cache with the refreshed data
     await mutate(fresh, false);
   };
