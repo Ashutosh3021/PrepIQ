@@ -121,6 +121,7 @@ async def lifespan(app: FastAPI):
     """Manage application lifespan events."""
     # Startup
     logger.info("Starting PrepIQ Backend Application")
+    logger.info(f"PrepIQ backend started at {datetime.utcnow().isoformat()}Z")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Debug Mode: {settings.DEBUG}")
     
@@ -284,7 +285,16 @@ def create_app() -> FastAPI:
     # ============================================
     @app.get("/health", tags=["Health"])
     async def health_check():
-        """Health check endpoint for Render and monitoring."""
+        """
+        Lightweight health check for Render's health probe.
+        Does NOT require auth and does NOT hit the database so it
+        responds instantly even during cold-start or DB outage.
+        """
+        return {"status": "ok", "service": "prepiq-backend"}
+
+    @app.get("/health/full", tags=["Health"])
+    async def health_check_full():
+        """Extended health check that verifies the database connection."""
         try:
             # Check database connection
             with engine.connect() as conn:
@@ -298,7 +308,7 @@ def create_app() -> FastAPI:
                 "database": "connected"
             }
         except Exception as e:
-            logger.error(f"Health check failed: {e}")
+            logger.error(f"Full health check failed: {e}")
             raise HTTPException(
                 status_code=503,
                 detail={

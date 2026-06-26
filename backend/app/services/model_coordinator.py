@@ -15,12 +15,11 @@ logger = logging.getLogger(__name__)
 
 AVAILABLE_MODELS: set = set()
 
-try:
-    import easyocr as _easyocr
-    AVAILABLE_MODELS.add("easyocr")
-except ImportError:
-    _easyocr = None
-    logger.info("easyocr not installed — OCR will be skipped")
+# easyocr is intentionally NOT imported at module level.
+# It loads ~150MB of weights on first use; importing it here would consume
+# that RAM from startup even when no OCR is ever requested.
+# Instead, it is imported lazily inside process_image_pipeline().
+_easyocr = None  # populated on first OCR call via _get_easyocr()
 
 try:
     from ultralytics import YOLO as _YOLO
@@ -44,6 +43,30 @@ try:
 except ImportError:
     _Bytez = None
     logger.info("bytez not installed — Bytez models will be skipped")
+
+
+def _get_easyocr():
+    """
+    Lazy loader for easyocr.  Importing easyocr at module level loads ~150MB of
+    model weights immediately, burning a large fraction of the 512MB Render free
+    tier RAM before any request arrives.  By deferring the import to the first
+    OCR call we keep the baseline footprint low and only pay the cost when it is
+    actually needed.
+
+    Returns the easyocr module, or None if it is not installed.
+    """
+    global _easyocr
+    if _easyocr is not None:
+        return _easyocr
+    try:
+        import easyocr as _easyocr_mod  # lazy — only loads when OCR is actually needed
+        _easyocr = _easyocr_mod
+        AVAILABLE_MODELS.add("easyocr")
+        logger.info("easyocr loaded lazily on first OCR request")
+        return _easyocr
+    except ImportError:
+        logger.info("easyocr not installed — OCR will be skipped")
+        return None
 
 try:
     import google.generativeai as _genai
@@ -222,10 +245,11 @@ class ModelCoordinator:
             "pipeline_status": []
         }
         
-        # Step 1: EasyOCR
-        if self.models['easyocr'].enabled and _easyocr is not None:
+        # Step 1: EasyOCR (lazy-loaded to avoid burning ~150MB at startup)
+        easyocr_mod = _get_easyocr()
+        if self.models['easyocr'].enabled and easyocr_mod is not None:
             try:
-                reader = _easyocr.Reader(['en'], gpu=False)
+                reader = easyocr_mod.Reader(['en'], gpu=False)
                 ocr_results = reader.readtext(image_path)
                 
                 if ocr_results:

@@ -1,6 +1,7 @@
 import google.generativeai as genai
 from typing import Dict, Any, List
 import os
+import gc
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 from . import models
@@ -15,7 +16,17 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ── RAM / model strategy flag ─────────────────────────────────────────────────
+# On Render free tier (ENVIRONMENT=production) we cap RAM by using the
+# lightweight sklearn-based analyzer instead of the full sentence-transformer
+# + BERTopic stack.  Models are also instantiated inside the method that needs
+# them and immediately deleted after use so peak memory is minimised.
+USE_LIGHTWEIGHT_MODELS: bool = os.getenv("ENVIRONMENT", "development").lower() == "production"
+
+# Imports kept at module level for type checking only — NOT instantiated here.
+# Actual instantiation happens inside the methods that use them (lazy loading).
 from .ml_models.enhanced_question_analyzer import EnhancedQuestionAnalyzer
+from .ml_models.question_analyzer import QuestionAnalyzer as LightweightQuestionAnalyzer
 from .ml.syllabus_analyzer import SyllabusAnalyzer
 from .ml.correlation_analyzer import CorrelationAnalyzer
 from .ml_engines.concept_explainer import ConceptExplainer
@@ -48,31 +59,58 @@ class PredictionEngine:
             except Exception as e:
                 logger.error(f"Gemini API connection failed: {str(e)}")
                 self.model = None
-        
-        # Initialize enhanced ML components with error handling
-        try:
-            self.question_analyzer = EnhancedQuestionAnalyzer()
-        except Exception as e:
-            logger.warning(f"Failed to initialize EnhancedQuestionAnalyzer: {e}")
-            self.question_analyzer = None
-        
+
+        # ML components are NOT instantiated here.
+        # They are created lazily inside the method that needs them, then
+        # immediately deleted and gc.collect() called to release RAM.
+        # This keeps the baseline footprint well under the 512MB Render limit.
+        # (USE_LIGHTWEIGHT_MODELS=True in production forces the sklearn analyzer.)
+
         try:
             self.syllabus_analyzer = SyllabusAnalyzer()
         except Exception as e:
             logger.warning(f"Failed to initialize SyllabusAnalyzer: {e}")
             self.syllabus_analyzer = None
-        
+
         try:
             self.correlation_analyzer = CorrelationAnalyzer()
         except Exception as e:
             logger.warning(f"Failed to initialize CorrelationAnalyzer: {e}")
             self.correlation_analyzer = None
-        
+
         try:
             self.concept_explainer = ConceptExplainer()
         except Exception as e:
             logger.warning(f"Failed to initialize ConceptExplainer: {e}")
             self.concept_explainer = None
+
+    def _get_question_analyzer(self):
+        """
+        Instantiate the appropriate question analyzer on demand.
+
+        In production (USE_LIGHTWEIGHT_MODELS=True) the lightweight sklearn
+        analyzer is used to stay within the 512MB Render free-tier RAM limit.
+        In development the full EnhancedQuestionAnalyzer is used.
+
+        The caller is responsible for:
+            del analyzer
+            gc.collect()
+        after use so the memory is released promptly.
+        """
+        try:
+            if USE_LIGHTWEIGHT_MODELS:
+                logger.info("Using LightweightQuestionAnalyzer (production mode)")
+                return LightweightQuestionAnalyzer()
+            else:
+                logger.info("Using EnhancedQuestionAnalyzer (development mode)")
+                return EnhancedQuestionAnalyzer()
+        except Exception as e:
+            logger.warning(f"Failed to instantiate question analyzer ({e}); trying lightweight fallback")
+            try:
+                return LightweightQuestionAnalyzer()
+            except Exception as e2:
+                logger.error(f"Lightweight fallback also failed: {e2}")
+                return None
     
     def _calculate_confidence_score(self, prediction: Dict[str, Any], historical_data: List[Dict[str, Any]]) -> float:
         """Calculate confidence score for a prediction based on historical patterns"""
@@ -240,13 +278,17 @@ class PredictionEngine:
             # Extract syllabus content from JSON
             syllabus_content = json.dumps(subject.syllabus_json) if isinstance(subject.syllabus_json, dict) else str(subject.syllabus_json)
         
-        # Perform enhanced analysis using ML components (with null checks)
-        if self.question_analyzer:
+        # Perform enhanced analysis using ML components (lazy instantiation + cleanup)
+        question_analyzer = self._get_question_analyzer()
+        if question_analyzer:
             try:
-                question_analysis = self.question_analyzer.analyze_patterns(historical_data)
+                question_analysis = question_analyzer.analyze_patterns(historical_data)
             except Exception as e:
                 logger.warning(f"Question analysis failed: {e}")
                 question_analysis = {}
+            finally:
+                del question_analyzer
+                gc.collect()
         else:
             question_analysis = {}
         
