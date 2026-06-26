@@ -5,13 +5,16 @@ services:
   - type: web
     name: prepiq-backend
     runtime: python
-    buildCommand: pip install -r backend/requirements.txt
+    buildCommand: >
+      pip install torch==2.2.2+cpu torchvision==0.17.2+cpu torchaudio==2.2.2+cpu
+      --index-url https://download.pytorch.org/whl/cpu &&
+      pip install -r backend/requirements.txt
     startCommand: bash -c 'cd backend && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1'
     healthCheckPath: /health
 
     envVars:
       - key: PYTHON_VERSION
-        value: "3.10.14"
+        value: "3.10"
       - key: DATABASE_URL
         sync: false
       - key: SUPABASE_URL
@@ -26,5 +29,11 @@ services:
         sync: false
       - key: ENVIRONMENT
         value: production
+      - key: FRONTEND_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: HEALTH_ENDPOINT
+        value: https://prepiq-narg.onrender.com/health
       - key: PYTHONUNBUFFERED
         value: "1"

@@ -113,6 +113,21 @@ from app.core.config import settings
 from app.database import engine
 from sqlalchemy import text
 
+# Keep-alive thread — started in lifespan, stopped on shutdown
+# Import is at module level so it resolves relative to the project root.
+import sys as _sys
+import os as _os
+_project_root = str(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+if _project_root not in _sys.path:
+    _sys.path.insert(0, _project_root)
+
+try:
+    from trigger import start_keep_alive_thread, stop_keep_alive_thread
+    _KEEP_ALIVE_AVAILABLE = True
+except ImportError:
+    _KEEP_ALIVE_AVAILABLE = False
+    logger.warning("[keep-alive] trigger.py not found — keep-alive disabled")
+
 # ============================================
 # LIFESPAN MANAGEMENT
 # ============================================
@@ -175,10 +190,34 @@ async def lifespan(app: FastAPI):
     # causes Render's health scanner to time out and kill the process before
     # startup completes. On the free tier, a ~30s cold-start on first request
     # is acceptable and preferable to a failed deploy.
-    
+
+    # ── Keep-alive thread (production only) ──────────────────────────────────
+    # Pings the public Render URL every 14 minutes so the free-tier container
+    # never goes idle.  Only started when ENVIRONMENT=production so local dev
+    # is not affected.  The thread is a daemon — it dies with the process and
+    # never blocks shutdown.
+    _keep_alive_thread = None
+    if settings.ENVIRONMENT == "production" and _KEEP_ALIVE_AVAILABLE:
+        _keep_alive_endpoint = os.getenv(
+            "HEALTH_ENDPOINT",
+            "https://prepiq-narg.onrender.com/health",
+        )
+        _keep_alive_thread = start_keep_alive_thread(
+            url=_keep_alive_endpoint,
+            logger=logger,
+        )
+        logger.info(f"[keep-alive] Pinging {_keep_alive_endpoint} every 14 min")
+    else:
+        if settings.ENVIRONMENT != "production":
+            logger.info("[keep-alive] Skipped (not production)")
+
     yield
-    
+
     # Shutdown
+    if _keep_alive_thread is not None:
+        logger.info("[keep-alive] Stopping background thread...")
+        stop_keep_alive_thread()
+
     logger.info("[INFO] Shutting down PrepIQ Backend Application")
 
 # ============================================
