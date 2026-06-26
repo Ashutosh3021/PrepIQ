@@ -43,8 +43,10 @@ scipy==1.13.1
 nltk==3.8.1
 sentence-transformers==3.0.1
 
-# CPU-only torch — use: pip install torch==2.2.2+cpu --index-url https://download.pytorch.org/whl/cpu
-torch==2.2.2+cpu
+# CPU-only torch — the +cpu local-version tag only exists on PyTorch's own index
+# and cannot be resolved by a plain `pip install`. On Render (no GPU/CUDA),
+# the standard PyPI wheel runs in CPU mode automatically.
+torch==2.2.2
 
 # Optional heavy ML (only loaded when ENABLE_HEAVY_ML=true or explicitly imported)
 # spacy is imported lazily — install separately if needed:

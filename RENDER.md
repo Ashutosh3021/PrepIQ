@@ -174,7 +174,7 @@ The Gemini API key is invalid, has expired, or the project has exceeded its free
 EasyOCR's first load takes 15–20 seconds while it downloads model weights. The upload request may time out on the first attempt. Retry the upload once — subsequent attempts will be fast because the weights are cached in the container's memory for the lifetime of the process.
 
 **Service OOM-killed (exit code 137) / out of memory**  
-The full CUDA `torch` package is installed instead of the CPU-only variant. On Render free tier, CUDA torch adds ~700MB just for the library, instantly exceeding the 512MB limit. Confirm that `requirements.txt` contains `torch==2.2.2+cpu` (with `+cpu` suffix) and that no other package is pulling in full torch as a dependency. Redeploy after fixing.
+The full CUDA `torch` package is installed instead of the CPU-only variant. On Render free tier, CUDA torch adds ~700MB just for the library, instantly exceeding the 512MB limit. However, the standard PyPI `torch` wheel automatically runs in CPU-only mode when no GPU/CUDA drivers are present (which is always the case on Render free tier), so no special variant is needed. If OOM still occurs, check that no other package is pulling in a CUDA-enabled torch as a transitive dependency.
 
 **`/health` returns 503 (database disconnected)**  
 The lightweight `/health` endpoint never hits the DB and should always return 200. If you are hitting `/health/full`, the `DATABASE_URL` is likely wrong or the Supabase connection pooler is at capacity. Check the Supabase dashboard → Database → Connection Pooling.
