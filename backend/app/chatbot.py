@@ -1,4 +1,3 @@
-import google.generativeai as genai
 from typing import Dict, Any, List
 import os
 from dotenv import load_dotenv
@@ -27,6 +26,7 @@ class Chatbot:
             self.model = None
         else:
             try:
+                import google.generativeai as genai
                 genai.configure(api_key=api_key)
                 test_model = genai.GenerativeModel('gemini-1.5-flash')
                 logger.info("Gemini API connection configured")

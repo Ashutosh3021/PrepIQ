@@ -440,30 +440,22 @@ class ExternalAPIWrapper:
         """Async image captioning"""
         return self.image_captioning(image_path)
 
-# Create a global instance with error handling
+# Global singleton — populated lazily on first call to get_external_api()
 external_api = None
 
 def _get_external_api_safe():
-    """Safely create external API instance"""
+    """Safely create external API instance (lazy singleton)."""
     global external_api
     if external_api is None:
         try:
             external_api = ExternalAPIWrapper()
         except Exception as e:
             logger.error(f"Failed to create ExternalAPIWrapper: {e}")
-            # Create a minimal fallback instance
             external_api = ExternalAPIWrapper()
             external_api.models_available = False
     return external_api
 
-# Initialize on first import, but don't crash if it fails
-try:
-    external_api = ExternalAPIWrapper()
-except Exception as e:
-    logger.warning(f"ExternalAPIWrapper initialization failed: {e}. Will retry on first use.")
-    external_api = None
-
 # For backward compatibility with existing code
 def get_external_api():
-    """Get the external API wrapper instance"""
+    """Get the external API wrapper instance (lazy, thread-safe on CPython GIL)."""
     return _get_external_api_safe()

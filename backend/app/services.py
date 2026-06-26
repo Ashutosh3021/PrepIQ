@@ -9,14 +9,10 @@ import json
 from dateutil.parser import parse
 
 from . import models, schemas
-from .prediction_engine import PredictionEngine
-from .chatbot import Chatbot
-from .pdf_parser import PDFParser
-from .ml_models.question_analyzer import QuestionAnalyzer
-from .ml_models.enhanced_question_analyzer import EnhancedQuestionAnalyzer
-from .ml.syllabus_analyzer import SyllabusAnalyzer
-from .ml.correlation_analyzer import CorrelationAnalyzer
-from .ml_engines.study_planner import StudyPlanner
+
+# Heavy ML imports are deferred to inside PrepIQService.__init__ so they don't
+# run at module import time (which happens whenever any router imports services.py).
+# This keeps the import-time RAM footprint low on the 512MB Render free tier.
 
 logger = logging.getLogger(__name__)
 
@@ -27,50 +23,60 @@ class PrepIQService:
     def __init__(self):
         # Each component is wrapped individually so a single failure does not
         # prevent the rest of the service from starting.
+        # All heavy imports happen HERE (inside __init__), not at module level,
+        # so importing services.py itself costs almost no RAM.
 
         try:
+            from .prediction_engine import PredictionEngine
             self.prediction_engine = PredictionEngine()
         except Exception as e:
             logger.warning(f"PredictionEngine failed to initialize: {e}")
             self.prediction_engine = None
 
         try:
+            from .chatbot import Chatbot
             self.chatbot = Chatbot()
         except Exception as e:
             logger.warning(f"Chatbot failed to initialize: {e}")
             self.chatbot = None
 
         try:
+            from .pdf_parser import PDFParser
             self.pdf_parser = PDFParser()
         except Exception as e:
             logger.warning(f"PDFParser failed to initialize: {e}")
             self.pdf_parser = None
 
         try:
+            from .ml_models.question_analyzer import QuestionAnalyzer
             self.question_analyzer = QuestionAnalyzer()
         except Exception as e:
             logger.warning(f"QuestionAnalyzer failed to initialize: {e}")
             self.question_analyzer = None
 
         try:
+            from .ml_models.enhanced_question_analyzer import EnhancedQuestionAnalyzer
             self.enhanced_question_analyzer = EnhancedQuestionAnalyzer()
         except Exception as e:
             logger.warning(f"EnhancedQuestionAnalyzer failed to initialize: {e}")
             self.enhanced_question_analyzer = None
 
         try:
+            from .ml.syllabus_analyzer import SyllabusAnalyzer
             self.syllabus_analyzer = SyllabusAnalyzer()
         except Exception as e:
             logger.warning(f"SyllabusAnalyzer failed to initialize: {e}")
             self.syllabus_analyzer = None
 
         try:
+            from .ml.correlation_analyzer import CorrelationAnalyzer
             self.correlation_analyzer = CorrelationAnalyzer()
         except Exception as e:
             logger.warning(f"CorrelationAnalyzer failed to initialize: {e}")
             self.correlation_analyzer = None
 
         try:
+            from .ml_engines.study_planner import StudyPlanner
             self.study_planner = StudyPlanner()
         except Exception as e:
             logger.warning(f"StudyPlanner failed to initialize: {e}")

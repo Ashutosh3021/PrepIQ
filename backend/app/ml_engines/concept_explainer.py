@@ -2,13 +2,12 @@ import logging
 from typing import Dict, Any, List
 import os
 from datetime import datetime
-import google.generativeai as genai
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential
 import re
 from sqlalchemy.orm import Session
 import json
-from ..ml.external_api_wrapper import external_api
+from ..ml.external_api_wrapper import get_external_api as _get_ext_api
 
 load_dotenv()
 
@@ -22,10 +21,13 @@ class ConceptExplainer:
     def __init__(self):
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise ValueError("GEMINI_API_KEY environment variable is not set")
+            logger.warning("GEMINI_API_KEY environment variable is not set — ConceptExplainer will use fallback responses")
+            self.model = None
+            return
         
         # Configure the Gemini API and initialize model
         try:
+            import google.generativeai as genai
             genai.configure(api_key=api_key)
             
             # Use a more capable model for concept explanations
@@ -59,6 +61,7 @@ class ConceptExplainer:
     def _generate_gemini_response(self, prompt: str) -> str:
         """Generate response from Gemini with retry logic"""
         try:
+            import google.generativeai as genai
             response = self.model.generate_content(
                 prompt,
                 generation_config=genai.types.GenerationConfig(
@@ -102,7 +105,7 @@ class ConceptExplainer:
             if user_profile:
                 prompt += f" Tailor the explanation for a {user_profile.get('knowledge_level', 'intermediate')} level student."
             
-            response = external_api.text_generation(prompt, max_length=500)
+            response = _get_ext_api().text_generation(prompt, max_length=500)
             
             if response["success"] and response["output"]:
                 # Parse the API response
@@ -110,7 +113,7 @@ class ConceptExplainer:
                 
                 # Use QA API to extract key points
                 try:
-                    qa_response = external_api.question_answering(
+                    qa_response = _get_ext_api().question_answering(
                         context=explanation_text,
                         question=f"What are the key points about {concept}?"
                     )
@@ -120,7 +123,7 @@ class ConceptExplainer:
                 
                 # Use classification API for difficulty assessment
                 try:
-                    classification_response = external_api.text_classification(explanation_text)
+                    classification_response = _get_ext_api().text_classification(explanation_text)
                     difficulty_level = classification_response["output"]["label"].lower() if classification_response["success"] else "intermediate"
                 except:
                     difficulty_level = "intermediate"

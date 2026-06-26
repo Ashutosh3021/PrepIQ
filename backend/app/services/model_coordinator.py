@@ -28,14 +28,30 @@ except ImportError:
     _YOLO = None
     logger.info("ultralytics not installed — YOLOv8 will be skipped")
 
-try:
-    from transformers import pipeline as _hf_pipeline
-    from PIL import Image as _PILImage
-    AVAILABLE_MODELS.add("transformers")
-except ImportError:
-    _hf_pipeline = None
-    _PILImage = None
-    logger.info("transformers/Pillow not installed — GroundingDINO will be skipped")
+# transformers / Pillow are NOT imported at module level.
+# `from transformers import pipeline` triggers a 40-second registry scan and
+# ~150MB RAM hit even before any model weights are loaded — fatal on the
+# 512MB Render free tier.  Import lazily inside process_image_pipeline().
+_hf_pipeline = None
+_PILImage = None
+
+def _ensure_transformers():
+    """Lazy-load transformers and Pillow on first use."""
+    global _hf_pipeline, _PILImage
+    if _hf_pipeline is None:
+        try:
+            from transformers import pipeline as _p
+            _hf_pipeline = _p
+            AVAILABLE_MODELS.add("transformers")
+        except ImportError:
+            logger.info("transformers not installed — GroundingDINO will be skipped")
+    if _PILImage is None:
+        try:
+            from PIL import Image as _I
+            _PILImage = _I
+        except ImportError:
+            pass
+    return _hf_pipeline, _PILImage
 
 try:
     from bytez import Bytez as _Bytez
@@ -68,12 +84,21 @@ def _get_easyocr():
         logger.info("easyocr not installed — OCR will be skipped")
         return None
 
-try:
-    import google.generativeai as _genai
-    AVAILABLE_MODELS.add("gemini")
-except ImportError:
-    _genai = None
-    logger.info("google-generativeai not installed — Gemini models will be skipped")
+# google.generativeai loads protobuf registries (~30s, ~50MB) on first import.
+# Keep it lazy so startup stays under the 512MB Render free-tier limit.
+_genai = None
+
+def _ensure_genai():
+    """Lazy-load google.generativeai on first use."""
+    global _genai
+    if _genai is None:
+        try:
+            import google.generativeai as _g
+            _genai = _g
+            AVAILABLE_MODELS.add("gemini")
+        except ImportError:
+            logger.info("google-generativeai not installed -- Gemini models will be skipped")
+    return _genai
 
 logger.info(f"ModelCoordinator available backends: {AVAILABLE_MODELS or {'none'}}")
 
@@ -288,6 +313,7 @@ class ModelCoordinator:
         
         # Step 3: GroundingDINO (run if low text detected)
         text_length = len(result["text"][0]) if result["text"] else 0
+        _hf_pipeline, _PILImage = _ensure_transformers()
         if text_length < 100 and self.models['groundingdino'].enabled and _hf_pipeline is not None and _PILImage is not None:
             try:
                 detector = _hf_pipeline(
@@ -421,13 +447,14 @@ class ModelCoordinator:
     # ==================== GEMINI MODELS ====================
     
     def _get_gemini_model(self):
-        """Get Gemini model instance"""
-        if _genai is None:
-            logger.warning("google-generativeai not installed — install with: pip install google-generativeai")
+        """Get Gemini model instance (lazy-loads google.generativeai on first call)."""
+        g = _ensure_genai()
+        if g is None:
+            logger.warning("google-generativeai not installed -- install with: pip install google-generativeai")
             return None
         try:
-            _genai.configure(api_key=self.models['gemini_chat'].api_key)
-            return _genai.GenerativeModel(self.models['gemini_chat'].model_id)
+            g.configure(api_key=self.models['gemini_chat'].api_key)
+            return g.GenerativeModel(self.models['gemini_chat'].model_id)
         except Exception as e:
             logger.error(f"Failed to initialize Gemini: {e}")
             return None

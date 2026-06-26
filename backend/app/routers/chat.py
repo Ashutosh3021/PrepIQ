@@ -11,13 +11,17 @@ from ..dependencies import get_prepiq_service
 # Import from the new Supabase-first auth service
 from ..services.supabase_first_auth import get_current_user_from_token
 
-# Import Gemini for AI Tutor
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
-    logging.warning("Google Generative AI not installed. AI Tutor will use fallback responses.")
+# Import Gemini for AI Tutor — lazy to avoid 30s/50MB startup cost
+GEMINI_AVAILABLE = True  # assume available; actual import happens per-request
+
+def _get_genai():
+    """Lazy-load google.generativeai — only called when a request actually needs it."""
+    try:
+        import google.generativeai as genai
+        return genai
+    except ImportError:
+        logging.warning("Google Generative AI not installed. AI Tutor will use fallback responses.")
+        return None
 
 logger = logging.getLogger(__name__)
 
@@ -128,8 +132,8 @@ async def _summarize_with_gemini(text: str, subject_name: str) -> str:
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key or not GEMINI_AVAILABLE:
             return ""
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        _get_genai().configure(api_key=api_key)
+        model = _get_genai().GenerativeModel("gemini-1.5-flash")
         prompt = (
             f"You are summarizing study material for the subject '{subject_name}'.\n"
             f"Create a concise knowledge base summary (max 500 words) covering the key concepts, "
@@ -423,8 +427,8 @@ async def ai_tutor_chat(
         )
 
         # ── Step 4: Generate response ──────────────────────────────────────────
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        _get_genai().configure(api_key=api_key)
+        model = _get_genai().GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(full_prompt)
         tutor_response = response.text if hasattr(response, "text") else str(response)
 

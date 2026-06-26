@@ -36,6 +36,9 @@ odfpy==1.4.1
 ebooklib==0.18
 beautifulsoup4==4.12.3
 
+# Bytez SDK — remote ML inference (avoids loading models locally)
+bytez
+
 # ML / NLP dependencies (required by ml/, ml_models/, ml_engines/)
 scikit-learn==1.6.1
 pandas==2.2.2
@@ -43,10 +46,10 @@ scipy==1.13.1
 nltk==3.8.1
 sentence-transformers==3.0.1
 
-# CPU-only torch — the +cpu local-version tag only exists on PyTorch's own index
-# and cannot be resolved by a plain `pip install`. On Render (no GPU/CUDA),
-# the standard PyPI wheel runs in CPU mode automatically.
-torch==2.2.2
+# CPU-only. Install with: pip install torch==2.2.2+cpu --index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu
+torchvision==0.17.2+cpu
+torchaudio==2.2.2+cpu
 
 # Optional heavy ML (only loaded when ENABLE_HEAVY_ML=true or explicitly imported)
 # spacy is imported lazily — install separately if needed:

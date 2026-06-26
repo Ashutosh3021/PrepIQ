@@ -64,11 +64,20 @@ def _lazy_import_sentence_transformers():
 
 # Try to import external_api, but don't fail if it doesn't work
 try:
-    from ..ml.external_api_wrapper import get_external_api
-    external_api = get_external_api()
+    from ..ml.external_api_wrapper import get_external_api as _get_external_api
+    _external_api_getter = _get_external_api
 except Exception as e:
     logger.warning(f"Failed to import external_api: {e}")
-    external_api = None
+    _external_api_getter = None
+
+def _ext_api():
+    """Return the ExternalAPI singleton without triggering it at module import time."""
+    if _external_api_getter is None:
+        return None
+    try:
+        return _external_api_getter()
+    except Exception:
+        return None
 
 # BERTopic for advanced topic modeling (optional heavy dependency)
 # Wrapped in a broad try/except because BERTopic internally imports
@@ -93,62 +102,23 @@ class EnhancedQuestionAnalyzer:
     Enhanced Machine Learning model for analyzing question patterns and predicting likely exam questions
     with advanced NLP capabilities including spaCy preprocessing, semantic similarity analysis,
     and BERTopic modeling.
+
+    Heavy models (sentence-transformers, spaCy, BERTopic) are loaded lazily on
+    first use via properties so that constructing this class costs almost no RAM.
+    This is critical on Render free tier (512 MB) where loading all models at
+    startup causes OOM-kill before the process is even healthy.
     """
     
     def __init__(self):
-        # Load spaCy model for advanced NLP preprocessing (lazy loading)
-        self.nlp = None
-        try:
-            spacy_module = _lazy_import_spacy()
-            if spacy_module:
-                try:
-                    self.nlp = spacy_module.load("en_core_web_sm")
-                    logger.info("spaCy model loaded successfully")
-                except OSError:
-                    logger.warning("spaCy 'en_core_web_sm' model not found. Please install it with: python -m spacy download en_core_web_sm")
-                    self.nlp = None
-                except Exception as e:
-                    logger.warning(f"Failed to load spaCy model: {e}")
-                    self.nlp = None
-        except Exception as e:
-            logger.warning(f"spaCy not available: {e}. Using fallback preprocessing.")
-            self.nlp = None
-        
-        # Load sentence transformer model for semantic similarity (lazy loading)
-        self.sentence_model = None
-        try:
-            SentenceTransformer = _lazy_import_sentence_transformers()
-            if SentenceTransformer:
-                try:
-                    self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
-                    logger.info("Sentence transformer model loaded successfully")
-                except Exception as e:
-                    logger.warning(f"Failed to load sentence transformer model: {e}")
-                    self.sentence_model = None
-        except Exception as e:
-            logger.warning(f"Sentence transformers not available: {e}. Using fallback similarity.")
-            self.sentence_model = None
-            
-        # Initialize NLTK components
-        try:
-            self.stop_words = set(stopwords.words('english'))
-            self.lemmatizer = WordNetLemmatizer()
-        except LookupError:
-            logger.warning("NLTK data not found. Please install NLTK data.")
-            self.stop_words = set()
-            self.lemmatizer = None
-        
-        # TF-IDF vectorizer with enhanced parameters
+        # ── Lightweight sklearn models — cheap to construct, no weights loaded ──
         self.vectorizer = TfidfVectorizer(
             max_features=1000,
             stop_words='english',
-            ngram_range=(1, 3),  # Include trigrams for better context
+            ngram_range=(1, 3),
             lowercase=True,
-            min_df=1,  # Minimum document frequency
-            max_df=0.8  # Maximum document frequency to filter common terms
+            min_df=1,
+            max_df=0.8,
         )
-        
-        # LDA model for topic modeling
         self.lda_model = LatentDirichletAllocation(
             n_components=10,
             random_state=42,
@@ -159,50 +129,112 @@ class EnhancedQuestionAnalyzer:
             topic_word_prior=0.01,
             n_jobs=1,  # avoid joblib wmic CPU detection on Windows
         )
-        
-        # K-means clustering for question types
         self.kmeans_model = KMeans(
             n_clusters=5,
             random_state=42,
             n_init=10,
         )
-        
-        # Initialize BERTopic if available
-        self.bertopic_model = None
-        if BERTOPIC_AVAILABLE:
-            try:
-                # Initialize BERTopic with UMAP and HDBSCAN for better clustering
-                self.umap_model = UMAP(n_neighbors=15, 
-                                       n_components=5, 
-                                       min_dist=0.0, 
-                                       metric='cosine',
-                                       random_state=42)
-                
-                self.cluster_model = HDBSCAN(min_cluster_size=5,
-                                            metric='euclidean',
-                                            cluster_selection_method='eom',
-                                            prediction_data=True)
-                
-                self.bertopic_model = BERTopic(
-                    embedding_model=self.sentence_model,
-                    umap_model=self.umap_model,
-                    hdbscan_model=self.cluster_model,
-                    vectorizer_model=self.vectorizer,
-                    nr_topics=10,  # Target number of topics
-                    min_topic_size=5,
-                    low_memory=True,
-                    calculate_probabilities=True
-                    # seed is not a valid BERTopic param — reproducibility is
-                    # controlled via random_state=42 on the umap_model above
-                )
-            except Exception as e:
-                logger.error(f"Failed to initialize BERTopic model: {e}")
-                self.bertopic_model = None
-        else:
-            logger.warning("BERTopic not available. Install it with: pip install bertopic")
-        
+
+        # ── NLTK — only data files, no model weights ──
+        try:
+            self.stop_words = set(stopwords.words('english'))
+            self.lemmatizer = WordNetLemmatizer()
+        except LookupError:
+            logger.warning("NLTK data not found. Please install NLTK data.")
+            self.stop_words = set()
+            self.lemmatizer = None
+
+        # ── Heavy models: backing stores for lazy properties ──
+        # These are NEVER touched in __init__ — they load on first property access.
+        self._nlp = None             # spaCy (loaded by .nlp property)
+        self._sentence_model = None  # SentenceTransformer (loaded by .sentence_model property)
+        self._bertopic_model = None  # BERTopic (loaded by .bertopic_model property)
+        self._heavy_models_loaded = False  # guards one-time load attempt
+
         # Semantic similarity threshold
         self.similarity_threshold = 0.7
+
+    # ── Lazy properties for heavy models ──────────────────────────────────────
+
+    @property
+    def nlp(self):
+        """Load spaCy en_core_web_sm on first access."""
+        if self._nlp is None:
+            try:
+                spacy_module = _lazy_import_spacy()
+                if spacy_module:
+                    try:
+                        self._nlp = spacy_module.load("en_core_web_sm")
+                        logger.info("spaCy model loaded successfully")
+                    except OSError:
+                        logger.warning(
+                            "spaCy 'en_core_web_sm' not found. "
+                            "Install: python -m spacy download en_core_web_sm"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to load spaCy model: {e}")
+            except Exception as e:
+                logger.warning(f"spaCy not available: {e}. Using fallback preprocessing.")
+        return self._nlp
+
+    @nlp.setter
+    def nlp(self, value):
+        """Allow external code to set/clear the cached nlp instance."""
+        self._nlp = value
+
+    @property
+    def sentence_model(self):
+        """Load SentenceTransformer('all-MiniLM-L6-v2') on first access."""
+        if self._sentence_model is None:
+            try:
+                SentenceTransformer = _lazy_import_sentence_transformers()
+                if SentenceTransformer:
+                    self._sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+                    logger.info("Sentence transformer model loaded successfully")
+            except Exception as e:
+                logger.warning(f"Sentence transformers not available: {e}. Using fallback similarity.")
+        return self._sentence_model
+
+    @sentence_model.setter
+    def sentence_model(self, value):
+        """Allow external code to set/clear the cached sentence model."""
+        self._sentence_model = value
+
+    @property
+    def bertopic_model(self):
+        """Build BERTopic (with UMAP + HDBSCAN) on first access, if available."""
+        if self._bertopic_model is None and not self._heavy_models_loaded:
+            self._heavy_models_loaded = True  # only try once
+            if BERTOPIC_AVAILABLE:
+                try:
+                    umap_model = UMAP(
+                        n_neighbors=15, n_components=5,
+                        min_dist=0.0, metric='cosine', random_state=42,
+                    )
+                    cluster_model = HDBSCAN(
+                        min_cluster_size=5, metric='euclidean',
+                        cluster_selection_method='eom', prediction_data=True,
+                    )
+                    self._bertopic_model = BERTopic(
+                        embedding_model=self.sentence_model,
+                        umap_model=umap_model,
+                        hdbscan_model=cluster_model,
+                        vectorizer_model=self.vectorizer,
+                        nr_topics=10,
+                        min_topic_size=5,
+                        low_memory=True,
+                        calculate_probabilities=True,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to initialize BERTopic model: {e}")
+            else:
+                logger.warning("BERTopic not available. Install: pip install bertopic")
+        return self._bertopic_model
+
+    @bertopic_model.setter
+    def bertopic_model(self, value):
+        """Allow external code to set/clear the cached BERTopic model."""
+        self._bertopic_model = value
     
     def preprocess_text_spacy(self, text: str) -> str:
         """Advanced text preprocessing using spaCy"""
@@ -303,9 +335,10 @@ class EnhancedQuestionAnalyzer:
     def calculate_semantic_similarity(self, text1: str, text2: str) -> float:
         """Calculate semantic similarity between two texts using external API or sentence transformers"""
         # Try external API first (if available)
-        if external_api:
+        _api = _ext_api()
+        if _api:
             try:
-                response = external_api.sentence_similarity([text1, text2])
+                response = _api.sentence_similarity([text1, text2])
                 if response.get("success") and response.get("output"):
                     # Use API result if available
                     api_similarity = response["output"]

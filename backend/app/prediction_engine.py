@@ -1,7 +1,6 @@
-import google.generativeai as genai
-from typing import Dict, Any, List
 import os
 import gc
+from typing import Dict, Any, List
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 from . import models
@@ -23,21 +22,22 @@ logger = logging.getLogger(__name__)
 # them and immediately deleted after use so peak memory is minimised.
 USE_LIGHTWEIGHT_MODELS: bool = os.getenv("ENVIRONMENT", "development").lower() == "production"
 
-# Imports kept at module level for type checking only — NOT instantiated here.
-# Actual instantiation happens inside the methods that use them (lazy loading).
-from .ml_models.enhanced_question_analyzer import EnhancedQuestionAnalyzer
-from .ml_models.question_analyzer import QuestionAnalyzer as LightweightQuestionAnalyzer
-from .ml.syllabus_analyzer import SyllabusAnalyzer
-from .ml.correlation_analyzer import CorrelationAnalyzer
-from .ml_engines.concept_explainer import ConceptExplainer
+# Module-level imports are import-only (no instantiation) — kept here only for
+# type-checking clarity. Actual instances are created lazily inside methods.
+# Do NOT call ExternalAPIWrapper() / get_external_api() here — that triggers
+# NLTK downloads and bytez SDK init at startup, costing ~50 MB of RAM.
+external_api = None  # populated lazily on first use via _get_external_api()
 
-# Safe import of external_api
-try:
-    from .ml.external_api_wrapper import get_external_api
-    external_api = get_external_api()
-except Exception as e:
-    logger.warning(f"Failed to import external_api: {e}")
-    external_api = None
+def _get_external_api():
+    """Return the ExternalAPIWrapper singleton, initialising it on first call."""
+    global external_api
+    if external_api is None:
+        try:
+            from .ml.external_api_wrapper import get_external_api
+            external_api = get_external_api()
+        except Exception as e:
+            logger.warning(f"Failed to import external_api: {e}")
+    return external_api
 
 load_dotenv()
 
@@ -52,6 +52,7 @@ class PredictionEngine:
         else:
             # Configure Gemini and verify the connection
             try:
+                import google.generativeai as genai
                 genai.configure(api_key=api_key)
                 test_model = genai.GenerativeModel('gemini-1.5-flash')
                 logger.info("Gemini API connection configured")
@@ -65,24 +66,53 @@ class PredictionEngine:
         # immediately deleted and gc.collect() called to release RAM.
         # This keeps the baseline footprint well under the 512MB Render limit.
         # (USE_LIGHTWEIGHT_MODELS=True in production forces the sklearn analyzer.)
+        self._syllabus_analyzer = None
+        self._correlation_analyzer = None
+        self._concept_explainer = None
 
-        try:
-            self.syllabus_analyzer = SyllabusAnalyzer()
-        except Exception as e:
-            logger.warning(f"Failed to initialize SyllabusAnalyzer: {e}")
-            self.syllabus_analyzer = None
+    # ── Lazy properties for optional heavy dependencies ────────────────────────
 
-        try:
-            self.correlation_analyzer = CorrelationAnalyzer()
-        except Exception as e:
-            logger.warning(f"Failed to initialize CorrelationAnalyzer: {e}")
-            self.correlation_analyzer = None
+    @property
+    def syllabus_analyzer(self):
+        if self._syllabus_analyzer is None:
+            try:
+                from .ml.syllabus_analyzer import SyllabusAnalyzer
+                self._syllabus_analyzer = SyllabusAnalyzer()
+            except Exception as e:
+                logger.warning(f"Failed to initialize SyllabusAnalyzer: {e}")
+        return self._syllabus_analyzer
 
-        try:
-            self.concept_explainer = ConceptExplainer()
-        except Exception as e:
-            logger.warning(f"Failed to initialize ConceptExplainer: {e}")
-            self.concept_explainer = None
+    @syllabus_analyzer.setter
+    def syllabus_analyzer(self, value):
+        self._syllabus_analyzer = value
+
+    @property
+    def correlation_analyzer(self):
+        if self._correlation_analyzer is None:
+            try:
+                from .ml.correlation_analyzer import CorrelationAnalyzer
+                self._correlation_analyzer = CorrelationAnalyzer()
+            except Exception as e:
+                logger.warning(f"Failed to initialize CorrelationAnalyzer: {e}")
+        return self._correlation_analyzer
+
+    @correlation_analyzer.setter
+    def correlation_analyzer(self, value):
+        self._correlation_analyzer = value
+
+    @property
+    def concept_explainer(self):
+        if self._concept_explainer is None:
+            try:
+                from .ml_engines.concept_explainer import ConceptExplainer
+                self._concept_explainer = ConceptExplainer()
+            except Exception as e:
+                logger.warning(f"Failed to initialize ConceptExplainer: {e}")
+        return self._concept_explainer
+
+    @concept_explainer.setter
+    def concept_explainer(self, value):
+        self._concept_explainer = value
 
     def _get_question_analyzer(self):
         """
@@ -100,14 +130,17 @@ class PredictionEngine:
         try:
             if USE_LIGHTWEIGHT_MODELS:
                 logger.info("Using LightweightQuestionAnalyzer (production mode)")
-                return LightweightQuestionAnalyzer()
+                from .ml_models.question_analyzer import QuestionAnalyzer
+                return QuestionAnalyzer()
             else:
                 logger.info("Using EnhancedQuestionAnalyzer (development mode)")
+                from .ml_models.enhanced_question_analyzer import EnhancedQuestionAnalyzer
                 return EnhancedQuestionAnalyzer()
         except Exception as e:
             logger.warning(f"Failed to instantiate question analyzer ({e}); trying lightweight fallback")
             try:
-                return LightweightQuestionAnalyzer()
+                from .ml_models.question_analyzer import QuestionAnalyzer
+                return QuestionAnalyzer()
             except Exception as e2:
                 logger.error(f"Lightweight fallback also failed: {e2}")
                 return None
@@ -138,6 +171,7 @@ class PredictionEngine:
     def _generate_gemini_response(self, prompt: str) -> str:
         """Generate response from Gemini with retry logic"""
         try:
+            import google.generativeai as genai
             response = self.model.generate_content(
                 prompt,
                 generation_config=genai.types.GenerationConfig(
@@ -184,15 +218,16 @@ class PredictionEngine:
         # Try external API approach first
         try:
             # BUG-H04: guard against external_api being None
-            if external_api is None:
+            _ext_api = _get_external_api()
+            if _ext_api is None:
                 raise Exception("External API not available")
 
             # Use text summarization to condense study material
-            summary_response = external_api.text_summarization(study_material[:2000])  # Limit input size
+            summary_response = _ext_api.text_summarization(study_material[:2000])  # Limit input size
             summary = summary_response["output"] if summary_response["success"] else study_material[:500]
             
             # Use QA API to extract key topics from study material
-            qa_response = external_api.question_answering(
+            qa_response = _ext_api.question_answering(
                 context=summary,
                 question="What are the most important topics covered in this study material?"
             )
@@ -200,7 +235,7 @@ class PredictionEngine:
             key_topics = qa_response["output"] if qa_response["success"] else "General topics"
             
             # Use text classification to assess difficulty and importance
-            classification_response = external_api.text_classification(summary)
+            classification_response = _ext_api.text_classification(summary)
             difficulty_level = classification_response["output"]["label"] if classification_response["success"] else "intermediate"
             
             # Generate enhanced prompt for prediction
@@ -215,7 +250,7 @@ class PredictionEngine:
             """
             
             # Use text generation API for predictions
-            generation_response = external_api.text_generation(enhanced_prompt, max_length=1000)
+            generation_response = _ext_api.text_generation(enhanced_prompt, max_length=1000)
             
             if generation_response["success"] and generation_response["output"]:
                 # Try to parse the generated response as JSON

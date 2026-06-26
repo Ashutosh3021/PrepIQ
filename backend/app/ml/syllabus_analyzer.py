@@ -58,52 +58,27 @@ def _lazy_import_sentence_transformers():
 
 class SyllabusAnalyzer:
     """
-    NLP module to parse and understand syllabus documents, implement syllabus-to-question 
-    correlation analysis, develop weighted importance scoring for syllabus topics, 
+    NLP module to parse and understand syllabus documents, implement syllabus-to-question
+    correlation analysis, develop weighted importance scoring for syllabus topics,
     and add curriculum mapping functionality.
+
+    Heavy models (spaCy, SentenceTransformer) are loaded lazily on first use via
+    properties so that constructing this class costs almost no RAM — critical on
+    Render free tier (512 MB).
     """
-    
+
     def __init__(self):
-        # Load spaCy model for advanced NLP preprocessing (lazy loading)
-        self.nlp = None
-        try:
-            spacy_module = _lazy_import_spacy()
-            if spacy_module:
-                try:
-                    self.nlp = spacy_module.load("en_core_web_sm")
-                    logger.info("spaCy model loaded successfully")
-                except OSError:
-                    logger.warning("spaCy 'en_core_web_sm' model not found. Please install it with: python -m spacy download en_core_web_sm")
-                    self.nlp = None
-                except Exception as e:
-                    logger.warning(f"Failed to load spaCy model: {e}")
-                    self.nlp = None
-        except Exception as e:
-            logger.warning(f"spaCy not available: {e}. Using fallback preprocessing.")
-            self.nlp = None
-        
-        # Load sentence transformer model for semantic similarity (lazy loading)
-        self.sentence_model = None
-        try:
-            SentenceTransformer = _lazy_import_sentence_transformers()
-            if SentenceTransformer:
-                try:
-                    self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
-                    logger.info("Sentence transformer model loaded successfully")
-                except Exception as e:
-                    logger.warning(f"Failed to load sentence transformer model: {e}")
-                    self.sentence_model = None
-        except Exception as e:
-            logger.warning(f"Sentence transformers not available: {e}. Using fallback similarity.")
-            self.sentence_model = None
-            
-        # Initialize NLTK components with safe fallback
+        # ── Backing stores for lazy properties — never set directly in __init__ ──
+        self._nlp = None
+        self._sentence_model = None
+
+        # NLTK stopwords — only data, no model weights
         try:
             self.stop_words = set(stopwords.words('english'))
         except Exception:
             logger.warning("NLTK stopwords not available — using empty set as fallback")
             self.stop_words = set()
-        
+
         # Predefined weights for different syllabus elements
         self.topic_weights = {
             'learning_objectives': 1.0,
@@ -124,6 +99,50 @@ class SyllabusAnalyzer:
                 'advanced', 'primary', 'major', 'core', 'required'
             ]
         }
+
+    # ── Lazy properties for heavy models ──────────────────────────────────────
+
+    @property
+    def nlp(self):
+        """Load spaCy en_core_web_sm on first access."""
+        if self._nlp is None:
+            try:
+                spacy_module = _lazy_import_spacy()
+                if spacy_module:
+                    try:
+                        self._nlp = spacy_module.load("en_core_web_sm")
+                        logger.info("spaCy model loaded successfully")
+                    except OSError:
+                        logger.warning(
+                            "spaCy 'en_core_web_sm' not found. "
+                            "Install: python -m spacy download en_core_web_sm"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to load spaCy model: {e}")
+            except Exception as e:
+                logger.warning(f"spaCy not available: {e}. Using fallback preprocessing.")
+        return self._nlp
+
+    @nlp.setter
+    def nlp(self, value):
+        self._nlp = value
+
+    @property
+    def sentence_model(self):
+        """Load SentenceTransformer('all-MiniLM-L6-v2') on first access."""
+        if self._sentence_model is None:
+            try:
+                SentenceTransformer = _lazy_import_sentence_transformers()
+                if SentenceTransformer:
+                    self._sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+                    logger.info("Sentence transformer model loaded successfully")
+            except Exception as e:
+                logger.warning(f"Sentence transformers not available: {e}. Using fallback similarity.")
+        return self._sentence_model
+
+    @sentence_model.setter
+    def sentence_model(self, value):
+        self._sentence_model = value
     
     def preprocess_syllabus_text(self, text: str) -> str:
         """Clean and preprocess syllabus text"""

@@ -25,19 +25,28 @@ upload_progress: Dict[str, dict] = {}
 
 from ..database import get_db
 from .. import models, schemas
-from ..pdf_parser import PDFParser
 
-# Import model coordinator using absolute imports
-try:
-    from app.services.model_coordinator import get_model_coordinator as _get_coordinator
-    model_coordinator = _get_coordinator()
-except Exception:
-    try:
-        from services.model_coordinator import get_model_coordinator as _get_coordinator
-        model_coordinator = _get_coordinator()
-    except Exception:
-        model_coordinator = None
-        logger.warning("Model coordinator not available - some features may be limited")
+# PDFParser and model_coordinator are imported lazily below so that importing
+# this router at startup doesn't pull in fitz/PyMuPDF/NLTK (~20s, ~60MB).
+def _get_pdf_parser():
+    from ..pdf_parser import PDFParser
+    return PDFParser
+
+# Import model coordinator lazily (also lazy-loads google.generativeai etc.)
+_model_coordinator = None
+def _get_model_coordinator():
+    global _model_coordinator
+    if _model_coordinator is None:
+        try:
+            from app.services.model_coordinator import get_model_coordinator as _gc
+            _model_coordinator = _gc()
+        except Exception:
+            try:
+                from services.model_coordinator import get_model_coordinator as _gc
+                _model_coordinator = _gc()
+            except Exception:
+                logger.warning("Model coordinator not available - some features may be limited")
+    return _model_coordinator
 
 # Import from the new Supabase-first auth service
 from ..services.supabase_first_auth import get_current_user_from_token
@@ -124,7 +133,7 @@ async def upload_and_analyze(
             upload_progress[upload_id]["current_step"] = f"Extracting text: {file.filename}"
             upload_progress[upload_id]["overall_progress"] = int(((file_idx + 0.5) / len(files)) * 40)
             try:
-                text = PDFParser.extract_text(str(file_path))
+                text = _get_pdf_parser().extract_text(str(file_path))
                 if text and text.strip():
                     all_text_content.append(text)
                     logger.info(f"Extracted {len(text)} chars from {file.filename}")
@@ -261,7 +270,7 @@ async def _extract_questions_with_gemini(text: str) -> list:
 
     if not api_key:
         logger.warning("GEMINI_API_KEY not set — falling back to regex question parser")
-        return PDFParser.parse_questions_from_text(text)
+        return _get_pdf_parser().parse_questions_from_text(text)
 
     try:
         import google.generativeai as genai
@@ -322,7 +331,7 @@ Rules:
 
     except Exception as exc:
         logger.error(f"Gemini question extraction failed: {exc} — falling back to regex parser")
-        return PDFParser.parse_questions_from_text(text)
+        return _get_pdf_parser().parse_questions_from_text(text)
 
 
 async def _extract_concepts_with_gemini(text: str) -> list:
@@ -335,7 +344,7 @@ async def _extract_concepts_with_gemini(text: str) -> list:
 
     if not api_key:
         logger.warning("GEMINI_API_KEY not set — falling back to regex parser for concepts")
-        return PDFParser.parse_questions_from_text(text)
+        return _get_pdf_parser().parse_questions_from_text(text)
 
     try:
         import google.generativeai as genai
@@ -393,7 +402,7 @@ Rules:
 
     except Exception as exc:
         logger.error(f"Gemini concept extraction failed: {exc} — falling back to regex parser")
-        return PDFParser.parse_questions_from_text(text)
+        return _get_pdf_parser().parse_questions_from_text(text)
 
 
 async def generate_upload_analysis(subject_id: str, parsed_questions: list, db: Session):
