@@ -330,60 +330,116 @@ class ChatHistoryResponse(BaseModel):
 # Test Schemas
 class MockTestRequest(BaseModel):
     subject_id: str
-    num_questions: int = 25
-    difficulty: str = "medium"
+    num_questions: int = 10
+    difficulty: str = "mixed"       # "easy" | "medium" | "hard" | "mixed"
+    source: str = "predictions"     # "predictions" | "all_questions"
+    # legacy alias kept for backward compat
     time_limit_minutes: int = 90
-    question_source: str = "mixed"
+    question_source: Optional[str] = None  # ignored; use `source`
+
+    @field_validator("num_questions")
+    @classmethod
+    def _cap_questions(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("num_questions must be at least 1")
+        return min(v, 30)
+
+    @field_validator("difficulty")
+    @classmethod
+    def _validate_difficulty(cls, v: str) -> str:
+        allowed = {"easy", "medium", "hard", "mixed"}
+        if v.lower() not in allowed:
+            raise ValueError(f"difficulty must be one of {allowed}")
+        return v.lower()
+
+    @field_validator("source")
+    @classmethod
+    def _validate_source(cls, v: str) -> str:
+        allowed = {"predictions", "all_questions"}
+        if v.lower() not in allowed:
+            raise ValueError(f"source must be one of {allowed}")
+        return v.lower()
+
 
 class MockTestQuestion(BaseModel):
+    """A single question as returned inside a test response."""
     id: str
-    number: int
-    text: str
+    question_number: int
+    question_text: str
+    topic: str
+    difficulty: str
     marks: int
-    unit: str
-    options: Optional[List[str]] = None
-    type: str
-    
-    @field_validator('id', mode='before')
+    correct_answer: Optional[str] = None   # null when not stored
+    options: Optional[List[str]] = None    # null for short-answer questions
+    # legacy aliases so existing router code keeps working
+    number: Optional[int] = None
+    text: Optional[str] = None
+    unit: Optional[str] = None
+    type: Optional[str] = None
+
+    @field_validator("id", mode="before")
     @classmethod
-    def convert_uuid_to_str(cls, v):
+    def _coerce_uuid(cls, v):
         if isinstance(v, uuid_module.UUID):
             return str(v)
         return v
 
+
 class MockTestResponse(BaseModel):
+    """Full test object returned by POST /tests/generate and GET /tests/{id}."""
     test_id: str
+    subject_id: str
+    status: str                         # "pending" | "completed"
     total_questions: int
     total_marks: int
     time_limit_minutes: int
-    start_time: datetime
+    created_at: datetime
+    score_percentage: Optional[float] = None   # null until submitted
     questions: List[MockTestQuestion]
-    
-    @field_validator('test_id', mode='before')
+
+    @field_validator("test_id", "subject_id", mode="before")
     @classmethod
-    def convert_uuid_to_str(cls, v):
+    def _coerce_uuid(cls, v):
         if isinstance(v, uuid_module.UUID):
             return str(v)
         return v
 
+
+class MockTestListItem(BaseModel):
+    """Lightweight item for GET /tests/ list."""
+    test_id: str
+    subject_id: str
+    status: str
+    total_questions: int
+    total_marks: int
+    score_percentage: Optional[float] = None
+    created_at: datetime
+
+    @field_validator("test_id", "subject_id", mode="before")
+    @classmethod
+    def _coerce_uuid(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
+
+
 class TestSubmission(BaseModel):
-    answers: Dict[str, str]
-    end_time: datetime
+    answers: List[Dict[str, str]]   # [{"question_id": "...", "answer": "..."}]
+
 
 class TestSubmissionResponse(BaseModel):
     test_id: str
-    score: int
-    total_marks: int
-    percentage: float
-    duration_minutes: int
-    results: Dict[str, int]
-    
-    @field_validator('test_id', mode='before')
+    score_percentage: Optional[float]   # null when no correct_answers stored
+    total_questions: int
+    answers_graded: int
+
+    @field_validator("test_id", mode="before")
     @classmethod
-    def convert_uuid_to_str(cls, v):
+    def _coerce_uuid(cls, v):
         if isinstance(v, uuid_module.UUID):
             return str(v)
         return v
+
 
 class QuestionAnalysis(BaseModel):
     question_id: str
@@ -392,13 +448,14 @@ class QuestionAnalysis(BaseModel):
     user_answer: str
     correct_answer: str
     explanation: str
-    
-    @field_validator('question_id', mode='before')
+
+    @field_validator("question_id", mode="before")
     @classmethod
     def convert_uuid_to_str(cls, v):
         if isinstance(v, uuid_module.UUID):
             return str(v)
         return v
+
 
 class TestResultsResponse(BaseModel):
     test_id: str
@@ -408,8 +465,8 @@ class TestResultsResponse(BaseModel):
     weak_topics: List[str]
     strong_topics: List[str]
     recommendations: List[str]
-    
-    @field_validator('test_id', mode='before')
+
+    @field_validator("test_id", mode="before")
     @classmethod
     def convert_uuid_to_str(cls, v):
         if isinstance(v, uuid_module.UUID):
