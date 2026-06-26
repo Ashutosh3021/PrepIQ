@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from uuid import UUID
@@ -52,6 +52,8 @@ class UserUpdate(BaseModel):
     wizard_completed: Optional[bool] = None
 
 class UserResponse(UserBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     created_at: datetime
     
@@ -61,9 +63,6 @@ class UserResponse(UserBase):
         if isinstance(v, uuid_module.UUID):
             return str(v)
         return v
-    
-    class Config:
-        from_attributes = True
 
 class WizardStepResponse(BaseModel):
     """Response for wizard steps - doesn't require created_at"""
@@ -122,6 +121,8 @@ class SubjectUpdate(BaseModel):
     syllabus_json: Optional[Dict[str, Any]] = None
 
 class SubjectResponse(SubjectBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     user_id: str
     papers_uploaded: Optional[int] = 0
@@ -134,9 +135,6 @@ class SubjectResponse(SubjectBase):
         if isinstance(v, uuid_module.UUID):
             return str(v)
         return v
-    
-    class Config:
-        from_attributes = True
 
 # Paper Schemas
 class PaperUploadResponse(BaseModel):
@@ -156,6 +154,8 @@ class PaperUploadResponse(BaseModel):
         return v
 
 class PaperResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     file_name: str
     exam_year: Optional[int] = None
@@ -172,9 +172,6 @@ class PaperResponse(BaseModel):
         if isinstance(v, uuid_module.UUID):
             return str(v)
         return v
-    
-    class Config:
-        from_attributes = True
 
 class PaperPreviewResponse(BaseModel):
     file_name: str
@@ -209,6 +206,9 @@ class PredictedQuestion(BaseModel):
     reasoning: str
 
 class PredictionResponse(BaseModel):
+    """Used by GET /predictions/{id} and GET /predictions/{subject_id}/latest."""
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     subject_id: str
     predicted_questions: List[PredictedQuestion]
@@ -216,7 +216,10 @@ class PredictionResponse(BaseModel):
     coverage_percentage: int
     unit_coverage: Dict[str, int]
     generated_at: datetime
-    
+    # Two-tier fallback metadata (populated when fallback was used)
+    fallback_used: bool = False
+    message: Optional[str] = None
+
     @field_validator('id', 'subject_id', mode='before')
     @classmethod
     def convert_uuid_to_str(cls, v):
@@ -248,6 +251,8 @@ class SubjectPredictionResponse(BaseModel):
     Always HTTP 200.  Check ``fallback_used`` to decide what banner the
     frontend should display.
     """
+    model_config = ConfigDict(from_attributes=True)
+
     id: Optional[str] = None
     subject_id: str
     predictions: List[PredictedQuestionFull] = []
@@ -387,6 +392,8 @@ class MockTestQuestion(BaseModel):
 
 class MockTestResponse(BaseModel):
     """Full test object returned by POST /tests/generate and GET /tests/{id}."""
+    model_config = ConfigDict(from_attributes=True)
+
     test_id: str
     subject_id: str
     status: str                         # "pending" | "completed"
@@ -407,6 +414,8 @@ class MockTestResponse(BaseModel):
 
 class MockTestListItem(BaseModel):
     """Lightweight item for GET /tests/ list."""
+    model_config = ConfigDict(from_attributes=True)
+
     test_id: str
     subject_id: str
     status: str
@@ -428,6 +437,8 @@ class TestSubmission(BaseModel):
 
 
 class TestSubmissionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     test_id: str
     score_percentage: Optional[float]   # null when no correct_answers stored
     total_questions: int
@@ -439,6 +450,16 @@ class TestSubmissionResponse(BaseModel):
         if isinstance(v, uuid_module.UUID):
             return str(v)
         return v
+
+
+# ── Canonical aliases used by the task spec and smoke test ───────────────────
+# MockTestCreate is the same as MockTestRequest (cleaner name for external use)
+MockTestCreate = MockTestRequest
+
+# TestSubmitRequest / TestSubmitResponse are cleaner names for TestSubmission /
+# TestSubmissionResponse respectively
+TestSubmitRequest = TestSubmission
+TestSubmitResponse = TestSubmissionResponse
 
 
 class QuestionAnalysis(BaseModel):
@@ -458,6 +479,8 @@ class QuestionAnalysis(BaseModel):
 
 
 class TestResultsResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     test_id: str
     score: int
     percentage: float
@@ -508,6 +531,8 @@ class StudyPlanDay(BaseModel):
     priority_topics: List[str]
 
 class StudyPlanResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     plan_id: str
     subject_id: str
     total_days: int
