@@ -10,6 +10,8 @@ services:
     healthCheckPath: /health
 
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.10.14"
       - key: DATABASE_URL
         sync: false
       - key: SUPABASE_URL
