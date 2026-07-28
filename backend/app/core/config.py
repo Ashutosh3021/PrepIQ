@@ -62,7 +62,35 @@ class Settings(BaseSettings):
     SMTP_USER: str = os.getenv("SMTP_USER", "")
     SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
     
-    # Google AI settings
+    # ------------------------------------------------------------------
+    # LLM / provider layer (Phase 1) — capability-scoped, env-driven
+    # Resolution is implemented in app.core.llm_provider.resolve_llm_settings
+    # ------------------------------------------------------------------
+    # Shared defaults
+    LLM_DEFAULT_PROVIDER: str = os.getenv("LLM_DEFAULT_PROVIDER", "gemini")
+    LLM_DEFAULT_MODEL: str = os.getenv("LLM_DEFAULT_MODEL", "gemini-1.5-flash")
+    LLM_DEFAULT_API_KEY: str = os.getenv("LLM_DEFAULT_API_KEY", "")
+    LLM_DEFAULT_BASE_URL: str = os.getenv("LLM_DEFAULT_BASE_URL", "")
+
+    # Prediction capability
+    PREDICTION_PROVIDER: str = os.getenv("PREDICTION_PROVIDER", "")
+    PREDICTION_MODEL: str = os.getenv("PREDICTION_MODEL", "")
+    PREDICTION_API_KEY: str = os.getenv("PREDICTION_API_KEY", "")
+    PREDICTION_BASE_URL: str = os.getenv("PREDICTION_BASE_URL", "")
+
+    # Extraction capability (paper/text → questions)
+    EXTRACTION_PROVIDER: str = os.getenv("EXTRACTION_PROVIDER", "")
+    EXTRACTION_MODEL: str = os.getenv("EXTRACTION_MODEL", "")
+    EXTRACTION_API_KEY: str = os.getenv("EXTRACTION_API_KEY", "")
+    EXTRACTION_BASE_URL: str = os.getenv("EXTRACTION_BASE_URL", "")
+
+    # Chat / tutor capability
+    CHAT_PROVIDER: str = os.getenv("CHAT_PROVIDER", "")
+    CHAT_MODEL: str = os.getenv("CHAT_MODEL", "")
+    CHAT_API_KEY: str = os.getenv("CHAT_API_KEY", "")
+    CHAT_BASE_URL: str = os.getenv("CHAT_BASE_URL", "")
+
+    # Legacy Google AI key (still accepted as fallback key by llm_provider)
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     
     class Config:
