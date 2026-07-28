@@ -127,7 +127,7 @@ class SubjectResponse(SubjectBase):
     user_id: str
     papers_uploaded: Optional[int] = 0
     predictions_generated: Optional[int] = 0
-    created_at: datetime
+    created_at: Optional[datetime] = None
     
     @field_validator('id', 'user_id', mode='before')
     @classmethod
@@ -161,10 +161,10 @@ class PaperResponse(BaseModel):
     exam_year: Optional[int] = None
     total_marks: Optional[int] = None
     duration_minutes: Optional[int] = None
-    processing_status: str
+    processing_status: str = "pending"
     questions_extracted: Optional[int] = 0
     processed_at: Optional[datetime] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
     
     @field_validator('id', mode='before')
     @classmethod
@@ -215,8 +215,7 @@ class PredictionResponse(BaseModel):
     total_marks: int
     coverage_percentage: int
     unit_coverage: Dict[str, int]
-    generated_at: datetime
-    # Two-tier fallback metadata (populated when fallback was used)
+    generated_at: Optional[datetime] = None
     fallback_used: bool = False
     message: Optional[str] = None
 
@@ -246,11 +245,7 @@ class PredictedQuestionFull(BaseModel):
 
 
 class SubjectPredictionResponse(BaseModel):
-    """Response shape for GET /predictions/subject/{subject_id}.
-
-    Always HTTP 200.  Check ``fallback_used`` to decide what banner the
-    frontend should display.
-    """
+    """Response shape for GET /predictions/subject/{subject_id}."""
     model_config = ConfigDict(from_attributes=True)
 
     id: Optional[str] = None
@@ -261,12 +256,11 @@ class SubjectPredictionResponse(BaseModel):
     unit_coverage: Dict[str, int] = {}
     generated_at: Optional[datetime] = None
 
-    # Fallback metadata
     fallback_used: bool = False
-    fallback_reason: Optional[str] = None   # "no_papers" | None
-    warning: Optional[str] = None           # shown by frontend banner
-    message: Optional[str] = None           # shown when no papers uploaded
-    source: Optional[str] = None            # "gemini" | "ml_fallback" | "syllabus_fallback" | "no_data"
+    fallback_reason: Optional[str] = None
+    warning: Optional[str] = None
+    message: Optional[str] = None
+    source: Optional[str] = None
 
     @field_validator("id", "subject_id", mode="before")
     @classmethod
@@ -284,7 +278,6 @@ class ChatRequest(BaseModel):
 
 
 class TutorChatRequest(BaseModel):
-    """Pydantic model for AI tutor chat with validation"""
     message: str
     conversation_history: Optional[List[Dict[str, Any]]] = []
     subject_id: Optional[str] = None
@@ -336,11 +329,10 @@ class ChatHistoryResponse(BaseModel):
 class MockTestRequest(BaseModel):
     subject_id: str
     num_questions: int = 10
-    difficulty: str = "mixed"       # "easy" | "medium" | "hard" | "mixed"
-    source: str = "predictions"     # "predictions" | "all_questions"
-    # legacy alias kept for backward compat
+    difficulty: str = "mixed"
+    source: str = "predictions"
     time_limit_minutes: int = 90
-    question_source: Optional[str] = None  # ignored; use `source`
+    question_source: Optional[str] = None
 
     @field_validator("num_questions")
     @classmethod
@@ -367,16 +359,14 @@ class MockTestRequest(BaseModel):
 
 
 class MockTestQuestion(BaseModel):
-    """A single question as returned inside a test response."""
     id: str
     question_number: int
     question_text: str
     topic: str
     difficulty: str
     marks: int
-    correct_answer: Optional[str] = None   # null when not stored
-    options: Optional[List[str]] = None    # null for short-answer questions
-    # legacy aliases so existing router code keeps working
+    correct_answer: Optional[str] = None
+    options: Optional[List[str]] = None
     number: Optional[int] = None
     text: Optional[str] = None
     unit: Optional[str] = None
@@ -391,18 +381,19 @@ class MockTestQuestion(BaseModel):
 
 
 class MockTestResponse(BaseModel):
-    """Full test object returned by POST /tests/generate and GET /tests/{id}."""
     model_config = ConfigDict(from_attributes=True)
 
     test_id: str
     subject_id: str
-    status: str                         # "pending" | "completed"
+    status: str
     total_questions: int
     total_marks: int
     time_limit_minutes: int
-    created_at: datetime
-    score_percentage: Optional[float] = None   # null until submitted
-    questions: List[MockTestQuestion]
+    created_at: Optional[datetime] = None
+    score_percentage: Optional[float] = None
+    questions: List[MockTestQuestion] = []
+    error: Optional[str] = None
+    message: Optional[str] = None
 
     @field_validator("test_id", "subject_id", mode="before")
     @classmethod
@@ -413,7 +404,6 @@ class MockTestResponse(BaseModel):
 
 
 class MockTestListItem(BaseModel):
-    """Lightweight item for GET /tests/ list."""
     model_config = ConfigDict(from_attributes=True)
 
     test_id: str
@@ -422,7 +412,7 @@ class MockTestListItem(BaseModel):
     total_questions: int
     total_marks: int
     score_percentage: Optional[float] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     @field_validator("test_id", "subject_id", mode="before")
     @classmethod
@@ -433,14 +423,14 @@ class MockTestListItem(BaseModel):
 
 
 class TestSubmission(BaseModel):
-    answers: List[Dict[str, str]]   # [{"question_id": "...", "answer": "..."}]
+    answers: List[Dict[str, str]]
 
 
 class TestSubmissionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     test_id: str
-    score_percentage: Optional[float]   # null when no correct_answers stored
+    score_percentage: Optional[float] = None
     total_questions: int
     answers_graded: int
 
@@ -452,12 +442,7 @@ class TestSubmissionResponse(BaseModel):
         return v
 
 
-# ── Canonical aliases used by the task spec and smoke test ───────────────────
-# MockTestCreate is the same as MockTestRequest (cleaner name for external use)
 MockTestCreate = MockTestRequest
-
-# TestSubmitRequest / TestSubmitResponse are cleaner names for TestSubmission /
-# TestSubmissionResponse respectively
 TestSubmitRequest = TestSubmission
 TestSubmitResponse = TestSubmissionResponse
 
@@ -483,7 +468,7 @@ class TestResultsResponse(BaseModel):
 
     test_id: str
     score: int
-    percentage: float
+    percentage: Optional[float] = None  # null when not gradeable
     question_analysis: List[QuestionAnalysis]
     weak_topics: List[str]
     strong_topics: List[str]
@@ -568,7 +553,6 @@ class UploadProgressResponse(BaseModel):
         return v
 
 
-# Questions Schemas
 class ImportantQuestion(BaseModel):
     id: str
     subject: str
@@ -593,7 +577,7 @@ class Question(BaseModel):
     difficulty: str
     subject_id: str
     topic: str
-    created_at: datetime
+    created_at: Optional[datetime] = None
     
     @field_validator('id', 'subject_id', mode='before')
     @classmethod
@@ -603,7 +587,6 @@ class Question(BaseModel):
         return v
 
 
-# Wizard Schemas
 class WizardStep1(BaseModel):
     exam_name: str
     days_until_exam: int
