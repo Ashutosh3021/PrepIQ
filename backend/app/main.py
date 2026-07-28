@@ -1,36 +1,30 @@
 """
 PrepIQ Backend - Production Ready FastAPI Application
-Optimized for Render free tier deployment
+Phase 2: Pyronites auth/data + local file storage
 """
 import os
 import sys
 import asyncio
 
-# ── Windows: fix joblib/loky wmic CPU detection crash ────────────────────────
-# Must be set BEFORE any sklearn/joblib import. joblib reads this env var to
-# skip the wmic subprocess call that fails when wmic is unavailable.
 os.environ.setdefault("LOKY_MAX_CPU_COUNT", "4")
 
-# Fix for Windows asyncio ProactorEventLoop connection reset errors
-if sys.platform == 'win32':
+if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from datetime import datetime
 from pathlib import Path
 
-# Add the backend directory to Python path
 backend_path = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_path))
 
-# Load environment variables BEFORE any other imports
 from dotenv import load_dotenv
-env_path = backend_path / '.env'
+
+env_path = backend_path / ".env"
 if env_path.exists():
     load_dotenv(dotenv_path=env_path, override=True)
     print(f"[OK] Loaded environment from {env_path}")
 else:
-    # Try .env.production as fallback
-    env_prod_path = backend_path / '.env.production'
+    env_prod_path = backend_path / ".env.production"
     if env_prod_path.exists():
         load_dotenv(dotenv_path=env_prod_path, override=True)
         print(f"[OK] Loaded environment from {env_prod_path}")
@@ -44,188 +38,110 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
 
-# Configure logging first
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# ============================================
-# ENVIRONMENT VALIDATION
-# ============================================
-def validate_environment():
-    """Validate that all required environment variables are set.
-    
-    Raises:
-        SystemExit: If any required variable is missing
-    """
-    required_vars = {
-        'DATABASE_URL': 'Supabase PostgreSQL connection pooler URL',
-        'SUPABASE_URL': 'Supabase project URL',
-        'SUPABASE_SERVICE_KEY': 'Supabase service role key',
-        'JWT_SECRET': 'JWT secret key (generate with: openssl rand -base64 32)',
-        'ALLOWED_ORIGINS': 'Comma-separated list of allowed CORS origins',
-        'GEMINI_API_KEY': 'Google Gemini API key',
-    }
-    
-    missing_vars = []
-    for var, description in required_vars.items():
-        if not os.getenv(var):
-            missing_vars.append(f"  - {var}: {description}")
-    
-    if missing_vars:
-        logger.error("[ERROR] Missing required environment variables:")
-        for var in missing_vars:
-            logger.error(var)
-        logger.error("\n[INFO] Please set these variables in your .env.production file")
-        logger.error("   or configure them in your deployment platform dashboard.")
-        sys.exit(1)
-    
-    logger.info("[OK] All required environment variables are set")
 
-# Run validation on startup (moved from module import time)
-# Now called inside lifespan to avoid sys.exit during import
 def get_missing_environment_vars():
-    """Get list of missing required environment variables.
-    
-    Returns:
-        list: List of missing variable descriptions
-    """
     required_vars = {
-        'DATABASE_URL': 'Supabase PostgreSQL connection pooler URL',
-        'SUPABASE_URL': 'Supabase project URL',
-        'SUPABASE_SERVICE_KEY': 'Supabase service role key',
-        'JWT_SECRET': 'JWT secret key (generate with: openssl rand -base64 32)',
-        'ALLOWED_ORIGINS': 'Comma-separated list of allowed CORS origins',
-        'GEMINI_API_KEY': 'Google Gemini API key',
+        "PYRONITES_URL": "Pyronites project URL",
+        "PYRONITES_KEY": "Pyronites API key",
+        "JWT_SECRET": "JWT secret key (openssl rand -base64 32)",
+        "ALLOWED_ORIGINS": "Comma-separated list of allowed CORS origins",
     }
-    
-    missing_vars = []
+    missing = []
     for var, description in required_vars.items():
         if not os.getenv(var):
-            missing_vars.append(f"  - {var}: {description}")
-    
-    return missing_vars
+            missing.append(f"  - {var}: {description}")
+    return missing
 
-# Now import application modules (after validation)
+
 from app.core.config import settings
-from app.database import engine
-from sqlalchemy import text
 
-# Keep-alive thread — started in lifespan, stopped on shutdown
-# Import is at module level so it resolves relative to the project root.
 import sys as _sys
 import os as _os
+
 _project_root = str(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 if _project_root not in _sys.path:
     _sys.path.insert(0, _project_root)
 
 try:
     from trigger import start_keep_alive_thread, stop_keep_alive_thread
+
     _KEEP_ALIVE_AVAILABLE = True
 except ImportError:
     _KEEP_ALIVE_AVAILABLE = False
     logger.warning("[keep-alive] trigger.py not found — keep-alive disabled")
 
-# ============================================
-# LIFESPAN MANAGEMENT
-# ============================================
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage application lifespan events."""
-    # Startup
     logger.info("Starting PrepIQ Backend Application")
-    logger.info(f"PrepIQ backend started at {datetime.utcnow().isoformat()}Z")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
-    logger.info(f"Debug Mode: {settings.DEBUG}")
-    
-    # Validate environment variables (non-blocking in dev, fatal in production)
+
     missing_vars = get_missing_environment_vars()
     if missing_vars:
         if settings.ENVIRONMENT == "production":
-            # BUG-L01: hard-fail in production — never start with missing secrets
             logger.error("[FATAL] Missing required environment variables in production:")
             for var in missing_vars:
                 logger.error(var)
             raise RuntimeError(
-                "Cannot start in production with missing environment variables. "
-                "Set all required vars in your deployment platform dashboard."
+                "Cannot start in production with missing environment variables."
             )
         else:
-            logger.warning("[WARN] Missing optional environment variables:")
+            logger.warning("[WARN] Missing environment variables:")
             for var in missing_vars:
                 logger.warning(var)
-            logger.warning("[INFO] Application will run with limited functionality")
 
-    # Always warn about the four critical keys regardless of environment
-    _critical_keys = ["DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "GEMINI_API_KEY"]
-    for key in _critical_keys:
+    for key in ("PYRONITES_URL", "PYRONITES_KEY", "GEMINI_API_KEY", "LLM_DEFAULT_API_KEY"):
         if not os.getenv(key):
-            logger.warning("[WARN] Environment variable not set: %s — dependent features will be unavailable", key)
+            logger.warning("[WARN] %s not set — some features may be unavailable", key)
 
-    # BUG-L01: also refuse to start in production with the default insecure key
     _insecure_default = "default-insecure-change-me"
     if settings.ENVIRONMENT == "production" and settings.SECRET_KEY == _insecure_default:
-        raise RuntimeError(
-            "Cannot start in production with the default insecure SECRET_KEY. "
-            "Set JWT_SECRET to a strong random value (openssl rand -base64 32)."
-        )
-    
-    # Verify database connection (non-blocking — failure is logged but doesn't
-    # prevent the port from opening; Render's health check will catch real outages)
+        raise RuntimeError("Cannot start in production with the default insecure SECRET_KEY.")
+
+    # Ensure local upload root exists
     try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        logger.info("[OK] Database connection verified")
+        from app.core.local_storage import _upload_root
+
+        root = _upload_root()
+        logger.info("[OK] Upload root ready: %s", root)
     except Exception as e:
-        logger.error(f"[ERROR] Database connection failed: {e}")
-        # Do NOT raise here in production — let the service start and serve
-        # /health immediately. Individual request handlers will surface DB errors.
-        # Raising here would block uvicorn from opening the port, causing Render
-        # to time out and kill the process.
+        logger.warning("[WARN] Upload root init: %s", e)
 
-    # ML models are loaded lazily on first request (not pre-warmed here).
-    # Pre-warming during lifespan blocks uvicorn from opening the port, which
-    # causes Render's health scanner to time out and kill the process before
-    # startup completes. On the free tier, a ~30s cold-start on first request
-    # is acceptable and preferable to a failed deploy.
+    # Optional connectivity probe
+    try:
+        from app.core.pyronites_client import pyronites_configured, get_pyronites_client
 
-    # ── Keep-alive thread (production only) ──────────────────────────────────
-    # Pings the public Render URL every 14 minutes so the free-tier container
-    # never goes idle.  Only started when ENVIRONMENT=production so local dev
-    # is not affected.  The thread is a daemon — it dies with the process and
-    # never blocks shutdown.
+        if pyronites_configured():
+            get_pyronites_client()
+            logger.info("[OK] Pyronites client constructed")
+        else:
+            logger.warning("[WARN] Pyronites not configured")
+    except Exception as e:
+        logger.warning("[WARN] Pyronites client init failed: %s", e)
+
     _keep_alive_thread = None
     if settings.ENVIRONMENT == "production" and _KEEP_ALIVE_AVAILABLE:
         _keep_alive_endpoint = os.getenv(
             "HEALTH_ENDPOINT",
             "https://prepiq-narg.onrender.com/health",
         )
-        _keep_alive_thread = start_keep_alive_thread(
-            url=_keep_alive_endpoint,
-            logger=logger,
-        )
-        logger.info(f"[keep-alive] Pinging {_keep_alive_endpoint} every 14 min")
-    else:
-        if settings.ENVIRONMENT != "production":
-            logger.info("[keep-alive] Skipped (not production)")
+        _keep_alive_thread = start_keep_alive_thread(url=_keep_alive_endpoint, logger=logger)
+        logger.info("[keep-alive] Pinging %s every 14 min", _keep_alive_endpoint)
 
     yield
 
-    # Shutdown
     if _keep_alive_thread is not None:
-        logger.info("[keep-alive] Stopping background thread...")
         stop_keep_alive_thread()
-
     logger.info("[INFO] Shutting down PrepIQ Backend Application")
 
-# ============================================
-# APPLICATION FACTORY
-# ============================================
+
 def create_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
-    
     app = FastAPI(
         title="PrepIQ API",
         description="AI-Powered Exam Preparation Platform",
@@ -234,22 +150,14 @@ def create_app() -> FastAPI:
         docs_url="/docs" if settings.DEBUG else None,
         redoc_url="/redoc" if settings.DEBUG else None,
         openapi_url="/openapi.json" if settings.DEBUG else None,
-        redirect_slashes=False,  # Disable trailing slash redirects to avoid 307
+        redirect_slashes=False,
     )
-    
-    # ============================================
-    # CORS CONFIGURATION
-    # ============================================
-    # Get allowed origins from environment variable
+
     allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "")
-    allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
-    
-    # Check if we're in development mode
+    allowed_origins = [o.strip() for o in allowed_origins_str.split(",") if o.strip()]
     is_development = os.getenv("ENVIRONMENT", "development").lower() == "development"
-    
+
     if is_development:
-        # In development, allow all origins for easier testing
-        logger.info("[DEV] Development mode: Allowing all CORS origins")
         app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -259,13 +167,8 @@ def create_app() -> FastAPI:
             max_age=600,
         )
     else:
-        # In production, use strict origins
         if not allowed_origins:
-            logger.warning("[WARN] No CORS origins configured! Using safe defaults.")
             allowed_origins = ["https://prepiq.vercel.app"]
-        
-        logger.info(f"[SECURE] CORS configured for origins: {allowed_origins}")
-        
         app.add_middleware(
             CORSMiddleware,
             allow_origins=allowed_origins,
@@ -274,142 +177,93 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
             max_age=600,
         )
-    
-    # ============================================
-    # SECURITY MIDDLEWARE
-    # ============================================
-    # Trust only known hosts in production
+
     if settings.ENVIRONMENT == "production":
         app.add_middleware(
             TrustedHostMiddleware,
-            allowed_hosts=["*.onrender.com", "*.vercel.app", "localhost"]
+            allowed_hosts=["*.onrender.com", "*.vercel.app", "localhost"],
         )
-    
-    # ============================================
-    # EXCEPTION HANDLERS
-    # ============================================
 
     @app.exception_handler(ConnectionResetError)
     async def connection_reset_handler(request: Request, exc: ConnectionResetError):
-        """Handle ConnectionResetError to prevent log spam on Windows."""
-        logger.debug(f"Connection reset by client: {request.url}")
-        return JSONResponse(
-            status_code=499,  # Client Closed Request
-            content={"detail": "Connection reset by client"}
-        )
+        return JSONResponse(status_code=499, content={"detail": "Connection reset by client"})
 
-    # BUG-L06: HTTPException handler MUST be registered before the generic
-    # Exception handler. FastAPI checks handlers in registration order;
-    # since HTTPException is a subclass of Exception, the generic handler
-    # would otherwise swallow all HTTP errors and return 500.
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
-        """Handle HTTP exceptions with their correct status codes."""
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"detail": exc.detail}
-        )
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        """Handle all unhandled non-HTTP exceptions."""
-        logger.error(f"Unhandled exception: {exc}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Internal server error"}
-        )
-    
-    # ============================================
-    # HEALTH CHECK ENDPOINT
-    # ============================================
+        logger.error("Unhandled exception: %s", exc, exc_info=True)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
     @app.get("/health", tags=["Health"])
     async def health_check():
-        """
-        Lightweight health check for Render's health probe.
-        Does NOT require auth and does NOT hit the database so it
-        responds instantly even during cold-start or DB outage.
-        """
         return {"status": "ok", "service": "prepiq-backend"}
 
     @app.get("/health/full", tags=["Health"])
     async def health_check_full():
-        """Extended health check that verifies the database connection."""
-        try:
-            # Check database connection
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-            
-            return {
-                "status": "ok",
-                "timestamp": datetime.utcnow().isoformat(),
-                "version": "1.0.0",
-                "environment": settings.ENVIRONMENT,
-                "database": "connected"
-            }
-        except Exception as e:
-            logger.error(f"Full health check failed: {e}")
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "status": "error",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "database": "disconnected",
-                    "error": str(e)
-                }
-            )
+        from app.core.pyronites_client import pyronites_configured
+
+        return {
+            "status": "ok",
+            "timestamp": datetime.utcnow().isoformat(),
+            "version": "1.0.0",
+            "environment": settings.ENVIRONMENT,
+            "pyronites_configured": pyronites_configured(),
+            "upload_root": settings.UPLOAD_ROOT,
+        }
 
     @app.get("/health/auth", tags=["Health"])
     async def auth_health_check():
-        """Check whether the Supabase auth service is reachable and configured."""
-        supabase_url = os.getenv("SUPABASE_URL", "")
-        supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "")
+        from app.core.pyronites_client import pyronites_configured, get_pyronites_client
 
-        if not supabase_url or not supabase_key:
+        if not pyronites_configured():
             raise HTTPException(
                 status_code=503,
                 detail={
                     "status": "error",
                     "auth_service": "unconfigured",
-                    "message": "SUPABASE_URL or SUPABASE_SERVICE_KEY is not set",
-                }
+                    "message": "PYRONITES_URL or PYRONITES_KEY is not set",
+                },
             )
-
         try:
-            from supabase import create_client
-            client = create_client(supabase_url, supabase_key)
-            # Lightweight probe: list users with limit=1 (service-role only)
-            client.auth.admin.list_users(page=1, per_page=1)
+            get_pyronites_client()
             return {
                 "status": "ok",
-                "auth_service": "reachable",
+                "auth_service": "pyronites",
                 "timestamp": datetime.utcnow().isoformat(),
             }
         except Exception as e:
-            logger.warning(f"Auth health check failed: {e}")
             raise HTTPException(
                 status_code=503,
-                detail={
-                    "status": "error",
-                    "auth_service": "unreachable",
-                    "message": str(e),
-                }
+                detail={"status": "error", "auth_service": "unreachable", "message": str(e)},
             )
-    
+
     @app.get("/", tags=["Root"])
     async def root():
-        """Root endpoint."""
         return {
             "message": "Welcome to PrepIQ API",
             "version": "1.0.0",
             "docs": "/docs" if settings.DEBUG else None,
-            "health": "/health"
+            "health": "/health",
         }
-    
-    # ============================================
-    # INCLUDE ROUTERS
-    # ============================================
-    from app.routers import auth, subjects, papers, predictions, chat, tests, analysis, plans, dashboard, questions, wizard, upload
-    
+
+    from app.routers import (
+        auth,
+        subjects,
+        papers,
+        predictions,
+        chat,
+        tests,
+        analysis,
+        plans,
+        dashboard,
+        questions,
+        wizard,
+        upload,
+    )
+
     app.include_router(auth.router, prefix=settings.API_V1_STR, tags=["Authentication"])
     app.include_router(subjects.router, prefix=settings.API_V1_STR, tags=["Subjects"])
     app.include_router(papers.router, prefix=settings.API_V1_STR, tags=["Papers"])
@@ -422,29 +276,15 @@ def create_app() -> FastAPI:
     app.include_router(questions.router, prefix=settings.API_V1_STR, tags=["Questions"])
     app.include_router(wizard.router, prefix=settings.API_V1_STR, tags=["Wizard"])
     app.include_router(upload.router, prefix=settings.API_V1_STR, tags=["Upload"])
-    
+
     return app
 
-# Create application instance
+
 app = create_app()
 
-# ============================================
-# MAIN ENTRY POINT (for local development)
-# ============================================
 if __name__ == "__main__":
     import uvicorn
-    
+
     port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "0.0.0.0")
-    
-    logger.info(f"🌐 Starting server on {host}:{port}")
-    logger.info(f"📚 API Documentation: http://{host}:{port}/docs")
-    logger.info(f"💓 Health Check: http://{host}:{port}/health")
-    
-    uvicorn.run(
-        "app.main:app",
-        host=host,
-        port=port,
-        reload=settings.DEBUG,
-        workers=1  # Use 1 worker for Render free tier
-    )
+    uvicorn.run("app.main:app", host=host, port=port, reload=settings.DEBUG, workers=1)
