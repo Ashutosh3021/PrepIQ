@@ -1,450 +1,57 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header, UploadFile, File, Form
-from sqlalchemy.orm import Session
-from typing import Dict, Any, List
-import shutil
-from pathlib import Path
-from datetime import datetime
-import logging
-import numpy as np
+"""
+Analysis routes — deferred (Fix Phase D).
 
-from ..database import get_db
-from .. import models, schemas
+Core product path is predictions + tests on Pyronites.
+These endpoints previously required SQLAlchemy/Supabase Postgres.
+They return 503 until a full Pyronites rewrite (not in scope of A–D).
+"""
+from fastapi import APIRouter, Depends, Header, HTTPException
 
-logger = logging.getLogger(__name__)
+from ..services.pyronites_auth import get_current_user_from_token
 
-# Import from the new Supabase-first auth service
-from ..services.supabase_first_auth import get_current_user_from_token
+router = APIRouter(prefix="/analysis", tags=["Analysis"])
 
-# Dependency for protected routes
-async def get_current_user(
-    authorization: str = Header(None),
-    db: Session = Depends(get_db)
-):
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header required")
-    return await get_current_user_from_token(authorization, db)
-from ..dependencies import get_prepiq_service
-
-# Upload directory
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
-
-router = APIRouter(
-    prefix="/analysis",
-    tags=["Analysis"]
+_MSG = (
+    "Analysis endpoints are temporarily unavailable after the Pyronites migration. "
+    "Use /predictions and /tests. Analysis will return in a later phase."
 )
 
 
-def generate_analysis(subject_id: str, extracted_data: dict) -> dict:
-    """Generate comprehensive analysis — M-14: sync function, no await needed."""
-    return {
-        "subject_id": subject_id,
-        "timestamp": datetime.now().isoformat(),
-        "summary": {
-            "total_questions": len(extracted_data["questions"]),
-            "theory_questions": len([q for q in extracted_data["questions"] if q["type"] == "theory"]),
-            "numerical_questions": len([q for q in extracted_data["questions"] if q["type"] == "numerical"]),
-            "diagram_questions": len([q for q in extracted_data["questions"] if q["type"] == "diagram"]),
-            "detected_objects": len(extracted_data["detected_objects"]),
-            "circuit_diagrams": len(extracted_data["circuit_diagrams"]),
-        },
-        "questions": extracted_data["questions"][:20],
-    }
+async def get_current_user(authorization: str = Header(None)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header required")
+    return await get_current_user_from_token(authorization)
+
+
+def _gone():
+    raise HTTPException(status_code=503, detail=_MSG)
 
 
 @router.get("/data")
-async def get_analysis_data(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    from datetime import datetime
-    service = get_prepiq_service()
-    try:
-        subjects = db.query(models.Subject).filter(models.Subject.user_id == current_user["id"]).all()
-
-        if not subjects:
-            return {
-                "performanceData": [],
-                "subjectPerformance": [],
-                "weeklyProgress": [],
-                "predictionsAccuracy": [],
-                "topicMastery": [],
-                "studyInsights": {}
-            }
-
-        all_subject_analysis = []
-        for subject in subjects:
-            try:
-                trend_analysis = service.get_trend_analysis(db=db, subject_id=subject.id)
-                try:
-                    predictions = service.get_latest_prediction(db=db, subject_id=subject.id, user_id=current_user["id"])
-                except ValueError:
-                    predictions = {}
-                all_subject_analysis.append({
-                    "subject_id": subject.id,
-                    "subject_name": subject.name,
-                    "trend_analysis": trend_analysis,
-                    "predictions": predictions
-                })
-            except ValueError:
-                continue
-
-        performance_data = []
-        predictions_accuracy = []
-        topic_mastery = []
-        subject_performance = []
-
-        for analysis_item in all_subject_analysis:
-            subject_name = analysis_item["subject_name"]
-            trend_analysis = analysis_item["trend_analysis"]
-            predictions = analysis_item.get("predictions", {})
-
-            basic_analysis = trend_analysis.get("basic_analysis", {})
-            unit_weightage = basic_analysis.get("unit_weightage", {})
-
-            for unit, weight in list(unit_weightage.items())[:5]:
-                performance_data.append({
-                    "subject": subject_name,
-                    "unit": unit,
-                    "weightage": weight,
-                    "date": datetime.now().strftime("%Y-%m-%d")
-                })
-
-            if predictions:
-                predictions_accuracy.append({
-                    "subject": subject_name,
-                    "accuracy_score": predictions.get("accuracy_score", 0),
-                    "total_predictions": predictions.get("total_marks", 0)
-                })
-
-            enhanced_analysis = trend_analysis.get("enhanced_analysis", {})
-            topics_info = enhanced_analysis.get("topics", [])
-            for topic in topics_info[:3]:
-                topic_mastery.append({
-                    "subject": subject_name,
-                    "topic": f"Topic {topic.get('topic_id', 'N/A')}",
-                    "mastery_level": topic.get("percentage", 0),
-                    "frequency": topic.get("frequency", 0)
-                })
-
-            subject_performance.append({
-                "subject": subject_name,
-                "performance": min(100, max(0, basic_analysis.get("total_questions_analyzed", 0) * 2)),
-                "total_questions": basic_analysis.get("total_questions_analyzed", 0),
-                "color": "#3b82f6"
-            })
-
-        weekly_progress = [
-            {"week": f"Week {i}", "progress": min(100, 60 + (i * 5))}
-            for i in range(1, 7)
-        ]
-
-        accuracy_values = [
-            analysis.get("predictions", {}).get("accuracy_score", 0)
-            for analysis in all_subject_analysis
-            if analysis.get("predictions")
-        ]
-        average_accuracy = float(np.mean(accuracy_values)) if accuracy_values else 0.0
-
-        study_insights = {
-            "total_subjects": len(subjects),
-            "total_questions_analyzed": sum(
-                analysis["trend_analysis"].get("total_questions_analyzed", 0)
-                for analysis in all_subject_analysis
-            ),
-            "average_accuracy": average_accuracy,
-            "high_priority_topics": [],
-            "recommended_focus_areas": []
-        }
-
-        for analysis in all_subject_analysis:
-            correlation_analysis = analysis["trend_analysis"].get("correlation_analysis", {})
-            high_impact_topics = correlation_analysis.get("high_impact_topics", [])
-            for topic in high_impact_topics[:2]:
-                study_insights["high_priority_topics"].append({
-                    "subject": analysis["subject_name"],
-                    "topic": topic.get("topic", "Unknown"),
-                    "impact_score": topic.get("impact_score", 0)
-                })
-
-        return {
-            "performanceData": performance_data,
-            "subjectPerformance": subject_performance,
-            "weeklyProgress": weekly_progress,
-            "predictionsAccuracy": predictions_accuracy,
-            "topicMastery": topic_mastery,
-            "studyInsights": study_insights
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except Exception as e:
-        import traceback
-        logger.error(f"Analysis data error: {str(e)}\n{traceback.format_exc()}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Analysis error: {str(e)}"
-        )
+async def get_analysis_data(current_user: dict = Depends(get_current_user)):
+    _gone()
 
 
 @router.get("/{subject_id}/frequency")
-async def get_frequency_analysis(
-    subject_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    service = get_prepiq_service()
-    try:
-        result = service.get_frequency_analysis(
-            db=db,
-            subject_id=subject_id,
-            user_id=current_user["id"]
-        )
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except Exception as e:  # M-15: catch JSONDecodeError, AttributeError, etc.
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+async def get_frequency_analysis(subject_id: str, current_user: dict = Depends(get_current_user)):
+    _gone()
+
 
 @router.get("/{subject_id}/weightage")
-async def get_weightage_analysis(
-    subject_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    service = get_prepiq_service()
-    try:
-        result = service.get_weightage_analysis(
-            db=db,
-            subject_id=subject_id,
-            user_id=current_user["id"]
-        )
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+async def get_weightage_analysis(subject_id: str, current_user: dict = Depends(get_current_user)):
+    _gone()
+
 
 @router.get("/{subject_id}/repetitions")
-async def get_repetition_analysis(
-    subject_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    service = get_prepiq_service()
-    try:
-        result = service.get_repetition_analysis(
-            db=db,
-            subject_id=subject_id,
-            user_id=current_user["id"]
-        )
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+async def get_repetition_analysis(subject_id: str, current_user: dict = Depends(get_current_user)):
+    _gone()
+
 
 @router.get("/{subject_id}/trends")
-async def get_trend_analysis(
-    subject_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    service = get_prepiq_service()
-    try:
-        result = service.get_trend_analysis(
-            db=db,
-            subject_id=subject_id
-        )
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-@router.post("/upload")
-async def upload_material(
-    subject_id: str = Form(...),
-    files: List[UploadFile] = File(...),
-    material_type: str = Form(...),
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Upload and process study materials through ML pipeline:
-    EasyOCR → YOLOv8 → GroundingDINO
-    """
-    try:
-        saved_files = []
-        extracted_data = {
-            "text_content": [],
-            "detected_objects": [],
-            "circuit_diagrams": [],
-            "questions": []
-        }
-        
-        for file in files:
-            file_path = UPLOAD_DIR / f"{datetime.now().timestamp()}_{file.filename}"
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            saved_files.append(str(file_path))
-            
-            # Process based on file type
-            if file.content_type and file.content_type.startswith("image"):
-                image_result = await process_image_pipeline(file_path)
-                extracted_data["text_content"].extend(image_result.get("text", []))
-                extracted_data["detected_objects"].extend(image_result.get("objects", []))
-                extracted_data["circuit_diagrams"].extend(image_result.get("circuits", []))
-            elif file.content_type and file.content_type.startswith("text"):
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                    extracted_data["text_content"].append(content)
-            elif file.content_type and "pdf" in file.content_type:
-                pdf_result = await process_pdf(file_path)
-                extracted_data["text_content"].extend(pdf_result.get("text", []))
-        
-        # Extract questions
-        extracted_data["questions"] = extract_questions(extracted_data["text_content"])
-        
-        # Generate analysis — M-14: generate_analysis is now sync, no await
-        analysis_result = generate_analysis(subject_id, extracted_data)
-        
-        return {
-            "success": True,
-            "message": f"Processed {len(files)} files successfully",
-            "files": saved_files,
-            "extracted_data": extracted_data,
-            "analysis": analysis_result
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def process_image_pipeline(image_path: str):
-    """Process image using lightweight ML utilities"""
-    result = {"text": [], "objects": [], "circuits": []}
-    
-    try:
-        # Import lightweight ML utilities
-        from ..ml_utils import extract_text_from_image, detect_objects_in_image
-        
-        # Step 1: Lightweight text extraction (pytesseract or PIL)
-        text_result = extract_text_from_image(image_path)
-        result["text"] = text_result.get("text", [])
-        
-        # Step 2: Lightweight object detection
-        obj_result = detect_objects_in_image(image_path)
-        result["objects"] = obj_result.get("objects", [])
-        
-        logger.info(f"✅ Image processed: {len(result['text'])} text regions, {len(result['objects'])} objects")
-        
-    except Exception as e:
-        logger.error(f"Image processing error: {e}")
-        raise HTTPException(status_code=500, detail=f"Image processing failed: {str(e)}")
-    
-    return result
-
-
-async def process_pdf(pdf_path: str):
-    """Extract text from PDF"""
-    result = {"text": []}
-    try:
-        import PyPDF2
-        with open(pdf_path, 'rb') as file:
-            reader = PyPDF2.PdfReader(file)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text() + "\n"
-            result["text"].append(text)
-    except Exception as e:
-        print(f"PDF error: {e}")
-    return result
-
-
-def extract_questions(text_content: List[str]):
-    """Extract questions from text"""
-    questions = []
-    for content in text_content:
-        lines = content.split('\n')
-        for line in lines:
-            line = line.strip()
-            if line.endswith('?') or any(m in line.lower() for m in ['q.', 'question', 'marks:']):
-                if len(line) > 20:
-                    questions.append({
-                        "text": line,
-                        "type": detect_question_type(line),
-                        "marks": extract_marks(line)
-                    })
-    return questions
-
-
-def detect_question_type(text: str) -> str:
-    text_lower = text.lower()
-    if any(w in text_lower for w in ['calculate', 'compute', 'solve']):
-        return "numerical"
-    elif any(w in text_lower for w in ['diagram', 'draw', 'sketch']):
-        return "diagram"
-    elif any(w in text_lower for w in ['explain', 'describe', 'discuss']):
-        return "theory"
-    return "mixed"
-
-
-def extract_marks(text: str) -> int:
-    import re
-    patterns = [r'\((\d+)\)', r'\[(\d+)\]', r'(\d+)\s*marks?']
-    for pattern in patterns:
-        match = re.search(pattern, text.lower())
-        if match:
-            return int(match.group(1))
-    return 0
+async def get_trend_analysis(subject_id: str, current_user: dict = Depends(get_current_user)):
+    _gone()
 
 
 @router.get("/important-questions/{subject_id}")
-async def get_important_questions(
-    subject_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get most repeating and high-probability questions"""
-    service = get_prepiq_service()
-    try:
-        # Get repetition analysis
-        repetition_analysis = service.get_repetition_analysis(
-            db=db, subject_id=subject_id, user_id=current_user["id"]
-        )
-        
-        # Get predictions
-        predictions = service.get_latest_prediction(
-            db=db, subject_id=subject_id, user_id=current_user["id"]
-        )
-        
-        return {
-            "subject_id": subject_id,
-            "most_repeating": repetition_analysis.get("exact_repetitions", [])[:10],
-            "high_probability": predictions.get("predicted_questions", [])[:10]
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/mock-test/generate")
-async def generate_mock_test(
-    subject_id: str = Form(...),
-    difficulty: str = Form("mixed"),
-    question_count: int = Form(10),
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Generate mock test based on patterns"""
-    service = get_prepiq_service()
-    try:
-        result = service.generate_mock_test(
-            db=db,
-            subject_id=subject_id,
-            user_id=current_user["id"],
-            num_questions=question_count,
-            difficulty=difficulty
-        )
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def get_important_questions(subject_id: str, current_user: dict = Depends(get_current_user)):
+    _gone()
