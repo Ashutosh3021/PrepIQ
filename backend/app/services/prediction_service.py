@@ -1,13 +1,15 @@
 """
-Pyronites-backed prediction pipeline (Fix Phase A).
+Pyronites-backed prediction pipeline (Fix Phase C).
 
-No SQLAlchemy. LLM via Phase 1 provider capability=\"prediction\".
+Single entry for live API. LLM via provider capability="prediction".
+No SQLAlchemy. No Bytez on this path.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import re
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -24,34 +26,46 @@ MIN_PAPERS_FULL = int(os.getenv("PREDICTION_MIN_PAPERS_FULL", "3") or "3")
 MAX_ITEMS = int(os.getenv("PREDICTION_MAX_ITEMS", "10") or "10")
 CONTEXT_CHARS = int(os.getenv("PREDICTION_CONTEXT_CHARS", "12000") or "12000")
 
+_VALID_PROB = {"very_high", "high", "moderate", "low"}
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _normalize_item(raw: Dict[str, Any], index: int, source: str) -> Dict[str, Any]:
+def _prob_from_confidence(conf: float) -> str:
+    if conf >= 0.8:
+        return "very_high"
+    if conf >= 0.65:
+        return "high"
+    if conf >= 0.4:
+        return "moderate"
+    return "low"
+
+
+def normalize_predicted_item(raw: Dict[str, Any], index: int, source: str) -> Dict[str, Any]:
+    """Stable shape for API + mock-test weighting (confidence_score, text, topic/unit, marks)."""
     text = str(raw.get("text") or raw.get("question_text") or "").strip()
-    topic = str(raw.get("topic") or raw.get("unit") or "General")
+    topic = str(raw.get("topic") or raw.get("unit") or raw.get("unit_name") or "General").strip() or "General"
     try:
-        marks = int(raw.get("marks") or 5)
+        marks = int(raw.get("marks") if raw.get("marks") is not None else 5)
     except (TypeError, ValueError):
         marks = 5
+    marks = max(1, marks)
     try:
         conf = float(raw.get("confidence_score") if raw.get("confidence_score") is not None else 0.5)
     except (TypeError, ValueError):
         conf = 0.5
     conf = max(0.0, min(1.0, conf))
-    prob = str(raw.get("probability") or "moderate").lower()
-    if conf >= 0.8:
-        prob = "very_high"
-    elif conf >= 0.65:
-        prob = "high"
-    elif conf >= 0.4:
-        prob = "moderate"
-    else:
-        prob = "low"
+    prob = str(raw.get("probability") or "").lower().strip()
+    if prob not in _VALID_PROB:
+        prob = _prob_from_confidence(conf)
+    try:
+        qn = int(raw.get("question_number") or index)
+    except (TypeError, ValueError):
+        qn = index
     return {
-        "question_number": int(raw.get("question_number") or index),
+        "question_number": qn,
         "text": text,
         "topic": topic,
         "unit": topic,
@@ -60,6 +74,9 @@ def _normalize_item(raw: Dict[str, Any], index: int, source: str) -> Dict[str, A
         "confidence_score": conf,
         "reasoning": str(raw.get("reasoning") or ""),
         "source": source,
+        # help mock-test sample keys
+        "question_text": text,
+        "id": str(raw.get("id") or f"pred-{index}"),
     }
 
 
@@ -95,7 +112,7 @@ def _stats_fallback_predictions(stats: Dict[str, Any], source: str) -> List[Dict
         total = max(int(stats.get("total_questions") or 1), 1)
         conf = min(0.35 + (count / total) * 0.4, 0.75)
         out.append(
-            _normalize_item(
+            normalize_predicted_item(
                 {
                     "question_number": i,
                     "text": f"Focus revision on unit/topic: {unit} (appeared {count} times in uploaded papers).",
@@ -112,32 +129,38 @@ def _stats_fallback_predictions(stats: Dict[str, Any], source: str) -> List[Dict
     return out
 
 
+def _strip_fences(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text)
+    return text.strip()
+
+
 def _call_llm(prompt: str) -> List[Dict[str, Any]]:
     client = get_llm_client("prediction")
     if not client.is_available:
         return []
     try:
-        parsed = client.generate_json(prompt, expect_list=False)
-        raw_list = parsed.get("predictions") if isinstance(parsed, dict) else None
-        if raw_list is None and isinstance(parsed, dict) and "items" in parsed:
-            raw_list = parsed["items"]
-        if not isinstance(raw_list, list):
-            # try free text JSON
+        try:
+            parsed = client.generate_json(prompt, expect_list=False)
+        except Exception:
             text = client.generate_text(prompt)
-            cleaned = text.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("```")[1]
-                if cleaned.startswith("json"):
-                    cleaned = cleaned[4:]
-            data = json.loads(cleaned)
-            raw_list = data.get("predictions") if isinstance(data, dict) else data
+            parsed = json.loads(_strip_fences(text))
+
+        raw_list = None
+        if isinstance(parsed, dict):
+            raw_list = parsed.get("predictions") or parsed.get("items")
+        elif isinstance(parsed, list):
+            raw_list = parsed
         if not isinstance(raw_list, list):
             return []
-        out = []
+
+        out: List[Dict[str, Any]] = []
         for i, item in enumerate(raw_list[:MAX_ITEMS], start=1):
             if not isinstance(item, dict):
                 continue
-            norm = _normalize_item(item, i, "llm")
+            norm = normalize_predicted_item(item, i, "llm")
             if norm["text"]:
                 out.append(norm)
         return out
@@ -152,14 +175,18 @@ def generate_predictions(user_id: str, subject_id: str) -> Dict[str, Any]:
         raise ValueError("Subject not found")
 
     completed = papers_repo.list_completed_for_subject(subject_id)
+    # Also count any paper with questions even if status lagging
     paper_count = len(completed)
     question_rows = questions_repo.list_for_subject(subject_id)
-    # Prefer questions only from completed papers when possible
     completed_ids = {str(p.get("id")) for p in completed}
     if completed_ids:
         filtered = [q for q in question_rows if str(q.get("paper_id")) in completed_ids]
         if filtered:
             question_rows = filtered
+
+    if paper_count == 0 and question_rows:
+        # questions exist but status not marked completed — still allow cold/full by unique papers
+        paper_count = len({str(q.get("paper_id")) for q in question_rows if q.get("paper_id")})
 
     # Tier 0
     if paper_count == 0 or not question_rows:
@@ -231,13 +258,21 @@ Rules:
     final = llm_preds[:MAX_ITEMS]
     for i, p in enumerate(final, start=1):
         p["question_number"] = i
-        p["source"] = source_tag if p.get("source") == "llm" else p.get("source") or source_tag
+        if p.get("source") == "llm":
+            p["source"] = source_tag
 
     unit_coverage: Dict[str, int] = {}
     for p in final:
-        u = p.get("unit") or "General"
+        u = str(p.get("unit") or "General")
         unit_coverage[u] = unit_coverage.get(u, 0) + 1
     total_marks = sum(int(p.get("marks") or 0) for p in final)
+
+    # Honest coverage: share of observed historical units represented in predictions
+    hist_units = set((stats.get("unit_frequency") or {}).keys())
+    if hist_units and final:
+        coverage_percentage = int(round(100 * len(set(unit_coverage) & hist_units) / len(hist_units)))
+    else:
+        coverage_percentage = 0
 
     record = predictions_repo.create(
         user_id,
@@ -266,7 +301,7 @@ Rules:
         "predictions": final,
         "predicted_questions": final,
         "total_marks": total_marks,
-        "coverage_percentage": int(round(100 * len(unit_coverage) / max(len(unit_coverage), 1))) if final else 0,
+        "coverage_percentage": coverage_percentage,
         "unit_coverage": unit_coverage,
         "generated_at": _now(),
         "fallback_used": fallback_used or cold,
@@ -303,6 +338,13 @@ def _row_to_response(row: Dict[str, Any]) -> Dict[str, Any]:
             preds = []
     else:
         preds = raw if isinstance(raw, list) else []
+    # re-normalize for stable fields
+    if isinstance(preds, list):
+        preds = [
+            normalize_predicted_item(p, i + 1, str(p.get("source") or "stored"))
+            for i, p in enumerate(preds)
+            if isinstance(p, dict)
+        ]
     unit_coverage = row.get("unit_coverage_json") or {}
     if isinstance(unit_coverage, str):
         try:

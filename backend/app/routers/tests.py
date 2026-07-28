@@ -1,6 +1,6 @@
 """
-Mock tests API — Pyronites data plane (Fix Phase A).
-No SQLAlchemy. Honest null scores when answers are not gradeable.
+Mock tests API — Pyronites (Fix Phase C).
+Honest null scores; no fake test_id; reject submit on test_id=none.
 """
 from __future__ import annotations
 
@@ -50,6 +50,7 @@ def _normalise_question(raw: Dict[str, Any], order: int) -> Dict[str, Any]:
         "text": text,
         "unit": topic,
         "type": "mcq" if raw.get("options") else "descriptive",
+        "confidence_score": float(raw.get("confidence_score") or 0),
     }
 
 
@@ -65,6 +66,8 @@ def _weighted_sample(
     chosen: List[Dict[str, Any]] = []
     pool = list(zip(weights, items))
     for _ in range(k):
+        if not pool:
+            break
         total = sum(w for w, _ in pool)
         r = random.uniform(0, total)
         cumulative = 0.0
@@ -110,7 +113,7 @@ async def generate_mock_test(
         pred_pool: List[Dict[str, Any]] = []
         if latest:
             raw = _parse_json_field(latest.get("predicted_questions_json"))
-            pred_pool = raw if isinstance(raw, list) else []
+            pred_pool = [p for p in (raw if isinstance(raw, list) else []) if isinstance(p, dict)]
         if difficulty != "mixed" and pred_pool:
             filtered = [
                 p for p in pred_pool if str(p.get("difficulty") or "").lower() == difficulty
@@ -154,7 +157,6 @@ async def generate_mock_test(
             )
 
     if not selected:
-        # Do not invent a persisted test_id
         return {
             "test_id": "none",
             "subject_id": test_request.subject_id,
@@ -206,6 +208,12 @@ async def submit_test(
     submission: schemas.TestSubmission,
     current_user: dict = Depends(get_current_user),
 ):
+    if not test_id or test_id in ("none", "null", "undefined"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid test_id. Generate a test with available questions first.",
+        )
+
     test = mock_tests_repo.get_for_user(test_id, current_user["id"])
     if not test:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
@@ -316,6 +324,8 @@ async def get_user_tests(current_user: dict = Depends(get_current_user)):
 
 @router.get("/{test_id}", response_model=schemas.MockTestResponse)
 async def get_test(test_id: str, current_user: dict = Depends(get_current_user)):
+    if test_id in ("none", "null", "undefined"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
     test = mock_tests_repo.get_for_user(test_id, current_user["id"])
     if not test:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
@@ -339,6 +349,8 @@ async def get_test(test_id: str, current_user: dict = Depends(get_current_user))
 
 @router.get("/{test_id}/results", response_model=schemas.TestResultsResponse)
 async def get_test_results(test_id: str, current_user: dict = Depends(get_current_user)):
+    if test_id in ("none", "null", "undefined"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
     test = mock_tests_repo.get_for_user(test_id, current_user["id"])
     if not test:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
