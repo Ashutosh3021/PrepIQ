@@ -66,6 +66,13 @@ def _strip_code_fences(raw: str) -> str:
     return text.strip()
 
 
+class _TextResponse:
+    """Minimal response object matching google.generativeai generate_content shape."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+
 class LLMClient:
     """Minimal unified LLM client surface used by PrepIQ call sites."""
 
@@ -110,7 +117,6 @@ class LLMClient:
                 )
             return
 
-        # Optional stubs for future providers — not default, not wired in product paths
         self._init_error = f"Unsupported provider {self.provider!r} for capability={self.capability}"
         logger.warning(self._init_error)
 
@@ -139,6 +145,14 @@ class LLMClient:
             return (text or "").strip()
 
         raise RuntimeError(f"generate_text not implemented for provider={self.provider}")
+
+    def generate_content(self, prompt: str, **kwargs: Any) -> _TextResponse:
+        """
+        Legacy-compatible method (same shape as google.generativeai GenerativeModel).
+        Prefer generate_text / generate_json in new code.
+        """
+        text = self.generate_text(prompt, **kwargs)
+        return _TextResponse(text)
 
     def generate_json(self, prompt: str, **kwargs: Any) -> Dict[str, Any]:
         """
@@ -191,7 +205,6 @@ def get_llm_client(capability: str) -> LLMClient:
     """
     cap = capability.strip().lower()
     settings = resolve_llm_settings(cap)
-    # Cache key includes model+provider+key presence so env changes in tests can be forced via clear_llm_client_cache
     cache_key = f"{settings['capability']}:{settings['provider']}:{settings['model']}:{bool(settings['api_key'])}"
 
     with _lock:
