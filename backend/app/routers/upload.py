@@ -25,37 +25,28 @@ upload_progress: Dict[str, dict] = {}
 
 from ..database import get_db
 from .. import models, schemas
+from ..core.llm_provider import get_llm_client
 
-# PDFParser and model_coordinator are imported lazily below so that importing
-# this router at startup doesn't pull in fitz/PyMuPDF/NLTK (~20s, ~60MB).
+# PDFParser is imported lazily below so that importing this router at startup
+# doesn't pull in fitz/PyMuPDF (~20s, ~60MB).
 def _get_pdf_parser():
     from ..pdf_parser import PDFParser
     return PDFParser
 
-# Import model coordinator lazily (also lazy-loads google.generativeai etc.)
+# Dead path: model_coordinator module is not present in the repo tree.
+# Kept as a no-op for compatibility; do not expand multi-agent usage.
 _model_coordinator = None
 def _get_model_coordinator():
     global _model_coordinator
     if _model_coordinator is None:
-        try:
-            from app.services.model_coordinator import get_model_coordinator as _gc
-            _model_coordinator = _gc()
-        except Exception:
-            try:
-                from services.model_coordinator import get_model_coordinator as _gc
-                _model_coordinator = _gc()
-            except Exception:
-                logger.warning("Model coordinator not available - some features may be limited")
+        logger.debug("Model coordinator not available (quarantined / missing module)")
     return _model_coordinator
 
-# Import from the new Supabase-first auth service
 from ..services.supabase_first_auth import get_current_user_from_token
 
-# Upload directory
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-# Dependency for protected routes
 async def get_current_user(
     authorization: str = Header(None),
     db: Session = Depends(get_db)
@@ -74,16 +65,12 @@ router = APIRouter(
 async def upload_and_analyze(
     subject_id: str = Form(...),
     files: List[UploadFile] = File(...),
-    material_type: str = Form("pyq"),  # pyq, notes, syllabus, diagram
+    material_type: str = Form("pyq"),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Upload study materials and process through ML pipeline with real-time progress tracking.
-    """
     upload_id = f"{current_user['id']}_{datetime.now().timestamp()}"
-    
-    # Initialize progress tracking
+
     upload_progress[upload_id] = {
         "status": "initializing",
         "overall_progress": 0,
@@ -95,26 +82,24 @@ async def upload_and_analyze(
         "errors": [],
         "start_time": datetime.now().isoformat()
     }
-    
+
+    saved_files = []
     try:
-        # Verify subject belongs to user
         subject = db.query(models.Subject).filter(
             models.Subject.id == subject_id,
             models.Subject.user_id == current_user["id"]
         ).first()
-        
+
         if not subject:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Subject not found"
             )
-        
-        saved_files = []
+
         all_text_content: List[str] = []
 
         logger.info(f"Starting upload processing for user {current_user['id']}, subject {subject_id}")
 
-        # ── Step 1: Save + extract text from every file ───────────────────────
         for file_idx, file in enumerate(files):
             upload_progress[upload_id]["current_file"] = file.filename or f"file_{file_idx+1}"
             upload_progress[upload_id]["current_step"] = f"Saving file {file_idx + 1}/{len(files)}"
@@ -129,7 +114,6 @@ async def upload_and_analyze(
             saved_files.append(str(file_path))
             logger.info(f"Saved file: {file.filename}")
 
-            # ── Extract text via PDFParser (handles PDF/DOCX/PPTX/XLSX/images/txt)
             upload_progress[upload_id]["current_step"] = f"Extracting text: {file.filename}"
             upload_progress[upload_id]["overall_progress"] = int(((file_idx + 0.5) / len(files)) * 40)
             try:
@@ -150,13 +134,12 @@ async def upload_and_analyze(
 
             upload_progress[upload_id]["files_processed"] = file_idx + 1
 
-        # ── Step 2: Extract content via Gemini AI ────────────────────────────
         upload_progress[upload_id]["current_step"] = (
             "Extracting questions with AI..." if material_type == "question_paper"
             else "Extracting concepts with AI..."
         )
         upload_progress[upload_id]["overall_progress"] = 60
-        logger.info(f"Sending text to Gemini (material_type={material_type})...")
+        logger.info(f"Sending text to extraction LLM (material_type={material_type})...")
 
         combined_text = "\n\n".join(all_text_content)
         parsed_questions = (
@@ -165,9 +148,8 @@ async def upload_and_analyze(
             else await _extract_concepts_with_gemini(combined_text)
         ) if combined_text.strip() else []
         upload_progress[upload_id]["questions_extracted"] = len(parsed_questions)
-        logger.info(f"Extracted {len(parsed_questions)} items via Gemini")
+        logger.info(f"Extracted {len(parsed_questions)} items via extraction provider")
 
-        # ── Step 3: Save QuestionPaper + Questions to DB ──────────────────────
         upload_progress[upload_id]["current_step"] = "Saving to database..."
         upload_progress[upload_id]["overall_progress"] = 80
 
@@ -198,14 +180,12 @@ async def upload_and_analyze(
                 )
 
         db.commit()
-        
-        # ── Step 4: Generate analysis ─────────────────────────────────────────
+
         upload_progress[upload_id]["current_step"] = "Generating analysis..."
         upload_progress[upload_id]["overall_progress"] = 95
         logger.info("Generating analysis...")
         analysis_result = await generate_upload_analysis(subject_id, parsed_questions, db)
 
-        # Clean up local temp files
         for fp in saved_files:
             try:
                 os.unlink(fp)
@@ -217,14 +197,12 @@ async def upload_and_analyze(
         upload_progress[upload_id]["current_step"] = "Complete!"
         upload_progress[upload_id]["end_time"] = datetime.now().isoformat()
 
-        # Invalidate the tutor summary cache for this subject so the next
-        # tutor session picks up the newly uploaded content
         try:
             from ..routers.chat import _subject_summary_cache
             _subject_summary_cache.pop(subject_id, None)
             logger.info(f"Invalidated tutor summary cache for subject {subject_id}")
         except Exception:
-            pass  # non-fatal
+            pass
 
         return {
             "success": True,
@@ -262,22 +240,17 @@ async def upload_and_analyze(
 
 async def _extract_questions_with_gemini(text: str) -> list:
     """
-    Send extracted document text to Gemini and parse out all exam questions.
-    Falls back to PDFParser regex if Gemini is unavailable or fails.
+    Extract exam questions via extraction LLM provider.
+    Falls back to PDFParser regex if provider is unavailable or fails.
     """
-    import os, json as _json
-    api_key = os.getenv("GEMINI_API_KEY")
+    import json as _json
 
-    if not api_key:
-        logger.warning("GEMINI_API_KEY not set — falling back to regex question parser")
+    client = get_llm_client("extraction")
+    if not client.is_available:
+        logger.warning("Extraction LLM not set — falling back to regex question parser")
         return _get_pdf_parser().parse_questions_from_text(text)
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
-        # Truncate to avoid token limits (~30k chars ≈ ~7500 tokens)
         truncated = text[:30_000]
 
         system_prompt = """Analyze the provided exam paper text and extract every question it contains.
@@ -298,21 +271,17 @@ Rules:
 - Merge multi-line questions into a single "text" string
 - If marks are in parentheses like (5) or [10M], extract them as integers"""
 
-        response = model.generate_content(
+        raw = client.generate_text(
             f"{system_prompt}\n\nEXAM PAPER TEXT:\n{truncated}"
         )
-
-        raw = response.text.strip()
-        # Strip markdown code fences if Gemini wraps in ```json ... ```
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
 
         questions_raw = _json.loads(raw)
         if not isinstance(questions_raw, list):
-            raise ValueError("Gemini returned non-list JSON")
+            raise ValueError("Extraction LLM returned non-list JSON")
 
-        # Normalise to the same shape PDFParser returns
         questions = []
         for q in questions_raw:
             if not isinstance(q, dict) or not q.get("text", "").strip():
@@ -326,31 +295,27 @@ Rules:
                 "keywords":      [],
             })
 
-        logger.info(f"Gemini extracted {len(questions)} questions")
+        logger.info(f"Extraction provider extracted {len(questions)} questions")
         return questions
 
     except Exception as exc:
-        logger.error(f"Gemini question extraction failed: {exc} — falling back to regex parser")
+        logger.error(f"Extraction LLM question extract failed: {exc} — falling back to regex parser")
         return _get_pdf_parser().parse_questions_from_text(text)
 
 
 async def _extract_concepts_with_gemini(text: str) -> list:
     """
-    Send study material text to Gemini and extract key concepts, definitions,
-    theorems, and important topics. Falls back to PDFParser if Gemini unavailable.
+    Extract key concepts via extraction LLM provider.
+    Falls back to PDFParser if unavailable.
     """
-    import os, json as _json
-    api_key = os.getenv("GEMINI_API_KEY")
+    import json as _json
 
-    if not api_key:
-        logger.warning("GEMINI_API_KEY not set — falling back to regex parser for concepts")
+    client = get_llm_client("extraction")
+    if not client.is_available:
+        logger.warning("Extraction LLM not set — falling back to regex parser for concepts")
         return _get_pdf_parser().parse_questions_from_text(text)
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
         truncated = text[:30_000]
 
         system_prompt = """Analyze the provided study material (textbook, notes, or reference material) and extract all key learning items.
@@ -371,18 +336,16 @@ Rules:
 - Each item must be a complete, meaningful learning unit (minimum 10 words)
 - Merge multi-line definitions into a single "text" string"""
 
-        response = model.generate_content(
+        raw = client.generate_text(
             f"{system_prompt}\n\nSTUDY MATERIAL TEXT:\n{truncated}"
         )
-
-        raw = response.text.strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
 
         items_raw = _json.loads(raw)
         if not isinstance(items_raw, list):
-            raise ValueError("Gemini returned non-list JSON")
+            raise ValueError("Extraction LLM returned non-list JSON")
 
         items = []
         for item in items_raw:
@@ -397,16 +360,15 @@ Rules:
                 "keywords":      [],
             })
 
-        logger.info(f"Gemini extracted {len(items)} concepts from study material")
+        logger.info(f"Extraction provider extracted {len(items)} concepts from study material")
         return items
 
     except Exception as exc:
-        logger.error(f"Gemini concept extraction failed: {exc} — falling back to regex parser")
+        logger.error(f"Extraction LLM concept extract failed: {exc} — falling back to regex parser")
         return _get_pdf_parser().parse_questions_from_text(text)
 
 
 async def generate_upload_analysis(subject_id: str, parsed_questions: list, db: Session):
-    """Generate summary analysis from parsed questions."""
     analysis = {
         "subject_id": subject_id,
         "timestamp": datetime.now().isoformat(),
@@ -458,15 +420,14 @@ async def get_upload_status(
     upload_id: str,
     current_user: dict = Depends(get_current_user)
 ):
-    """Get real-time progress of an upload job"""
     if upload_id not in upload_progress:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Upload not found"
         )
-    
+
     progress_data = upload_progress[upload_id]
-    
+
     return {
         "upload_id": upload_id,
         "status": progress_data.get("status", "unknown"),
