@@ -7,29 +7,15 @@ import logging
 from ..database import get_db
 from .. import models, schemas
 from ..dependencies import get_prepiq_service
+from ..core.llm_provider import get_llm_client
 
-# Import from the new Supabase-first auth service
 from ..services.supabase_first_auth import get_current_user_from_token
-
-# Import Gemini for AI Tutor — lazy to avoid 30s/50MB startup cost
-GEMINI_AVAILABLE = True  # assume available; actual import happens per-request
-
-def _get_genai():
-    """Lazy-load google.generativeai — only called when a request actually needs it."""
-    try:
-        import google.generativeai as genai
-        return genai
-    except ImportError:
-        logging.warning("Google Generative AI not installed. AI Tutor will use fallback responses.")
-        return None
 
 logger = logging.getLogger(__name__)
 
 # ── In-memory subject summary cache ──────────────────────────────────────────
-# key: subject_id → summarized knowledge base string
 _subject_summary_cache: Dict[str, str] = {}
 
-# Dependency for protected routes
 async def get_current_user(
     authorization: str = Header(None),
     db: Session = Depends(get_db)
@@ -43,7 +29,6 @@ router = APIRouter(
     tags=["Chat"]
 )
 
-# ── AI Tutor System Prompt ────────────────────────────────────────────────────
 TUTOR_SYSTEM_PROMPT = """You are an expert academic tutor. Your personality is calm, patient, and supportive, with a touch of gentle warmth. You speak clearly and concisely, using simple language. Your teaching style is Socratic: you guide students to discover answers through thoughtful questions rather than just providing solutions.
 
 Rules you must follow strictly:
@@ -68,12 +53,6 @@ Your ultimate goal is to make the student feel supported, capable, and eager to 
 
 
 def _build_subject_knowledge_base(subject_id: str, db: Session) -> str:
-    """
-    Pull all extracted content for a subject from the DB and return as a
-    single text block ready for summarization.
-    Includes: question texts, unit names, and raw_text from papers.
-    """
-    # Gather raw text from uploaded papers
     papers = db.query(models.QuestionPaper).filter(
         models.QuestionPaper.subject_id == subject_id
     ).all()
@@ -81,9 +60,8 @@ def _build_subject_knowledge_base(subject_id: str, db: Session) -> str:
     parts = []
     for paper in papers:
         if paper.raw_text and paper.raw_text.strip():
-            parts.append(paper.raw_text[:5000])  # cap per paper
+            parts.append(paper.raw_text[:5000])
 
-    # Gather extracted questions / concepts
     questions = db.query(models.Question).join(models.QuestionPaper).filter(
         models.QuestionPaper.subject_id == subject_id
     ).limit(100).all()
@@ -99,17 +77,13 @@ def _build_subject_knowledge_base(subject_id: str, db: Session) -> str:
 
 
 async def _summarize_with_bart(text: str) -> Optional[str]:
-    """
-    Primary summarizer: facebook/bart-large-cnn via Bytez.
-    Returns summary string or None on failure.
-    """
+    """Optional Bytez summarizer — left non-default; returns None if missing."""
     try:
         from ..ml.external_api_wrapper import get_external_api
         api = get_external_api()
         if not api or not api.bytez_sdk:
             return None
 
-        # BART has a ~1024 token input limit — chunk if needed
         chunk = text[:3000]
         result = api.text_summarization(chunk)
         if result.get("success") and result.get("output"):
@@ -123,37 +97,27 @@ async def _summarize_with_bart(text: str) -> Optional[str]:
         return None
 
 
-async def _summarize_with_gemini(text: str, subject_name: str) -> str:
-    """
-    Fallback summarizer: Gemini.
-    Always returns a string (empty string on total failure).
-    """
+async def _summarize_with_chat_llm(text: str, subject_name: str) -> str:
+    """Summarize via chat capability provider."""
     try:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key or not GEMINI_AVAILABLE:
+        client = get_llm_client("chat")
+        if not client.is_available:
             return ""
-        _get_genai().configure(api_key=api_key)
-        model = _get_genai().GenerativeModel("gemini-1.5-flash")
         prompt = (
             f"You are summarizing study material for the subject '{subject_name}'.\n"
             f"Create a concise knowledge base summary (max 500 words) covering the key concepts, "
             f"topics, definitions, and important points from the following content.\n\n"
             f"CONTENT:\n{text[:8000]}"
         )
-        response = model.generate_content(prompt)
-        summary = response.text.strip() if hasattr(response, "text") else ""
-        logger.info(f"Gemini fallback summarization succeeded ({len(summary)} chars)")
+        summary = client.generate_text(prompt)
+        logger.info(f"Chat LLM summarization succeeded ({len(summary)} chars)")
         return summary
     except Exception as exc:
-        logger.warning(f"Gemini summarization fallback failed: {exc}")
+        logger.warning(f"Chat LLM summarization failed: {exc}")
         return ""
 
 
 async def _get_subject_summary(subject_id: str, subject_name: str, db: Session) -> str:
-    """
-    Returns a cached or freshly generated summary for the subject.
-    Pipeline: raw content → BART (primary) → Gemini (fallback).
-    """
     if subject_id in _subject_summary_cache:
         return _subject_summary_cache[subject_id]
 
@@ -162,15 +126,12 @@ async def _get_subject_summary(subject_id: str, subject_name: str, db: Session) 
     if not raw_text.strip():
         summary = f"No uploaded materials found for {subject_name} yet."
     else:
-        # Step 1: try BART
         summary = await _summarize_with_bart(raw_text)
 
-        # Step 2: fallback to Gemini
         if not summary:
-            logger.info("BART unavailable/failed — using Gemini summarization fallback")
-            summary = await _summarize_with_gemini(raw_text, subject_name)
+            logger.info("BART unavailable/failed — using chat LLM summarization fallback")
+            summary = await _summarize_with_chat_llm(raw_text, subject_name)
 
-        # Step 3: last resort — truncated raw text
         if not summary:
             summary = raw_text[:1500]
 
@@ -183,19 +144,17 @@ async def send_message(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify subject belongs to user
     subject = db.query(models.Subject).filter(
         models.Subject.id == chat_request.subject_id,
         models.Subject.user_id == current_user["id"]
     ).first()
-    
+
     if not subject:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Subject not found"
         )
-    
-    # Process the message using the service
+
     service = get_prepiq_service()
     result = service.chat_with_bot(
         db=db,
@@ -203,12 +162,9 @@ async def send_message(
         subject_id=chat_request.subject_id,
         message=chat_request.message
     )
-    
-    # Get the bot response
+
     bot_response = result["response"]
-    
-    # Find related questions from the subject's papers
-    # H-09: eager-load the paper relationship to avoid N+1 lazy loads
+
     from sqlalchemy.orm import joinedload
     related_questions = (
         db.query(models.Question)
@@ -219,14 +175,12 @@ async def send_message(
         .all()
     )
 
-    # Prepare response with related questions
     related_questions_list = []
     for q in related_questions:
         appeared_years = []
         if q.paper and q.paper.exam_year:
             appeared_years.append(q.paper.exam_year)
 
-        # H-10: similar_question_ids may contain strings; cast to str for .in_() safety
         if q.similar_question_ids:
             try:
                 similar_ids = [str(sid) for sid in q.similar_question_ids]
@@ -241,7 +195,7 @@ async def send_message(
                     if sq.paper and sq.paper.exam_year and sq.paper.exam_year not in appeared_years:
                         appeared_years.append(sq.paper.exam_year)
             except Exception:
-                pass  # non-fatal — just skip similar question years
+                pass
 
         appeared_years.sort()
 
@@ -251,27 +205,25 @@ async def send_message(
             "appeared_years": appeared_years,
             "probability": "high" if q.is_repeated else "medium",
         })
-    
-    # Get real references from papers
+
     references = []
     recent_papers = db.query(models.QuestionPaper).filter(
         models.QuestionPaper.subject_id == chat_request.subject_id
     ).order_by(models.QuestionPaper.exam_year.desc()).limit(2).all()
-    
+
     for paper in recent_papers:
         if paper.exam_year:
-            # Get a sample question from this paper
             sample_q = db.query(models.Question).filter(
                 models.Question.paper_id == paper.id
             ).first()
-            
+
             if sample_q:
                 references.append({
                     "type": "paper",
                     "paper_year": paper.exam_year,
                     "question": sample_q.question_text[:100] + "..." if len(sample_q.question_text) > 100 else sample_q.question_text
                 })
-    
+
     return {
         "message_id": result["message_id"],
         "response": bot_response,
@@ -292,25 +244,22 @@ async def get_chat_history(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify subject belongs to user
     subject = db.query(models.Subject).filter(
         models.Subject.id == subject_id,
         models.Subject.user_id == current_user["id"]
     ).first()
-    
+
     if not subject:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Subject not found"
         )
-    
-    # Get chat history for the subject
+
     chat_history = db.query(models.ChatHistory).filter(
         models.ChatHistory.subject_id == subject_id,
         models.ChatHistory.user_id == current_user["id"]
     ).order_by(models.ChatHistory.created_at.desc()).offset(offset).limit(limit).all()
-    
-    # Format the response
+
     history_list = []
     for chat in chat_history:
         history_list.append({
@@ -319,35 +268,33 @@ async def get_chat_history(
             "user_message": chat.user_message,
             "bot_response": chat.bot_response
         })
-    
+
     return history_list
 
 @router.delete("/history/{subject_id}")
 async def clear_chat_history(
-    subject_id: str,  # BUG-M10: path param, not query param
+    subject_id: str,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify subject belongs to user
     subject = db.query(models.Subject).filter(
         models.Subject.id == subject_id,
         models.Subject.user_id == current_user["id"]
     ).first()
-    
+
     if not subject:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Subject not found"
         )
-    
-    # Delete chat history for the subject
+
     db.query(models.ChatHistory).filter(
         models.ChatHistory.subject_id == subject_id,
         models.ChatHistory.user_id == current_user["id"]
     ).delete()
-    
+
     db.commit()
-    
+
     return {"message": "Chat history cleared successfully"}
 
 
@@ -361,8 +308,8 @@ async def ai_tutor_chat(
     AI Tutor endpoint.
     Pipeline:
       1. If subject_id provided → build knowledge base from DB content
-      2. Summarize with BART (primary) → fallback to Gemini
-      3. Inject summary + TUTOR_SYSTEM_PROMPT into Gemini tutor model
+      2. Summarize with BART (optional) → fallback to chat LLM
+      3. Inject summary + TUTOR_SYSTEM_PROMPT into chat LLM
       4. Return Socratic teaching response
     """
     try:
@@ -376,20 +323,13 @@ async def ai_tutor_chat(
                 detail="Message is required"
             )
 
-        if not GEMINI_AVAILABLE:
-            return {
-                "response": "AI tutor is currently unavailable. Please ensure the Gemini API is configured.",
-                "context": None
-            }
-
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
+        client = get_llm_client("chat")
+        if not client.is_available:
             return {
                 "response": "I'm having trouble accessing my teaching capabilities. Please try again later.",
                 "context": None
             }
 
-        # ── Step 1: Get subject context (summary) ─────────────────────────────
         subject_context_block = ""
         subject_name = "this subject"
 
@@ -409,7 +349,6 @@ async def ai_tutor_chat(
                         f"--- END KNOWLEDGE BASE ---\n"
                     )
 
-        # ── Step 2: Build conversation history block ───────────────────────────
         history_block = ""
         if conversation_history:
             history_block = "\n\nPrevious conversation:\n"
@@ -417,7 +356,6 @@ async def ai_tutor_chat(
                 role = "Student" if msg.get("role") == "user" else "Tutor"
                 history_block += f"{role}: {msg.get('content', '')}\n"
 
-        # ── Step 3: Build full prompt ──────────────────────────────────────────
         full_prompt = (
             f"{TUTOR_SYSTEM_PROMPT}"
             f"{subject_context_block}"
@@ -426,13 +364,8 @@ async def ai_tutor_chat(
             f"\n\nRespond as the AI Tutor:"
         )
 
-        # ── Step 4: Generate response ──────────────────────────────────────────
-        _get_genai().configure(api_key=api_key)
-        model = _get_genai().GenerativeModel("gemini-2.5-flash")
-        response = model.generate_content(full_prompt)
-        tutor_response = response.text if hasattr(response, "text") else str(response)
+        tutor_response = client.generate_text(full_prompt)
 
-        # ── Step 5: Persist to chat history ───────────────────────────────────
         if subject_id:
             existing = db.query(models.ChatHistory).filter(
                 models.ChatHistory.user_id == current_user["id"],
@@ -455,7 +388,7 @@ async def ai_tutor_chat(
                 "tutor_mode": "socratic",
                 "subject": subject_name,
                 "knowledge_base_active": bool(subject_context_block),
-                "model": "gemini-2.5-flash",
+                "model": client.model_name,
             }
         }
 
@@ -474,6 +407,5 @@ async def invalidate_subject_cache(
     subject_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    """Invalidate the summary cache for a subject (call after uploading new materials)."""
     _subject_summary_cache.pop(subject_id, None)
     return {"message": f"Cache cleared for subject {subject_id}"}
