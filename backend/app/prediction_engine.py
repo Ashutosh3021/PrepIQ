@@ -11,6 +11,8 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 import re
 from datetime import datetime
 
+from .core.llm_provider import get_llm_client
+
 # Logger MUST be defined before any code that uses it (including the external_api import block)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -41,31 +43,70 @@ def _get_external_api():
 
 load_dotenv()
 
+# Shared response schema for structured prediction JSON (passed to provider; no hard-coded model)
+_PREDICTION_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "predictions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question_number": {"type": "integer"},
+                    "text": {"type": "string"},
+                    "marks": {"type": "integer"},
+                    "unit": {"type": "string"},
+                    "probability": {
+                        "type": "string",
+                        "enum": ["very_high", "high", "moderate", "low"],
+                    },
+                    "reasoning": {"type": "string"},
+                    "confidence_score": {"type": "number"},
+                },
+                "required": [
+                    "question_number",
+                    "text",
+                    "marks",
+                    "unit",
+                    "probability",
+                    "reasoning",
+                    "confidence_score",
+                ],
+            },
+        },
+        "total_marks": {"type": "integer"},
+        "coverage_percentage": {"type": "number"},
+        "unit_coverage": {
+            "type": "object",
+            "additionalProperties": {"type": "number"},
+        },
+        "generated_at": {"type": "string"},
+    },
+    "required": [
+        "predictions",
+        "total_marks",
+        "coverage_percentage",
+        "unit_coverage",
+        "generated_at",
+    ],
+}
+
+
 class PredictionEngine:
-    """AI-powered prediction engine using Google's Gemini API with enhanced ML capabilities"""
-    
+    """AI-powered prediction engine via env-driven LLM provider + local ML helpers."""
+
     def __init__(self):
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            logger.warning("GEMINI_API_KEY is not set — Gemini predictions will be unavailable")
-            self.model = None
-        else:
-            # Configure Gemini and verify the connection
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=api_key)
-                test_model = genai.GenerativeModel('gemini-1.5-flash')
-                logger.info("Gemini API connection configured")
-                self.model = test_model
-            except Exception as e:
-                logger.error(f"Gemini API connection failed: {str(e)}")
-                self.model = None
+        # Phase 1: all LLM traffic goes through capability="prediction"
+        self._llm = get_llm_client("prediction")
+        # Keep `self.model` as a truthy availability flag for existing callers
+        # (services.py checks `prediction_engine.model`).
+        self.model = self._llm if self._llm.is_available else None
+        if self.model is None:
+            logger.warning(
+                "Prediction LLM unavailable — set PREDICTION_API_KEY / LLM_DEFAULT_API_KEY / GEMINI_API_KEY"
+            )
 
         # ML components are NOT instantiated here.
-        # They are created lazily inside the method that needs them, then
-        # immediately deleted and gc.collect() called to release RAM.
-        # This keeps the baseline footprint well under the 512MB Render limit.
-        # (USE_LIGHTWEIGHT_MODELS=True in production forces the sklearn analyzer.)
         self._syllabus_analyzer = None
         self._correlation_analyzer = None
         self._concept_explainer = None
@@ -115,18 +156,7 @@ class PredictionEngine:
         self._concept_explainer = value
 
     def _get_question_analyzer(self):
-        """
-        Instantiate the appropriate question analyzer on demand.
-
-        In production (USE_LIGHTWEIGHT_MODELS=True) the lightweight sklearn
-        analyzer is used to stay within the 512MB Render free-tier RAM limit.
-        In development the full EnhancedQuestionAnalyzer is used.
-
-        The caller is responsible for:
-            del analyzer
-            gc.collect()
-        after use so the memory is released promptly.
-        """
+        """Instantiate the appropriate question analyzer on demand."""
         try:
             if USE_LIGHTWEIGHT_MODELS:
                 logger.info("Using LightweightQuestionAnalyzer (production mode)")
@@ -144,116 +174,80 @@ class PredictionEngine:
             except Exception as e2:
                 logger.error(f"Lightweight fallback also failed: {e2}")
                 return None
-    
+
     def _calculate_confidence_score(self, prediction: Dict[str, Any], historical_data: List[Dict[str, Any]]) -> float:
         """Calculate confidence score for a prediction based on historical patterns"""
-        confidence_score = 0.5  # Base confidence
-        
-        # Increase confidence if the prediction matches historical patterns
+        confidence_score = 0.5
+
         if historical_data:
             for hist in historical_data:
                 if hist.get('unit') == prediction.get('unit'):
-                    confidence_score += 0.1  # Higher confidence for matching units
+                    confidence_score += 0.1
                 if hist.get('marks') == prediction.get('marks'):
-                    confidence_score += 0.05  # Higher confidence for matching marks
-                
-                # Check for keyword matches
+                    confidence_score += 0.05
+
                 pred_keywords = set(prediction.get('text', '').lower().split())
                 hist_keywords = set(hist.get('text', '').lower().split())
                 common_keywords = pred_keywords.intersection(hist_keywords)
                 if common_keywords:
                     confidence_score += 0.02 * len(common_keywords)
-        
-        # Cap confidence at 1.0
+
         return min(confidence_score, 1.0)
-    
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def _generate_gemini_response(self, prompt: str) -> str:
-        """Generate response from Gemini with retry logic"""
+        """Generate structured prediction text via provider layer (retry)."""
+        if not self._llm.is_available:
+            raise RuntimeError("Prediction LLM client is not available")
         try:
-            import google.generativeai as genai
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    response_mime_type="application/json",
-                    response_schema={
-                        "type": "object",
-                        "properties": {
-                            "predictions": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "question_number": {"type": "integer"},
-                                        "text": {"type": "string"},
-                                        "marks": {"type": "integer"},
-                                        "unit": {"type": "string"},
-                                        "probability": {"type": "string", "enum": ["very_high", "high", "moderate", "low"]},
-                                        "reasoning": {"type": "string"},
-                                        "confidence_score": {"type": "number"}
-                                    },
-                                    "required": ["question_number", "text", "marks", "unit", "probability", "reasoning", "confidence_score"]
-                                }
-                            },
-                            "total_marks": {"type": "integer"},
-                            "coverage_percentage": {"type": "number"},
-                            "unit_coverage": {
-                                "type": "object",
-                                "additionalProperties": {"type": "number"}
-                            },
-                            "generated_at": {"type": "string"}
-                        },
-                        "required": ["predictions", "total_marks", "coverage_percentage", "unit_coverage", "generated_at"]
-                    }
+            # Prefer structured JSON when the provider supports response_schema
+            try:
+                parsed = self._llm.generate_json(
+                    prompt, response_schema=_PREDICTION_RESPONSE_SCHEMA
                 )
-            )
-            return response.text
+                return json.dumps(parsed)
+            except Exception:
+                # Fall back to free-form text (caller parses JSON)
+                return self._llm.generate_text(prompt)
         except Exception as e:
-            logger.error(f"Error generating Gemini response: {str(e)}")
+            logger.error(f"Error generating prediction LLM response: {str(e)}")
             raise
 
     def predict_exam_topics(self, study_material: str, db: Session, subject_id: str) -> Dict[str, Any]:
         """Predict likely exam topics using external APIs with RAG and personalization"""
-        
-        # Try external API approach first
+
+        # Optional external API path (Bytez wrapper — may be absent; non-default)
         try:
-            # BUG-H04: guard against external_api being None
             _ext_api = _get_external_api()
             if _ext_api is None:
                 raise Exception("External API not available")
 
-            # Use text summarization to condense study material
-            summary_response = _ext_api.text_summarization(study_material[:2000])  # Limit input size
+            summary_response = _ext_api.text_summarization(study_material[:2000])
             summary = summary_response["output"] if summary_response["success"] else study_material[:500]
-            
-            # Use QA API to extract key topics from study material
+
             qa_response = _ext_api.question_answering(
                 context=summary,
                 question="What are the most important topics covered in this study material?"
             )
-            
+
             key_topics = qa_response["output"] if qa_response["success"] else "General topics"
-            
-            # Use text classification to assess difficulty and importance
+
             classification_response = _ext_api.text_classification(summary)
             difficulty_level = classification_response["output"]["label"] if classification_response["success"] else "intermediate"
-            
-            # Generate enhanced prompt for prediction
+
             enhanced_prompt = f"""
             Based on the following study material summary and key topics, predict likely exam questions:
-            
+
             Summary: {summary}
             Key Topics: {key_topics}
             Difficulty Level: {difficulty_level}
-            
+
             Provide predictions in JSON format with questions, probability, and reasoning.
             """
-            
-            # Use text generation API for predictions
+
             generation_response = _ext_api.text_generation(enhanced_prompt, max_length=1000)
-            
+
             if generation_response["success"] and generation_response["output"]:
-                # Try to parse the generated response as JSON
                 try:
                     result = json.loads(generation_response["output"])
                     if isinstance(result, dict) and "predictions" in result:
@@ -261,7 +255,6 @@ class PredictionEngine:
                         result["generated_at"] = datetime.now().isoformat()
                         return result
                 except json.JSONDecodeError:
-                    # If parsing fails, create structured response from generated text
                     return {
                         "predictions": [
                             {
@@ -280,23 +273,20 @@ class PredictionEngine:
                         "source": "external_api_text",
                         "generated_at": datetime.now().isoformat()
                     }
-                    
+
         except Exception as e:
             logger.warning(f"External API prediction failed, using local method: {e}")
-        
-        # Get historical data for the subject
+
         historical_questions = db.query(models.Question).join(
             models.QuestionPaper
         ).filter(
             models.QuestionPaper.subject_id == subject_id
         ).all()
-        
-        # Get subject information
+
         subject = db.query(models.Subject).filter(
             models.Subject.id == subject_id
         ).first()
-        
-        # Format historical data
+
         historical_data = []
         for q in historical_questions:
             historical_data.append({
@@ -304,16 +294,13 @@ class PredictionEngine:
                 "marks": q.marks,
                 "unit": q.unit_name,
                 "type": q.question_type,
-                "difficulty": q.difficulty  # Python attribute name (DB column is difficulty_level)
+                "difficulty": q.difficulty
             })
-        
-        # Get syllabus information if available
+
         syllabus_content = ""
         if subject and subject.syllabus_json:
-            # Extract syllabus content from JSON
             syllabus_content = json.dumps(subject.syllabus_json) if isinstance(subject.syllabus_json, dict) else str(subject.syllabus_json)
-        
-        # Perform enhanced analysis using ML components (lazy instantiation + cleanup)
+
         question_analyzer = self._get_question_analyzer()
         if question_analyzer:
             try:
@@ -326,7 +313,7 @@ class PredictionEngine:
                 gc.collect()
         else:
             question_analysis = {}
-        
+
         if self.syllabus_analyzer and syllabus_content:
             try:
                 syllabus_analysis = self.syllabus_analyzer.analyze_curriculum_alignment(syllabus_content, historical_data)
@@ -335,8 +322,7 @@ class PredictionEngine:
                 syllabus_analysis = {}
         else:
             syllabus_analysis = {}
-        
-        # Perform correlation analysis (with null checks)
+
         if self.correlation_analyzer:
             try:
                 correlation_results = self.correlation_analyzer.comprehensive_correlation_analysis(
@@ -351,35 +337,26 @@ class PredictionEngine:
         else:
             correlation_results = {}
             high_impact_topics = []
-        
-        # Create prompt with enhanced context from RAG
-        rag_context = {
-            "historical_patterns": question_analysis,
-            "syllabus_alignment": syllabus_analysis,
-            "correlation_analysis": correlation_results,
-            "high_impact_topics": high_impact_topics[:5],  # Top 5 high-impact topics
-            "study_material_summary": study_material[:1000]  # Limit study material for context
-        }
-        
+
         prompt = f"""
         Analyze the following comprehensive context to predict the most likely exam topics with personalized recommendations:
-        
+
         STUDY MATERIAL: {study_material}
-        
+
         HISTORICAL QUESTION PATTERNS: {json.dumps(question_analysis, default=str)}
-        
+
         SYLLABUS ALIGNMENT ANALYSIS: {json.dumps(syllabus_analysis, default=str)}
-        
+
         CORRELATION ANALYSIS: {json.dumps(correlation_results, default=str)}
-        
+
         HIGH IMPACT TOPICS: {json.dumps(high_impact_topics[:5])}
-        
+
         Based on this analysis, provide predictions with the following requirements:
         1. Prioritize topics that appear frequently in historical exams
         2. Give higher weight to topics with strong syllabus alignment
         3. Highlight topics with high correlation to exam performance
         4. Recommend personalized study focus areas based on patterns
-        
+
         Provide your response in the following JSON format:
         {{
             "predictions": [
@@ -417,34 +394,28 @@ class PredictionEngine:
             "generated_at": "timestamp"
         }}
         """
-        
+
         try:
-            # Use the Gemini API with retry logic
             response_text = self._generate_gemini_response(prompt)
-            
-            # Parse the JSON response
+
             try:
                 result = json.loads(response_text)
-                
-                # Calculate and add confidence scores for each prediction
+
                 if historical_data:
                     for prediction in result.get('predictions', []):
                         confidence_score = self._calculate_confidence_score(prediction, historical_data)
                         prediction['confidence_score'] = confidence_score
-                
-                # Add topic prioritization if not present
+
                 if 'topic_prioritization' not in result:
                     result['topic_prioritization'] = self._generate_topic_prioritization(high_impact_topics[:3])
-                
-                # Add personalized guidance if not present
+
                 if 'personalized_guidance' not in result:
                     result['personalized_guidance'] = self._generate_personalized_guidance(high_impact_topics[:3])
-                
+
                 result['source'] = 'gemini_local'
                 return result
             except json.JSONDecodeError as e:
-                logger.error(f"Error parsing Gemini response as JSON: {str(e)}")
-                # Return a structured response with enhanced analysis
+                logger.error(f"Error parsing prediction LLM response as JSON: {str(e)}")
                 return {
                     "predictions": [
                         {
@@ -466,10 +437,9 @@ class PredictionEngine:
                     "generated_at": str(datetime.now().isoformat()),
                     "source": "local_fallback"
                 }
-                
+
         except Exception as e:
             logger.error(f"Error in prediction after retries: {str(e)}")
-            # Return a fallback response with analysis results
             return {
                 "predictions": [
                     {
@@ -491,15 +461,14 @@ class PredictionEngine:
                 "generated_at": str(datetime.now().isoformat()),
                 "source": "error_fallback"
             }
-    
+
     def _generate_topic_prioritization(self, high_impact_topics: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-        """Generate topic prioritization based on high-impact analysis"""
         prioritization = []
-        
+
         for i, topic_info in enumerate(high_impact_topics):
             topic = topic_info.get('topic', f'Topic {i+1}')
             impact_score = topic_info.get('impact_score', 0.5)
-            
+
             if impact_score >= 0.7:
                 priority = "high"
                 reason = "High correlation with exam performance and frequent appearance in past papers"
@@ -515,7 +484,7 @@ class PredictionEngine:
                 reason = "Lower correlation with exam performance"
                 estimated_weightage = "5-15%"
                 study_recommendation = "Review basic concepts but don't spend excessive time"
-            
+
             prioritization.append({
                 "topic": topic,
                 "priority_level": priority,
@@ -523,69 +492,63 @@ class PredictionEngine:
                 "estimated_weightage": estimated_weightage,
                 "study_recommendation": study_recommendation
             })
-        
+
         return prioritization
-    
+
     def _generate_personalized_guidance(self, high_impact_topics: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-        """Generate personalized study guidance based on analysis"""
         focus_areas = []
         avoidance_areas = []
-        
+
         for topic_info in high_impact_topics:
             topic = topic_info.get('topic', '')
             impact_score = topic_info.get('impact_score', 0)
-            
+
             if impact_score >= 0.7:
                 focus_areas.append(topic)
             elif impact_score <= 0.3:
                 avoidance_areas.append(topic)
-        
+
         return {
             "focus_areas": focus_areas,
             "avoidance_areas": avoidance_areas,
             "study_schedule_recommendation": f"Allocate 60% of study time to high-impact topics: {', '.join(focus_areas[:2])}",
             "revision_strategy": "Use spaced repetition for high-impact topics and practice past exam questions"
         }
-    
+
     def generate_personalized_revision_guide(self, subject_id: str, user_performance: Dict[str, Any], db: Session) -> Dict[str, Any]:
-        """Generate personalized revision guidance based on user performance"""
-        # Get subject and historical data
         subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
         historical_questions = db.query(models.Question).join(
             models.QuestionPaper
         ).filter(models.QuestionPaper.subject_id == subject_id).all()
-        
-        # Format questions
+
         questions_data = []
         for q in historical_questions:
             questions_data.append({
                 "text": q.question_text,
                 "marks": q.marks,
                 "unit": q.unit_name,
-                "difficulty": q.difficulty  # Python attribute name (DB column is difficulty_level)
+                "difficulty": q.difficulty
             })
-        
-        # Analyze user's weak areas
+
         weak_areas = user_performance.get('weak_topics', [])
         strong_areas = user_performance.get('strong_topics', [])
-        
-        # Create prompt for personalized revision guide
+
         prompt = f"""
         Create a personalized revision guide for the subject: {subject.name if subject else 'Unknown Subject'}
-        
+
         User's Weak Areas: {', '.join(weak_areas)}
         User's Strong Areas: {', '.join(strong_areas)}
         Overall Performance Score: {user_performance.get('overall_score', 'N/A')}
-        
+
         Historical Questions: {json.dumps(questions_data[:10])}
-        
+
         Based on the user's performance, provide a detailed revision guide with:
         1. Specific focus areas for improvement
         2. Recommended study sequence
         3. Time allocation suggestions
         4. Practice question recommendations
         5. Confidence-building strategies
-        
+
         Provide your response in the following JSON format:
         {{
             "revision_guide": {{
@@ -608,15 +571,16 @@ class PredictionEngine:
             }}
         }}
         """
-        
+
         try:
-            # BUG-H05: guard against Gemini model being None
-            if self.model is None:
-                raise ValueError("Gemini model is not configured (GEMINI_API_KEY missing)")
-            response = self.model.generate_content(prompt)
-            result = json.loads(response.text) if response.text.strip() else {}
-            
-            # Fallback if parsing fails
+            if not self._llm.is_available:
+                raise ValueError("Prediction LLM is not configured")
+            raw = self._llm.generate_text(prompt)
+            try:
+                result = json.loads(raw) if raw.strip() else {}
+            except json.JSONDecodeError:
+                result = {}
+
             if not result:
                 result = {
                     "revision_guide": {
@@ -643,7 +607,7 @@ class PredictionEngine:
                         "revision_timeline": "4-week plan focusing on weak areas initially"
                     }
                 }
-            
+
             return result
         except Exception as e:
             logger.error(f"Error generating revision guide: {str(e)}")
@@ -663,31 +627,25 @@ class PredictionEngine:
             }
 
     def _analyze_trends(self, historical_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Analyze trends in historical question data"""
         if not historical_data:
             return {}
-        
-        # Analyze unit frequency
+
         unit_frequency = {}
         mark_distribution = {}
-        
+
         for q in historical_data:
             unit = q.get('unit', 'Unknown')
             marks = q.get('marks', 0)
-            
+
             unit_frequency[unit] = unit_frequency.get(unit, 0) + 1
             mark_distribution[marks] = mark_distribution.get(marks, 0) + 1
-        
-        # Calculate percentages
+
         total_questions = len(historical_data)
         unit_percentages = {unit: (count / total_questions) * 100 for unit, count in unit_frequency.items()}
-        
-        # Identify most frequent units
+
         most_frequent_units = sorted(unit_percentages.items(), key=lambda x: x[1], reverse=True)[:3]
-        
-        # Identify common mark patterns
         most_common_marks = sorted(mark_distribution.items(), key=lambda x: x[1], reverse=True)
-        
+
         return {
             "unit_frequency": unit_frequency,
             "unit_percentages": unit_percentages,
@@ -696,27 +654,22 @@ class PredictionEngine:
             "most_common_marks": most_common_marks,
             "total_questions_analyzed": total_questions
         }
-    
+
     def generate_study_plan(self, subject: str, available_time: int, current_level: str, db: Session, user_id: str) -> Dict[str, Any]:
-        """Generate a personalized study plan"""
-        # Get user's performance data to personalize the plan
         user_tests = db.query(models.MockTest).filter(
             models.MockTest.user_id == user_id
         ).all()
-        
-        # Analyze weak areas
+
         weak_topics = []
         if user_tests:
-            # Calculate weak topics based on test performance
-            # This is a simplified example
-            for test in user_tests[-3:]:  # Look at last 3 tests
+            for test in user_tests[-3:]:
                 if test.weak_topics_json:
                     weak_topics.extend(test.weak_topics_json)
-        
+
         prompt = f"""
         Create a personalized study plan for {subject} with {available_time} days available and current level {current_level}.
         User's weak topics: {', '.join(set(weak_topics)) if weak_topics else 'None identified yet'}
-        
+
         Provide your response in the following JSON format:
         {{
             "plan_id": "string",
@@ -736,10 +689,11 @@ class PredictionEngine:
             ]
         }}
         """
-        
+
         try:
-            response = self.model.generate_content(prompt)
-            # Mock response for now
+            if self._llm.is_available:
+                # Call kept for side-effect parity; response body remains the existing mock shape
+                self._llm.generate_text(prompt)
             return {
                 "plan_id": "plan-123",
                 "subject": subject,
