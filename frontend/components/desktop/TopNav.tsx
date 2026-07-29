@@ -44,8 +44,7 @@ const TopNav = React.forwardRef<HTMLElement, TopNavProps>(
     }, [mobileOpen]);
 
     const displayName =
-      user?.user_metadata?.full_name ??
-      user?.user_metadata?.name ??
+      user?.full_name ??
       user?.email ??
       '?';
 

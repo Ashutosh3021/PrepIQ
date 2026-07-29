@@ -101,9 +101,9 @@ export default function DesktopDashboard() {
     if (!subjectsLoading) fetchDashboardData();
   }, [subjectsLoading]);
 
-  // Derive greeting from Supabase user metadata
+  // Derive greeting from auth user
   const displayName =
-    user?.user_metadata?.full_name ??
+    user?.full_name ??
     user?.email?.split('@')[0] ??
     'there';
   const hour = new Date().getHours();
