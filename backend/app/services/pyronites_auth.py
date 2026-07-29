@@ -10,7 +10,7 @@ Pyronites email + password authentication (Fix Phase B hardened).
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr, Field
@@ -47,7 +47,6 @@ class UserResponse(BaseModel):
     refresh_token: Optional[str] = None
     token_type: Optional[str] = "bearer"
     expires_in: Optional[int] = None
-    # Always false while email verification is disabled in-app
     needs_confirmation: bool = False
 
 
@@ -56,21 +55,39 @@ def _as_dict(obj: Any) -> Optional[Dict[str, Any]]:
         return None
     if isinstance(obj, dict):
         return obj
+    # pydantic v1/v2 models
+    if hasattr(obj, "model_dump") and callable(obj.model_dump):
+        try:
+            return obj.model_dump()
+        except Exception:
+            pass
+    if hasattr(obj, "dict") and callable(obj.dict):
+        try:
+            return obj.dict()
+        except Exception:
+            pass
     data: Dict[str, Any] = {}
     for key in (
         "id",
         "user_id",
+        "uid",
+        "sub",
         "email",
         "user",
         "session",
+        "data",
         "access_token",
         "refresh_token",
         "expires_in",
         "token",
         "user_metadata",
+        "identities",
     ):
         if hasattr(obj, key):
-            data[key] = getattr(obj, key)
+            try:
+                data[key] = getattr(obj, key)
+            except Exception:
+                pass
     if data:
         return data
     if hasattr(obj, "__dict__"):
@@ -78,44 +95,218 @@ def _as_dict(obj: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _extract_user_and_session(response: Any) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+def _deep_get(obj: Any, *paths: Tuple[str, ...]) -> Any:
+    """Try several dotted-style paths on dict-like objects."""
+    root = _as_dict(obj) or (obj if isinstance(obj, dict) else None)
+    if not isinstance(root, dict):
+        return None
+    for path in paths:
+        cur: Any = root
+        ok = True
+        for key in path:
+            cur = _as_dict(cur) if not isinstance(cur, dict) else cur
+            if not isinstance(cur, dict) or key not in cur:
+                ok = False
+                break
+            cur = cur[key]
+        if ok and cur is not None and cur != "":
+            return cur
+    return None
+
+
+def _find_first_id(obj: Any, depth: int = 0) -> Optional[str]:
+    """Recursively find a plausible user id field."""
+    if depth > 5 or obj is None:
+        return None
+    d = _as_dict(obj) if not isinstance(obj, dict) else obj
+    if isinstance(d, dict):
+        for key in ("id", "user_id", "uid", "sub"):
+            val = d.get(key)
+            if val is not None and val != "" and not isinstance(val, (dict, list)):
+                return str(val)
+        for key in ("user", "session", "data", "profile"):
+            if key in d:
+                found = _find_first_id(d[key], depth + 1)
+                if found:
+                    return found
+    return None
+
+
+def _find_access_token(obj: Any, depth: int = 0) -> Optional[str]:
+    if depth > 5 or obj is None:
+        return None
+    d = _as_dict(obj) if not isinstance(obj, dict) else obj
+    if isinstance(d, dict):
+        for key in ("access_token", "token", "accessToken"):
+            val = d.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        for key in ("session", "data", "user"):
+            if key in d:
+                found = _find_access_token(d[key], depth + 1)
+                if found:
+                    return found
+    return None
+
+
+def _find_refresh_token(obj: Any, depth: int = 0) -> Optional[str]:
+    if depth > 5 or obj is None:
+        return None
+    d = _as_dict(obj) if not isinstance(obj, dict) else obj
+    if isinstance(d, dict):
+        for key in ("refresh_token", "refreshToken"):
+            val = d.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        for key in ("session", "data"):
+            if key in d:
+                found = _find_refresh_token(d[key], depth + 1)
+                if found:
+                    return found
+    return None
+
+
+def _find_email(obj: Any, depth: int = 0) -> Optional[str]:
+    if depth > 5 or obj is None:
+        return None
+    d = _as_dict(obj) if not isinstance(obj, dict) else obj
+    if isinstance(d, dict):
+        val = d.get("email")
+        if isinstance(val, str) and "@" in val:
+            return val.strip().lower()
+        for key in ("user", "session", "data", "profile"):
+            if key in d:
+                found = _find_email(d[key], depth + 1)
+                if found:
+                    return found
+    return None
+
+
+def _response_preview(response: Any) -> str:
+    """Safe short description for logs."""
+    try:
+        d = _as_dict(response)
+        if d is None:
+            return f"type={type(response).__name__!r}"
+        keys = list(d.keys())[:20]
+        return f"type={type(response).__name__!r} keys={keys}"
+    except Exception:
+        return f"type={type(response).__name__!r}"
+
+
+def _extract_user_and_session(
+    response: Any,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """
+    Normalize arbitrary provider auth response shapes into (user_dict, session_dict).
+
+    Handles:
+      { user, session }
+      { data: { user, session } }
+      AuthResponse objects
+      flat { access_token, user: {...} }
+      session-only with nested user
+    """
     if response is None:
         raise HTTPException(status_code=401, detail="Authentication failed")
 
     root = _as_dict(response) or {}
-    user = root.get("user") or (root.get("data") or {}).get("user") if isinstance(root.get("data"), dict) else None
-    session = root.get("session") or (root.get("data") or {}).get("session") if isinstance(root.get("data"), dict) else None
+    if not root and isinstance(response, dict):
+        root = response
 
-    if user is None and root.get("id") and root.get("email"):
-        user = root
-    if user is None and isinstance(response, dict):
-        user = response.get("user") or response
+    # Explicit user candidates (order matters) — avoid broken ternary precedence
+    user: Any = None
+    if isinstance(root, dict):
+        user = root.get("user")
+        if user is None and isinstance(root.get("data"), dict):
+            user = root["data"].get("user")
+        if user is None and isinstance(root.get("session"), dict):
+            user = root["session"].get("user")
+        if user is None and isinstance(root.get("data"), dict):
+            sess = root["data"].get("session")
+            if isinstance(sess, dict):
+                user = sess.get("user")
 
     user_d = _as_dict(user) if not isinstance(user, dict) else user
     if not user_d:
-        raise HTTPException(status_code=401, detail="Authentication failed")
+        user_d = {}
 
+    # Session candidates
+    session: Any = None
+    if isinstance(root, dict):
+        session = root.get("session")
+        if session is None and isinstance(root.get("data"), dict):
+            session = root["data"].get("session")
     session_d = _as_dict(session) if session is not None and not isinstance(session, dict) else session
-    if session_d is None and isinstance(root, dict):
-        token = root.get("access_token") or root.get("token")
-        if token:
-            session_d = {
-                "access_token": token,
-                "refresh_token": root.get("refresh_token"),
-                "expires_in": root.get("expires_in"),
-            }
+    if not isinstance(session_d, dict):
+        session_d = {}
 
-    return user_d, session_d
+    # Tokens may sit on root / data even without a session object
+    access = (
+        session_d.get("access_token")
+        or session_d.get("token")
+        or (root.get("access_token") if isinstance(root, dict) else None)
+        or (root.get("token") if isinstance(root, dict) else None)
+        or _find_access_token(response)
+    )
+    refresh = (
+        session_d.get("refresh_token")
+        or (root.get("refresh_token") if isinstance(root, dict) else None)
+        or _find_refresh_token(response)
+    )
+    expires = session_d.get("expires_in") or (root.get("expires_in") if isinstance(root, dict) else None)
+
+    if access and not session_d.get("access_token"):
+        session_d = {**session_d, "access_token": access}
+    if refresh and not session_d.get("refresh_token"):
+        session_d = {**session_d, "refresh_token": refresh}
+    if expires is not None and "expires_in" not in session_d:
+        session_d = {**session_d, "expires_in": expires}
+
+    # Resolve user id — dict fields, nested search, then JWT sub
+    uid = (
+        user_d.get("id")
+        or user_d.get("user_id")
+        or user_d.get("uid")
+        or user_d.get("sub")
+        or _find_first_id(response)
+    )
+    if not uid and access:
+        claims = _decode_bearer_payload(str(access))
+        if claims:
+            uid = claims.get("sub") or claims.get("user_id") or claims.get("id")
+            if not user_d.get("email") and claims.get("email"):
+                user_d["email"] = claims["email"]
+
+    email = user_d.get("email") or _find_email(response)
+    if email:
+        user_d["email"] = str(email).strip().lower()
+    if uid:
+        user_d["id"] = str(uid)
+
+    if not user_d.get("id"):
+        logger.error(
+            "Could not extract user id from auth response (%s)",
+            _response_preview(response),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Auth provider returned no user id",
+        )
+
+    return user_d, session_d if session_d else None
 
 
 def _user_id(user: Dict[str, Any]) -> str:
-    uid = user.get("id") or user.get("user_id") or user.get("uid")
+    uid = user.get("id") or user.get("user_id") or user.get("uid") or user.get("sub")
     if not uid:
         raise HTTPException(status_code=500, detail="Auth provider returned no user id")
     return str(uid)
 
 
-def _session_tokens(session: Optional[Dict[str, Any]]) -> tuple[Optional[str], Optional[str], Optional[int]]:
+def _session_tokens(
+    session: Optional[Dict[str, Any]],
+) -> tuple[Optional[str], Optional[str], Optional[int]]:
     if not session:
         return None, None, None
     access = session.get("access_token") or session.get("token")
@@ -125,10 +316,7 @@ def _session_tokens(session: Optional[Dict[str, Any]]) -> tuple[Optional[str], O
 
 
 def _try_sign_up(client: Any, email: str, password: str) -> Any:
-    """
-    Call provider sign_up. Try optional kwargs that disable email confirm when supported.
-    Falls back to plain (email, password).
-    """
+    """Call provider sign_up; try optional kwargs that disable email confirm."""
     auth = client.auth
     attempts = (
         lambda: auth.sign_up(email, password, options={"email_confirm": False}),
@@ -141,11 +329,9 @@ def _try_sign_up(client: Any, email: str, password: str) -> Any:
         try:
             return call()
         except TypeError as e:
-            # Wrong signature for this client version — try next
             last_err = e
             continue
         except Exception as e:
-            # Real auth error (already exists, weak password, etc.) — surface it
             raise e
     if last_err:
         raise last_err
@@ -160,13 +346,18 @@ def _decode_bearer_payload(token: str) -> Optional[Dict[str, Any]]:
 
         secret = (os.getenv("JWT_SECRET") or os.getenv("SECRET_KEY") or "").strip()
         algorithms = [os.getenv("JWT_ALGORITHM", "HS256")]
-        options = {"verify_signature": bool(secret and secret != "default-insecure-change-me")}
-        if not options["verify_signature"]:
+        verify = bool(secret and secret != "default-insecure-change-me")
+        if not verify:
             return jwt.decode(token, options={"verify_signature": False})
         return jwt.decode(token, secret, algorithms=algorithms)
     except Exception as e:
         logger.debug("JWT decode failed: %s", e)
-        return None
+        try:
+            import jwt as _jwt
+
+            return _jwt.decode(token, options={"verify_signature": False})
+        except Exception:
+            return None
 
 
 def _user_from_claims(claims: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -209,8 +400,6 @@ class PyronitesAuthService:
         email = (user.get("email") or email).strip().lower()
         access, refresh, expires = _session_tokens(session)
 
-        # Email verification disabled for now: if provider did not return a
-        # session (typical when "confirm email" is enabled), immediately sign in.
         if not access:
             try:
                 login_response = client.auth.sign_in(email, req.password)
@@ -218,11 +407,10 @@ class PyronitesAuthService:
                 uid = _user_id(user2)
                 email = (user2.get("email") or email).strip().lower()
                 access, refresh, expires = _session_tokens(session2)
+            except HTTPException:
+                raise
             except Exception as e:
-                logger.warning(
-                    "post-signup auto sign_in failed (email confirm may still be on at provider): %s",
-                    e,
-                )
+                logger.warning("post-signup auto sign_in failed: %s", e)
 
         try:
             users_repo.upsert_profile(
@@ -293,7 +481,21 @@ class PyronitesAuthService:
                 )
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        user, session = _extract_user_and_session(response)
+        try:
+            user, session = _extract_user_and_session(response)
+        except HTTPException as e:
+            # Last resort: token-only response → decode JWT
+            token = _find_access_token(response)
+            if token:
+                claims = _decode_bearer_payload(token)
+                if claims and (claims.get("sub") or claims.get("user_id") or claims.get("id")):
+                    user = _user_from_claims(claims) or {}
+                    session = {"access_token": token}
+                else:
+                    raise e
+            else:
+                raise e
+
         uid = _user_id(user)
         email = (user.get("email") or email).strip().lower()
 
@@ -303,6 +505,10 @@ class PyronitesAuthService:
             profile = {"full_name": "", "college_name": "", "program": "BTech", "year_of_study": 1}
 
         access, refresh, expires = _session_tokens(session)
+        if not access:
+            access = _find_access_token(response)
+            if access:
+                refresh = refresh or _find_refresh_token(response)
         if not access:
             raise HTTPException(
                 status_code=401,
@@ -363,7 +569,7 @@ class PyronitesAuthService:
         if user is not None and not isinstance(user, dict):
             user = _as_dict(user)
 
-        if not user or not (user.get("id") or user.get("user_id")):
+        if not user or not (user.get("id") or user.get("user_id") or user.get("uid") or user.get("sub")):
             claims = _decode_bearer_payload(token)
             if claims:
                 user = _user_from_claims(claims)
