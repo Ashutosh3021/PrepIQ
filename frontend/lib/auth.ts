@@ -1,7 +1,8 @@
 // Classic email/password auth helpers (no OAuth)
-const API_BASE =
+const API_BASE = (
   (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_URL) ||
-  "http://localhost:8000";
+  "http://localhost:8000"
+).replace(/\/$/, "");
 
 export type AuthUser = {
   id: string;
@@ -16,6 +17,63 @@ export type AuthSession = {
 
 const TOKEN_KEY = "prepiq_access_token";
 const USER_KEY = "prepiq_user";
+
+function authApiBase(): string {
+  // Support both bare origin and full /api/v1 base
+  if (API_BASE.endsWith("/api/v1")) return API_BASE;
+  return `${API_BASE}/api/v1`;
+}
+
+function mapAuthResponse(
+  data: Record<string, any>,
+  fallbackEmail: string,
+  fullName?: string | null
+): AuthSession {
+  const access_token = data.access_token || data.token;
+  if (!access_token) {
+    if (data.needs_confirmation) {
+      throw new Error(
+        "Account created. Please confirm your email before logging in."
+      );
+    }
+    throw new Error("Authentication succeeded but no access token was returned.");
+  }
+
+  const nested = data.user && typeof data.user === "object" ? data.user : null;
+  const id =
+    data.id || nested?.id || data.user_id || nested?.user_id || "";
+  const email =
+    data.email || nested?.email || fallbackEmail;
+  const full_name =
+    data.full_name ?? nested?.full_name ?? fullName ?? null;
+
+  if (!id) {
+    throw new Error("Auth response missing user id");
+  }
+
+  return {
+    access_token: String(access_token),
+    user: {
+      id: String(id),
+      email: String(email).trim().toLowerCase(),
+      full_name: full_name != null ? String(full_name) : null,
+    },
+  };
+}
+
+function formatApiError(data: any, fallback: string): string {
+  const detail = data?.detail ?? data?.message;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => (typeof d === "string" ? d : d?.msg || JSON.stringify(d)))
+      .join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    return detail.message || detail.msg || JSON.stringify(detail);
+  }
+  return fallback;
+}
 
 export function getStoredToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -48,19 +106,16 @@ export async function loginWithEmail(
   email: string,
   password: string
 ): Promise<AuthSession> {
-  const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+  const res = await fetch(`${authApiBase()}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.detail || data.message || "Login failed");
+    throw new Error(formatApiError(data, "Login failed"));
   }
-  const session: AuthSession = {
-    access_token: data.access_token || data.token,
-    user: data.user || { id: data.user_id, email },
-  };
+  const session = mapAuthResponse(data, email);
   persistSession(session);
   return session;
 }
@@ -70,7 +125,7 @@ export async function signupWithEmail(
   password: string,
   fullName?: string
 ): Promise<AuthSession> {
-  const res = await fetch(`${API_BASE}/api/v1/auth/signup`, {
+  const res = await fetch(`${authApiBase()}/auth/signup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -81,12 +136,9 @@ export async function signupWithEmail(
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.detail || data.message || "Signup failed");
+    throw new Error(formatApiError(data, "Signup failed"));
   }
-  const session: AuthSession = {
-    access_token: data.access_token || data.token,
-    user: data.user || { id: data.user_id, email, full_name: fullName },
-  };
+  const session = mapAuthResponse(data, email, fullName);
   persistSession(session);
   return session;
 }

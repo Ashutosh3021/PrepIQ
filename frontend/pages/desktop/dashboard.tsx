@@ -77,11 +77,13 @@ export default function DesktopDashboard() {
         setActivityItems(activity);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        // "Failed to fetch" = backend not running; anything else = API error
+        // Network/CORS failures often look like "Failed to fetch" even when
+        // the Render service is healthy — treat as unreachable, not only local.
         const isOffline =
           msg.includes('Failed to fetch') ||
           msg.includes('NetworkError') ||
-          msg.includes('ECONNREFUSED');
+          msg.includes('ECONNREFUSED') ||
+          msg.includes('Load failed');
         setBackendOffline(isOffline);
         setStats({
           subjects_count: 0,
@@ -157,7 +159,7 @@ export default function DesktopDashboard() {
         <meta name="description" content="PrepIQ Desktop Dashboard - Your study overview" />
       </Head>
       <DesktopLayout>
-        {/* Backend offline banner */}
+        {/* Backend unreachable banner (CORS, cold start, wrong API URL, or down) */}
         {backendOffline && (
           <div className="mb-8 flex items-start gap-3 px-5 py-4 bg-amber-50 border border-amber-300 text-amber-800 text-sm">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5">
@@ -166,13 +168,15 @@ export default function DesktopDashboard() {
               <line x1="12" y1="17" x2="12.01" y2="17" />
             </svg>
             <div className="flex-1">
-              <p className="font-semibold">Backend server is not running</p>
+              <p className="font-semibold">Cannot reach the backend API</p>
               <p className="text-xs mt-0.5 text-amber-700">
-                Stats are unavailable. Start the backend with{' '}
-                <code className="font-mono bg-amber-100 px-1 rounded">
-                  cd backend &amp;&amp; python start_server.py
-                </code>{' '}
-                then refresh this page.
+                Stats are unavailable. Confirm{' '}
+                <code className="font-mono bg-amber-100 px-1 rounded">NEXT_PUBLIC_API_URL</code>{' '}
+                points to your Render service, that{' '}
+                <code className="font-mono bg-amber-100 px-1 rounded">ALLOWED_ORIGINS</code>{' '}
+                includes this site, and that the service is awake (open{' '}
+                <code className="font-mono bg-amber-100 px-1 rounded">/health</code>
+                ). Then refresh.
               </p>
             </div>
             <button

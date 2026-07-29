@@ -7,10 +7,12 @@
 import { clearSession } from '@/lib/auth';
 
 const IS_MOCK = process.env.NEXT_PUBLIC_API_MODE === 'mock';
-// NEXT_PUBLIC_API_URL should be the bare origin, e.g. https://host.railway.app
-// (no trailing slash). /api/v1 is appended here so every apiFetch path resolves
-// to the correct backend prefix.
-const BASE_URL = `${process.env.NEXT_PUBLIC_API_URL ?? ''}/api/v1`;
+// NEXT_PUBLIC_API_URL should be the bare origin, e.g. https://host.onrender.com
+// (no trailing slash). /api/v1 is appended here unless already present.
+const _rawApiUrl = (process.env.NEXT_PUBLIC_API_URL ?? '').replace(/\/$/, '');
+const BASE_URL = _rawApiUrl.endsWith('/api/v1')
+  ? _rawApiUrl
+  : `${_rawApiUrl}/api/v1`;
 
 const TOKEN_KEY = 'prepiq_access_token';
 
@@ -88,7 +90,12 @@ export async function apiFetch<T>(
     let detail = `${res.status} ${res.statusText}`;
     try {
       const errBody = await res.json();
-      if (errBody.detail) detail = errBody.detail;
+      if (errBody.detail) {
+        detail =
+          typeof errBody.detail === 'string'
+            ? errBody.detail
+            : JSON.stringify(errBody.detail);
+      }
     } catch {
       // ignore JSON parse error
     }

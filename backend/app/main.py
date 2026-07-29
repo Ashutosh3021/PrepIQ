@@ -168,12 +168,16 @@ def create_app() -> FastAPI:
         )
     else:
         if not allowed_origins:
-            allowed_origins = ["https://prepiq.vercel.app"]
+            # Live Vercel deployment + common aliases
+            allowed_origins = [
+                "https://prep-iq-three.vercel.app",
+                "https://prepiq.vercel.app",
+            ]
         app.add_middleware(
             CORSMiddleware,
             allow_origins=allowed_origins,
             allow_credentials=True,
-            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
             allow_headers=["*"],
             max_age=600,
         )
