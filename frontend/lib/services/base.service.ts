@@ -1,19 +1,21 @@
 /**
- * Base API service with mock/real switching.
- *
- * Token source: Supabase JS SDK session (supabase.auth.getSession).
- * Falls back to scanning localStorage for Supabase's own keys so existing
- * sessions are not broken on first load after the OAuth migration.
+ * Base API service — Bearer token from classic PrepIQ auth (localStorage).
  */
 
-import { supabase } from '@/lib/supabase';
+import { clearSession, getStoredToken } from '@/lib/auth';
 
 const IS_MOCK = process.env.NEXT_PUBLIC_API_MODE === 'mock';
-// Append /api/v1 so every apiFetch path resolves to the correct backend prefix.
-// NEXT_PUBLIC_API_URL should be the bare origin, e.g. https://host.railway.app
-const BASE_URL = `${process.env.NEXT_PUBLIC_API_URL ?? ''}/api/v1`;
 
-/** Standard API response envelope from backend */
+function resolveBaseUrl(): string {
+  const raw = (process.env.NEXT_PUBLIC_API_URL ?? '').replace(/\/$/, '');
+  if (!raw) return '/api/v1';
+  // Avoid double /api/v1 when env already includes it
+  if (raw.endsWith('/api/v1')) return raw;
+  return `${raw}/api/v1`;
+}
+
+const BASE_URL = resolveBaseUrl();
+
 interface ApiResponse<T> {
   data: T;
   status: 'success' | 'error';
@@ -21,40 +23,12 @@ interface ApiResponse<T> {
   timestamp?: string;
 }
 
-/**
- * Get the current access token from the live Supabase session.
- * Exported so other callers (e.g. upload page) can read it directly.
- */
 export async function getAccessTokenAsync(): Promise<string | null> {
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
+  return getStoredToken();
 }
 
-/**
- * Synchronous fallback — reads from Supabase's own localStorage keys.
- * Used in places that cannot await (e.g. SWR fetcher initialisation).
- */
 export function getAccessToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const keys = Object.keys(localStorage).filter(
-      (k) => k.includes('supabase') || k.includes('sb-')
-    );
-    for (const key of keys) {
-      const item = localStorage.getItem(key);
-      if (item) {
-        const parsed = JSON.parse(item);
-        const token =
-          parsed.access_token ??
-          parsed?.session?.access_token ??
-          null;
-        if (token) return token;
-      }
-    }
-  } catch {
-    // Corrupted storage — ignore
-  }
-  return null;
+  return getStoredToken();
 }
 
 function isApiEnvelope<T>(body: unknown): body is ApiResponse<T> {
@@ -66,13 +40,6 @@ function isApiEnvelope<T>(body: unknown): body is ApiResponse<T> {
   );
 }
 
-/**
- * Core fetch helper.
- *
- * @param path      API path relative to BASE_URL (e.g. '/subjects')
- * @param mockData  Fallback data returned in mock mode
- * @param options   Standard RequestInit options (method, body, etc.)
- */
 export async function apiFetch<T>(
   path: string,
   mockData: T,
@@ -83,10 +50,8 @@ export async function apiFetch<T>(
     return mockData;
   }
 
-  const url = `${BASE_URL}${path}`;
-
-  // Prefer the async Supabase session; fall back to sync localStorage scan
-  const token = (await getAccessTokenAsync()) ?? getAccessToken();
+  const url = `${BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+  const token = getStoredToken();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -98,9 +63,8 @@ export async function apiFetch<T>(
 
   const res = await fetch(url, { ...options, headers });
 
-  // 401 — session expired; sign out so the auth guard redirects to /auth
   if (res.status === 401) {
-    await supabase.auth.signOut();
+    clearSession();
     throw new Error('Session expired. Please sign in again.');
   }
 
@@ -108,14 +72,19 @@ export async function apiFetch<T>(
     let detail = `${res.status} ${res.statusText}`;
     try {
       const errBody = await res.json();
-      if (errBody.detail) detail = errBody.detail;
+      if (typeof errBody.detail === 'string') detail = errBody.detail;
+      else if (errBody.message) detail = errBody.message;
     } catch {
-      // ignore JSON parse error
+      /* ignore */
     }
     throw new Error(`API error: ${detail}`);
   }
 
-  const body = await res.json();
+  // Some endpoints return empty body
+  const text = await res.text();
+  if (!text) return mockData;
+
+  const body = JSON.parse(text);
 
   if (isApiEnvelope<T>(body)) {
     if (body.status === 'error') {
