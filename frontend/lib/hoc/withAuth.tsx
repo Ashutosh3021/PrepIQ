@@ -8,17 +8,7 @@ interface WizardStatus {
   completed: boolean;
 }
 
-/**
- * Wrap any page that requires authentication.
- *
- * Behaviour:
- *  - Not logged in          → redirect to /auth
- *  - Logged in, wizard done → render children
- *  - Logged in, no wizard   → redirect to /wizard
- */
-export default function withAuth<P extends object>(
-  WrappedComponent: React.ComponentType<P>
-) {
+export default function withAuth<P extends object>(WrappedComponent: React.ComponentType<P>) {
   return function AuthGuard(props: P) {
     const { isAuthenticated, loading } = useAuth();
     const router = useRouter();
@@ -32,7 +22,6 @@ export default function withAuth<P extends object>(
         return;
       }
 
-      // User is authenticated — check wizard status
       apiFetch<WizardStatus>('/wizard/status', { completed: false })
         .then((status) => {
           if (!status.completed) {
@@ -42,7 +31,6 @@ export default function withAuth<P extends object>(
           }
         })
         .catch(() => {
-          // If the check fails, let them through rather than blocking forever
           setChecking(false);
         });
     }, [isAuthenticated, loading, router]);
