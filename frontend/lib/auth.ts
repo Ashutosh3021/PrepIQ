@@ -1,4 +1,5 @@
 // Classic email/password auth helpers (no OAuth)
+// Email verification is disabled at the app layer for now.
 const API_BASE = (
   (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_URL) ||
   "http://localhost:8000"
@@ -19,7 +20,6 @@ const TOKEN_KEY = "prepiq_access_token";
 const USER_KEY = "prepiq_user";
 
 function authApiBase(): string {
-  // Support both bare origin and full /api/v1 base
   if (API_BASE.endsWith("/api/v1")) return API_BASE;
   return `${API_BASE}/api/v1`;
 }
@@ -31,12 +31,11 @@ function mapAuthResponse(
 ): AuthSession {
   const access_token = data.access_token || data.token;
   if (!access_token) {
-    if (data.needs_confirmation) {
-      throw new Error(
-        "Account created. Please confirm your email before logging in."
-      );
-    }
-    throw new Error("Authentication succeeded but no access token was returned.");
+    throw new Error(
+      data.detail ||
+        "Authentication succeeded but no access token was returned. " +
+          "If email confirmation is enabled on the auth provider, disable it."
+    );
   }
 
   const nested = data.user && typeof data.user === "object" ? data.user : null;

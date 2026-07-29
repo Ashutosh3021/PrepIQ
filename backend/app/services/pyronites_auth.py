@@ -3,6 +3,8 @@ Pyronites email + password authentication (Fix Phase B hardened).
 
 - Email validation + strong password on signup
 - No Google/GitHub OAuth
+- Email confirmation is bypassed at the app layer for now:
+  if sign_up returns no session, we immediately sign_in with the same credentials.
 - Frontend: Authorization: Bearer <access_token>
 """
 from __future__ import annotations
@@ -45,6 +47,7 @@ class UserResponse(BaseModel):
     refresh_token: Optional[str] = None
     token_type: Optional[str] = "bearer"
     expires_in: Optional[int] = None
+    # Always false while email verification is disabled in-app
     needs_confirmation: bool = False
 
 
@@ -53,7 +56,6 @@ def _as_dict(obj: Any) -> Optional[Dict[str, Any]]:
         return None
     if isinstance(obj, dict):
         return obj
-    # pydantic / simple namespace objects
     data: Dict[str, Any] = {}
     for key in (
         "id",
@@ -95,7 +97,6 @@ def _extract_user_and_session(response: Any) -> tuple[Dict[str, Any], Optional[D
 
     session_d = _as_dict(session) if session is not None and not isinstance(session, dict) else session
     if session_d is None and isinstance(root, dict):
-        # flat token on root
         token = root.get("access_token") or root.get("token")
         if token:
             session_d = {
@@ -114,6 +115,43 @@ def _user_id(user: Dict[str, Any]) -> str:
     return str(uid)
 
 
+def _session_tokens(session: Optional[Dict[str, Any]]) -> tuple[Optional[str], Optional[str], Optional[int]]:
+    if not session:
+        return None, None, None
+    access = session.get("access_token") or session.get("token")
+    refresh = session.get("refresh_token")
+    expires = session.get("expires_in")
+    return access, refresh, expires
+
+
+def _try_sign_up(client: Any, email: str, password: str) -> Any:
+    """
+    Call provider sign_up. Try optional kwargs that disable email confirm when supported.
+    Falls back to plain (email, password).
+    """
+    auth = client.auth
+    attempts = (
+        lambda: auth.sign_up(email, password, options={"email_confirm": False}),
+        lambda: auth.sign_up(email, password, {"email_confirm": False}),
+        lambda: auth.sign_up(email, password, email_confirm=False),
+        lambda: auth.sign_up(email, password),
+    )
+    last_err: Optional[Exception] = None
+    for call in attempts:
+        try:
+            return call()
+        except TypeError as e:
+            # Wrong signature for this client version — try next
+            last_err = e
+            continue
+        except Exception as e:
+            # Real auth error (already exists, weak password, etc.) — surface it
+            raise e
+    if last_err:
+        raise last_err
+    raise RuntimeError("sign_up failed with no response")
+
+
 def _decode_bearer_payload(token: str) -> Optional[Dict[str, Any]]:
     """Best-effort JWT decode (verify if JWT_SECRET set)."""
     try:
@@ -124,7 +162,6 @@ def _decode_bearer_payload(token: str) -> Optional[Dict[str, Any]]:
         algorithms = [os.getenv("JWT_ALGORITHM", "HS256")]
         options = {"verify_signature": bool(secret and secret != "default-insecure-change-me")}
         if not options["verify_signature"]:
-            # still parse claims for id/email when secret unknown (dev only)
             return jwt.decode(token, options={"verify_signature": False})
         return jwt.decode(token, secret, algorithms=algorithms)
     except Exception as e:
@@ -156,9 +193,10 @@ class PyronitesAuthService:
         if not ok:
             raise HTTPException(status_code=400, detail=err)
 
+        email = str(req.email).strip().lower()
         client = get_pyronites_client()
         try:
-            response = client.auth.sign_up(str(req.email).strip().lower(), req.password)
+            response = _try_sign_up(client, email, req.password)
         except Exception as e:
             msg = str(e).lower()
             if "already" in msg or "exists" in msg or "registered" in msg:
@@ -168,7 +206,23 @@ class PyronitesAuthService:
 
         user, session = _extract_user_and_session(response)
         uid = _user_id(user)
-        email = (user.get("email") or str(req.email)).strip().lower()
+        email = (user.get("email") or email).strip().lower()
+        access, refresh, expires = _session_tokens(session)
+
+        # Email verification disabled for now: if provider did not return a
+        # session (typical when "confirm email" is enabled), immediately sign in.
+        if not access:
+            try:
+                login_response = client.auth.sign_in(email, req.password)
+                user2, session2 = _extract_user_and_session(login_response)
+                uid = _user_id(user2)
+                email = (user2.get("email") or email).strip().lower()
+                access, refresh, expires = _session_tokens(session2)
+            except Exception as e:
+                logger.warning(
+                    "post-signup auto sign_in failed (email confirm may still be on at provider): %s",
+                    e,
+                )
 
         try:
             users_repo.upsert_profile(
@@ -185,9 +239,15 @@ class PyronitesAuthService:
         except Exception as e:
             logger.warning("user profile upsert after signup failed: %s", e)
 
-        access = (session or {}).get("access_token") if session else None
-        refresh = (session or {}).get("refresh_token") if session else None
-        expires = (session or {}).get("expires_in") if session else None
+        if not access:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Account was created but login is blocked by the auth provider. "
+                    "Disable email confirmation in the Pyronites/Supabase Auth settings, "
+                    "or sign in after confirming."
+                ),
+            )
 
         return UserResponse(
             id=uid,
@@ -199,7 +259,7 @@ class PyronitesAuthService:
             access_token=access,
             refresh_token=refresh,
             expires_in=expires,
-            needs_confirmation=access is None,
+            needs_confirmation=False,
         )
 
     @staticmethod
@@ -216,25 +276,33 @@ class PyronitesAuthService:
         if not req.password:
             raise HTTPException(status_code=400, detail="Password is required")
 
+        email = str(req.email).strip().lower()
         client = get_pyronites_client()
         try:
-            response = client.auth.sign_in(str(req.email).strip().lower(), req.password)
+            response = client.auth.sign_in(email, req.password)
         except Exception as e:
+            msg = str(e).lower()
             logger.info("login failed: %s", e)
+            if "confirm" in msg or "verified" in msg or "not confirmed" in msg:
+                raise HTTPException(
+                    status_code=401,
+                    detail=(
+                        "Email is not confirmed at the auth provider. "
+                        "Disable email confirmation in Pyronites/Supabase Auth settings."
+                    ),
+                )
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         user, session = _extract_user_and_session(response)
         uid = _user_id(user)
-        email = (user.get("email") or str(req.email)).strip().lower()
+        email = (user.get("email") or email).strip().lower()
 
         try:
             profile = users_repo.upsert_profile(uid, email, {}) or {}
         except Exception:
             profile = {"full_name": "", "college_name": "", "program": "BTech", "year_of_study": 1}
 
-        access = (session or {}).get("access_token") if session else None
-        refresh = (session or {}).get("refresh_token") if session else None
-        expires = (session or {}).get("expires_in") if session else None
+        access, refresh, expires = _session_tokens(session)
         if not access:
             raise HTTPException(
                 status_code=401,
@@ -266,7 +334,6 @@ class PyronitesAuthService:
             try:
                 client = get_pyronites_client()
                 auth = client.auth
-                # Prefer explicit token APIs
                 if hasattr(auth, "get_user"):
                     try:
                         user = auth.get_user(token)
