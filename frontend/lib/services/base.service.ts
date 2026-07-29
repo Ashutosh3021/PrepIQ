@@ -1,17 +1,18 @@
 /**
  * Base API service with mock/real switching.
  *
- * Token source: Supabase JS SDK session (supabase.auth.getSession).
- * Falls back to scanning localStorage for Supabase's own keys so existing
- * sessions are not broken on first load after the OAuth migration.
+ * Token source: localStorage key "prepiq_access_token" (set by lib/auth.ts).
  */
 
-import { supabase } from '@/lib/supabase';
+import { clearSession } from '@/lib/auth';
 
 const IS_MOCK = process.env.NEXT_PUBLIC_API_MODE === 'mock';
-// Append /api/v1 so every apiFetch path resolves to the correct backend prefix.
 // NEXT_PUBLIC_API_URL should be the bare origin, e.g. https://host.railway.app
+// (no trailing slash). /api/v1 is appended here so every apiFetch path resolves
+// to the correct backend prefix.
 const BASE_URL = `${process.env.NEXT_PUBLIC_API_URL ?? ''}/api/v1`;
+
+const TOKEN_KEY = 'prepiq_access_token';
 
 /** Standard API response envelope from backend */
 interface ApiResponse<T> {
@@ -22,39 +23,20 @@ interface ApiResponse<T> {
 }
 
 /**
- * Get the current access token from the live Supabase session.
- * Exported so other callers (e.g. upload page) can read it directly.
- */
-export async function getAccessTokenAsync(): Promise<string | null> {
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
-
-/**
- * Synchronous fallback — reads from Supabase's own localStorage keys.
- * Used in places that cannot await (e.g. SWR fetcher initialisation).
+ * Read the JWT from localStorage.
+ * Synchronous — safe to call anywhere, returns null on SSR or when not logged in.
  */
 export function getAccessToken(): string | null {
   if (typeof window === 'undefined') return null;
-  try {
-    const keys = Object.keys(localStorage).filter(
-      (k) => k.includes('supabase') || k.includes('sb-')
-    );
-    for (const key of keys) {
-      const item = localStorage.getItem(key);
-      if (item) {
-        const parsed = JSON.parse(item);
-        const token =
-          parsed.access_token ??
-          parsed?.session?.access_token ??
-          null;
-        if (token) return token;
-      }
-    }
-  } catch {
-    // Corrupted storage — ignore
-  }
-  return null;
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+/**
+ * Async wrapper kept for call-sites that previously awaited getAccessTokenAsync().
+ * Simply resolves to the synchronous value so no migration is needed at call sites.
+ */
+export async function getAccessTokenAsync(): Promise<string | null> {
+  return getAccessToken();
 }
 
 function isApiEnvelope<T>(body: unknown): body is ApiResponse<T> {
@@ -84,9 +66,7 @@ export async function apiFetch<T>(
   }
 
   const url = `${BASE_URL}${path}`;
-
-  // Prefer the async Supabase session; fall back to sync localStorage scan
-  const token = (await getAccessTokenAsync()) ?? getAccessToken();
+  const token = getAccessToken();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -98,9 +78,9 @@ export async function apiFetch<T>(
 
   const res = await fetch(url, { ...options, headers });
 
-  // 401 — session expired; sign out so the auth guard redirects to /auth
+  // 401 — session expired; clear local session so the auth guard redirects
   if (res.status === 401) {
-    await supabase.auth.signOut();
+    clearSession();
     throw new Error('Session expired. Please sign in again.');
   }
 

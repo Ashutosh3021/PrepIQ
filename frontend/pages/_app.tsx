@@ -13,16 +13,15 @@ const WIZARD_ROUTES = ['/desktop/wizard', '/mobile/wizard'];
 
 function AuthGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { user, loading } = useAuth();
+  const { isAuthenticated, loading } = useAuth();
 
   const isPublic = PUBLIC_ROUTES.some(
     (route) => router.pathname === route || router.pathname.startsWith(route + '/')
   );
   const isWizard = WIZARD_ROUTES.includes(router.pathname);
 
-  // FIX 1: Keep isPublic/isWizard in refs so the auth effect can read their
-  // current values without listing them as deps (they change every render
-  // because they are computed inline, which caused an infinite loop).
+  // Keep isPublic/isWizard in refs so the auth effect reads current values
+  // without listing them as deps (they change every render as computed values).
   const isPublicRef = useRef(isPublic);
   const isWizardRef = useRef(isWizard);
   useEffect(() => {
@@ -32,16 +31,13 @@ function AuthGuard({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (loading) return;
-    if (!user && !isPublicRef.current && !isWizardRef.current) {
+    if (!isAuthenticated && !isPublicRef.current && !isWizardRef.current) {
       router.replace('/auth');
     }
-    // Only re-run when auth state actually changes — not on every render.
-    // router is intentionally omitted: it is stable enough for the call
-    // but its reference changes every render in the Pages Router.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, loading]);
+  }, [isAuthenticated, loading]);
 
-  // Allow public and wizard routes through immediately — no auth check needed
+  // Allow public and wizard routes through immediately
   if (isPublic || isWizard) {
     return <>{children}</>;
   }
@@ -66,7 +62,7 @@ function AuthGuard({ children }: { children: ReactNode }) {
     );
   }
 
-  if (!user) return null;
+  if (!isAuthenticated) return null;
 
   return <>{children}</>;
 }

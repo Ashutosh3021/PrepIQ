@@ -20,14 +20,14 @@ export default function withAuth<P extends object>(
   WrappedComponent: React.ComponentType<P>
 ) {
   return function AuthGuard(props: P) {
-    const { user, loading } = useAuth();
+    const { isAuthenticated, loading } = useAuth();
     const router = useRouter();
     const [checking, setChecking] = useState(true);
 
     useEffect(() => {
       if (loading) return;
 
-      if (!user) {
+      if (!isAuthenticated) {
         router.replace('/auth');
         return;
       }
@@ -45,7 +45,7 @@ export default function withAuth<P extends object>(
           // If the check fails, let them through rather than blocking forever
           setChecking(false);
         });
-    }, [user, loading, router]);
+    }, [isAuthenticated, loading, router]);
 
     if (loading || checking) {
       return (
