@@ -9,6 +9,10 @@ Pyronites (PyroCore) auth model:
 PrepIQ frontend expects Bearer access_token, so after a successful Pyronites
 sign_in/sign_up we resolve the user id (via /auth/me or signup body) and mint
 our own JWT with JWT_SECRET.
+
+Temporary hardcoded test user (bypass provider):
+  email:    tets@test.com
+  password: 123aA@
 """
 from __future__ import annotations
 
@@ -26,6 +30,12 @@ from app.core.pyronites_client import get_pyronites_client, pyronites_configured
 from app.repositories import users as users_repo
 
 logger = logging.getLogger(__name__)
+
+# ── Temporary hardcoded test account (remove before public launch) ────────────
+TEST_USER_EMAIL = "tets@test.com"
+TEST_USER_PASSWORD = "123aA@"
+TEST_USER_ID = str(uuid.uuid5(uuid.NAMESPACE_URL, f"prepiq:{TEST_USER_EMAIL}"))
+TEST_USER_FULL_NAME = "Test User"
 
 
 class SignupRequest(BaseModel):
@@ -56,10 +66,64 @@ class UserResponse(BaseModel):
     needs_confirmation: bool = False
 
 
+def _is_test_user(email: str, password: str) -> bool:
+    return (
+        email.strip().lower() == TEST_USER_EMAIL
+        and password == TEST_USER_PASSWORD
+    )
+
+
+def _login_test_user(
+    full_name: str = TEST_USER_FULL_NAME,
+    college_name: str = "",
+    program: str = "BTech",
+    year_of_study: str = "1",
+) -> UserResponse:
+    """Issue JWT for the hardcoded test account without calling Pyronites."""
+    uid = TEST_USER_ID
+    email = TEST_USER_EMAIL
+
+    try:
+        profile = users_repo.upsert_profile(
+            uid,
+            email,
+            {
+                "full_name": full_name or TEST_USER_FULL_NAME,
+                "college_name": college_name,
+                "program": program or "BTech",
+                "year_of_study": year_of_study or "1",
+                "wizard_completed": True,
+            },
+        ) or {}
+    except Exception as e:
+        logger.warning("test user profile upsert failed (continuing): %s", e)
+        profile = {
+            "full_name": full_name or TEST_USER_FULL_NAME,
+            "college_name": college_name,
+            "program": program or "BTech",
+            "year_of_study": year_of_study or "1",
+        }
+
+    access, expires_in = _mint_access_token(uid, email)
+    logger.info("Hardcoded test user login: %s", email)
+
+    return UserResponse(
+        id=uid,
+        email=email,
+        full_name=str(profile.get("full_name") or full_name or TEST_USER_FULL_NAME),
+        college_name=str(profile.get("college_name") or college_name or ""),
+        program=str(profile.get("program") or program or "BTech"),
+        year_of_study=str(profile.get("year_of_study") or year_of_study or "1"),
+        access_token=access,
+        refresh_token=None,
+        expires_in=expires_in,
+        needs_confirmation=False,
+    )
+
+
 def _jwt_secret() -> str:
     secret = (os.getenv("JWT_SECRET") or os.getenv("SECRET_KEY") or "").strip()
     if not secret or secret == "default-insecure-change-me":
-        # Still allow minting in dev so login works; production main.py already blocks weak key
         secret = secret or "default-insecure-change-me"
     return secret
 
@@ -153,15 +217,6 @@ def _pick_email(data: Optional[Dict[str, Any]], fallback: str = "") -> str:
 
 
 def _resolve_user_after_auth(client: Any, response: Any, email_fallback: str) -> Dict[str, str]:
-    """
-    Build {id, email} after sign_in/sign_up.
-
-    Priority:
-      1. id/email on the response body (signup usually has both; login only email)
-      2. client.auth.user() → GET /auth/me (uses session cookie stored by httpx)
-      3. users table lookup by email
-      4. stable uuid5 from email (last resort so login never blocks on missing id)
-    """
     body = _as_dict(response) or {}
     email = _pick_email(body, email_fallback)
     uid = _pick_id(body)
@@ -191,7 +246,6 @@ def _resolve_user_after_auth(client: Any, response: Any, email_fallback: str) ->
             logger.warning("users.get_by_email failed: %s", e)
 
     if not uid and email:
-        # Deterministic app-level id so profiles stay stable without provider id
         uid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"prepiq:{email}"))
         logger.warning(
             "Pyronites returned no user id; using deterministic id from email for %s",
@@ -217,6 +271,17 @@ def _resolve_user_after_auth(client: Any, response: Any, email_fallback: str) ->
 class PyronitesAuthService:
     @staticmethod
     async def signup(req: SignupRequest) -> UserResponse:
+        email = str(req.email).strip().lower()
+
+        # Hardcoded test user — works even if Pyronites is down
+        if _is_test_user(email, req.password):
+            return _login_test_user(
+                full_name=req.full_name or TEST_USER_FULL_NAME,
+                college_name=req.college_name,
+                program=req.program,
+                year_of_study=str(req.year_of_study),
+            )
+
         if not pyronites_configured():
             raise HTTPException(
                 status_code=503,
@@ -230,7 +295,6 @@ class PyronitesAuthService:
         if not ok:
             raise HTTPException(status_code=400, detail=err)
 
-        email = str(req.email).strip().lower()
         client = get_pyronites_client()
         try:
             response = client.auth.sign_up(email, req.password)
@@ -276,6 +340,12 @@ class PyronitesAuthService:
 
     @staticmethod
     async def login(req: LoginRequest) -> UserResponse:
+        email = str(req.email).strip().lower()
+
+        # Hardcoded test user — works even if Pyronites is down / unconfigured
+        if _is_test_user(email, req.password):
+            return _login_test_user()
+
         if not pyronites_configured():
             raise HTTPException(
                 status_code=503,
@@ -288,10 +358,8 @@ class PyronitesAuthService:
         if not req.password:
             raise HTTPException(status_code=400, detail="Password is required")
 
-        email = str(req.email).strip().lower()
         client = get_pyronites_client()
         try:
-            # Returns {"email": ...} only — session lives in httpx cookie jar
             response = client.auth.sign_in(email, req.password)
         except Exception as e:
             msg = str(e).lower()
@@ -351,7 +419,6 @@ class PyronitesAuthService:
                 uid = str(uid)
             email = str(claims.get("email") or "").strip().lower()
 
-        # Optional: try Pyronites /auth/me if JWT missing id (legacy session tokens)
         if not uid and pyronites_configured():
             try:
                 client = get_pyronites_client()
