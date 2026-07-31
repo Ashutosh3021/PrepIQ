@@ -1,12 +1,13 @@
 """
 Chat / AI Tutor router.
 
-Phase 2: `/tutor` and `/tutor/invalidate-cache` use Pyronites repositories only
-(no SQLAlchemy / DATABASE_URL). Legacy `/message` + history still ORM-backed
-until Phase 3 (stub or migrate).
+Pyronites data plane for `/tutor` + `/tutor/invalidate-cache`.
+Legacy `/message` and `/history/*` are unused by the current frontend
+(tutor keeps history client-side) and return 501 until a later rewrite.
+No SQLAlchemy / DATABASE_URL required for any route in this module.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Header
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 import logging
 
 from .. import schemas
@@ -21,12 +22,22 @@ logger = logging.getLogger(__name__)
 # ── In-memory subject summary cache (keyed by subject_id only) ───────────────
 _subject_summary_cache: Dict[str, str] = {}
 
+_LEGACY_MSG = (
+    "This chat endpoint is not implemented after the Pyronites migration. "
+    "Use POST /api/v1/chat/tutor (client-side conversation history). "
+    "Server-backed /message and /history will return in a later phase."
+)
+
 
 async def get_current_user(authorization: str = Header(None)):
     """Bearer auth via Pyronites shim — no DATABASE_URL / get_db."""
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     return await get_current_user_from_token(authorization)
+
+
+def _not_implemented():
+    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=_LEGACY_MSG)
 
 
 router = APIRouter(
@@ -166,7 +177,7 @@ async def _get_subject_summary(subject_id: str, subject_name: str) -> str:
     return summary
 
 
-# ── Legacy routes (SQLAlchemy) — Phase 3 will stub/migrate ───────────────────
+# ── Legacy routes (unused by current FE) — deferred ──────────────────────────
 
 
 @router.post("/message", response_model=schemas.ChatResponse)
@@ -174,137 +185,7 @@ async def send_message(
     chat_request: schemas.ChatRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    """Legacy chat — still requires DATABASE_URL / SQLAlchemy until Phase 3."""
-    from sqlalchemy.orm import Session, joinedload
-    from ..database import get_db
-    from .. import models
-    from ..dependencies import get_prepiq_service
-
-    # Lazy session: only opens if this legacy route is hit
-    db_gen = get_db()
-    db: Session = next(db_gen)
-    try:
-        subject = (
-            db.query(models.Subject)
-            .filter(
-                models.Subject.id == chat_request.subject_id,
-                models.Subject.user_id == current_user["id"],
-            )
-            .first()
-        )
-
-        if not subject:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Subject not found",
-            )
-
-        service = get_prepiq_service()
-        result = service.chat_with_bot(
-            db=db,
-            user_id=current_user["id"],
-            subject_id=chat_request.subject_id,
-            message=chat_request.message,
-        )
-
-        bot_response = result["response"]
-
-        related_questions = (
-            db.query(models.Question)
-            .options(joinedload(models.Question.paper))
-            .join(models.QuestionPaper)
-            .filter(models.QuestionPaper.subject_id == chat_request.subject_id)
-            .limit(3)
-            .all()
-        )
-
-        related_questions_list = []
-        for q in related_questions:
-            appeared_years = []
-            if q.paper and q.paper.exam_year:
-                appeared_years.append(q.paper.exam_year)
-
-            if q.similar_question_ids:
-                try:
-                    similar_ids = [str(sid) for sid in q.similar_question_ids]
-                    similar_questions = (
-                        db.query(models.Question)
-                        .options(joinedload(models.Question.paper))
-                        .join(models.QuestionPaper)
-                        .filter(models.Question.id.in_(similar_ids))
-                        .all()
-                    )
-                    for sq in similar_questions:
-                        if (
-                            sq.paper
-                            and sq.paper.exam_year
-                            and sq.paper.exam_year not in appeared_years
-                        ):
-                            appeared_years.append(sq.paper.exam_year)
-                except Exception:
-                    pass
-
-            appeared_years.sort()
-
-            related_questions_list.append(
-                {
-                    "text": (
-                        q.question_text[:100] + "..."
-                        if len(q.question_text) > 100
-                        else q.question_text
-                    ),
-                    "marks": q.marks,
-                    "appeared_years": appeared_years,
-                    "probability": "high" if q.is_repeated else "medium",
-                }
-            )
-
-        references = []
-        recent_papers = (
-            db.query(models.QuestionPaper)
-            .filter(models.QuestionPaper.subject_id == chat_request.subject_id)
-            .order_by(models.QuestionPaper.exam_year.desc())
-            .limit(2)
-            .all()
-        )
-
-        for paper in recent_papers:
-            if paper.exam_year:
-                sample_q = (
-                    db.query(models.Question)
-                    .filter(models.Question.paper_id == paper.id)
-                    .first()
-                )
-
-                if sample_q:
-                    references.append(
-                        {
-                            "type": "paper",
-                            "paper_year": paper.exam_year,
-                            "question": (
-                                sample_q.question_text[:100] + "..."
-                                if len(sample_q.question_text) > 100
-                                else sample_q.question_text
-                            ),
-                        }
-                    )
-
-        return {
-            "message_id": result["message_id"],
-            "response": bot_response,
-            "related_questions": related_questions_list,
-            "references": references,
-            "suggested_actions": [
-                "Add to revision",
-                "Practice similar questions",
-                "Take targeted mock test",
-            ],
-        }
-    finally:
-        try:
-            next(db_gen)
-        except StopIteration:
-            pass
+    _not_implemented()
 
 
 @router.get("/history/{subject_id}", response_model=List[schemas.ChatHistoryResponse])
@@ -314,57 +195,7 @@ async def get_chat_history(
     offset: int = 0,
     current_user: dict = Depends(get_current_user),
 ):
-    """Legacy history — requires DATABASE_URL until Phase 3."""
-    from ..database import get_db
-    from .. import models
-
-    db_gen = get_db()
-    db = next(db_gen)
-    try:
-        subject = (
-            db.query(models.Subject)
-            .filter(
-                models.Subject.id == subject_id,
-                models.Subject.user_id == current_user["id"],
-            )
-            .first()
-        )
-
-        if not subject:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Subject not found",
-            )
-
-        chat_history = (
-            db.query(models.ChatHistory)
-            .filter(
-                models.ChatHistory.subject_id == subject_id,
-                models.ChatHistory.user_id == current_user["id"],
-            )
-            .order_by(models.ChatHistory.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-
-        history_list = []
-        for chat in chat_history:
-            history_list.append(
-                {
-                    "id": chat.id,
-                    "timestamp": chat.created_at,
-                    "user_message": chat.user_message,
-                    "bot_response": chat.bot_response,
-                }
-            )
-
-        return history_list
-    finally:
-        try:
-            next(db_gen)
-        except StopIteration:
-            pass
+    _not_implemented()
 
 
 @router.delete("/history/{subject_id}")
@@ -372,41 +203,7 @@ async def clear_chat_history(
     subject_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    """Legacy clear history — requires DATABASE_URL until Phase 3."""
-    from ..database import get_db
-    from .. import models
-
-    db_gen = get_db()
-    db = next(db_gen)
-    try:
-        subject = (
-            db.query(models.Subject)
-            .filter(
-                models.Subject.id == subject_id,
-                models.Subject.user_id == current_user["id"],
-            )
-            .first()
-        )
-
-        if not subject:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Subject not found",
-            )
-
-        db.query(models.ChatHistory).filter(
-            models.ChatHistory.subject_id == subject_id,
-            models.ChatHistory.user_id == current_user["id"],
-        ).delete()
-
-        db.commit()
-
-        return {"message": "Chat history cleared successfully"}
-    finally:
-        try:
-            next(db_gen)
-        except StopIteration:
-            pass
+    _not_implemented()
 
 
 # ── AI Tutor (Pyronites data plane) ──────────────────────────────────────────
