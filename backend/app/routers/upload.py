@@ -15,6 +15,7 @@ upload_progress: Dict[str, dict] = {}
 from ..core.llm_provider import get_llm_client
 from ..core.local_storage import save_upload, resolve_path
 from ..services.pyronites_auth import get_current_user_from_token
+from ..services.syllabus_gate import assert_pyq_upload_allowed
 from ..repositories import subjects as subjects_repo
 from ..repositories import papers as papers_repo
 from ..repositories import questions as questions_repo
@@ -59,6 +60,10 @@ async def upload_and_analyze(
         subject = subjects_repo.get_for_user(subject_id, current_user["id"])
         if not subject:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
+
+        # Government track: require extracted_taxonomy before any PYQ / question_paper upload
+        if material_type in ("pyq", "question_paper", "past_paper"):
+            assert_pyq_upload_allowed(subject)
 
         all_text_content: List[str] = []
         first_filename = files[0].filename if files else "uploaded_material"
