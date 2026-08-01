@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Uploa
 from .. import schemas
 from ..core.local_storage import delete_upload, resolve_path, save_upload
 from ..services.pyronites_auth import get_current_user_from_token
+from ..services.syllabus_gate import assert_pyq_upload_allowed
 from ..repositories import subjects as subjects_repo
 from ..repositories import papers as papers_repo
 from ..repositories import questions as questions_repo
@@ -66,6 +67,8 @@ async def upload_papers(
     subject = subjects_repo.get_for_user(subject_id, current_user["id"])
     if not subject:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
+
+    assert_pyq_upload_allowed(subject)
 
     results = []
     for file in files:
