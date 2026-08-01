@@ -1,4 +1,4 @@
-"""User setup wizard — Pyronites users table (Fix Phase D)."""
+"""User setup wizard — Pyronites users + subject exam track (Phase 1)."""
 from __future__ import annotations
 
 import logging
@@ -39,7 +39,9 @@ async def get_wizard_status(current_user: dict = Depends(get_current_user)):
             pass
     return {
         "completed": bool(current_user.get("wizard_completed") or profile.get("wizard_completed")),
+        "exam_type": current_user.get("exam_type") or profile.get("exam_type"),
         "exam_name": current_user.get("exam_name") or profile.get("exam_name"),
+        "university_name": current_user.get("university_name") or profile.get("university_name"),
         "days_until_exam": days_until_exam,
         "focus_subjects": current_user.get("focus_subjects") or profile.get("focus_subjects") or [],
         "study_hours_per_day": current_user.get("study_hours_per_day")
@@ -59,7 +61,9 @@ async def complete_step1(
     users_repo.update(
         current_user["id"],
         {
-            "exam_name": wizard_data.exam_name.strip(),
+            "exam_type": wizard_data.exam_type,
+            "exam_name": wizard_data.exam_name,
+            "university_name": wizard_data.university_name,
             "days_until_exam": wizard_data.days_until_exam,
             "exam_date": exam_date.isoformat(),
         },
@@ -84,6 +88,11 @@ async def complete_step2(
             "study_hours_per_day": wizard_data.study_hours_per_day,
         },
     )
+    profile = users_repo.get(current_user["id"]) or {}
+    exam_type = profile.get("exam_type") or current_user.get("exam_type")
+    exam_name = profile.get("exam_name") or current_user.get("exam_name")
+    university_name = profile.get("university_name") or current_user.get("university_name")
+
     existing = {str(s.get("name") or "").lower() for s in subjects_repo.list_for_user(current_user["id"])}
     for name in wizard_data.focus_subjects:
         if name and name.lower() not in existing:
@@ -94,6 +103,9 @@ async def complete_step2(
                     "code": f"SUB-{(name[:3] if len(name) >= 3 else name.ljust(3, 'X')).upper()}-{datetime.now().year}",
                     "semester": 1,
                     "academic_year": str(datetime.now().year),
+                    "exam_type": exam_type,
+                    "exam_name": exam_name,
+                    "university_name": university_name,
                 },
             )
     return {
@@ -131,6 +143,8 @@ async def complete_wizard(
 ):
     profile = users_repo.get(current_user["id"]) or {}
     missing = []
+    if not (profile.get("exam_type") or current_user.get("exam_type")):
+        missing.append("exam_type")
     if not (profile.get("exam_name") or current_user.get("exam_name")):
         missing.append("exam_name")
     if not (profile.get("days_until_exam") or current_user.get("days_until_exam")):
@@ -172,6 +186,8 @@ async def update_wizard_data(
         "program",
         "year_of_study",
         "exam_name",
+        "exam_type",
+        "university_name",
         "days_until_exam",
         "focus_subjects",
         "study_hours_per_day",
