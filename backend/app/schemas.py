@@ -1,5 +1,5 @@
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 from uuid import UUID
 import uuid as uuid_module
@@ -50,6 +50,8 @@ class UserUpdate(BaseModel):
     target_score: Optional[int] = None
     preparation_level: Optional[str] = None
     wizard_completed: Optional[bool] = None
+    exam_type: Optional[str] = None
+    university_name: Optional[str] = None
 
 class UserResponse(UserBase):
     model_config = ConfigDict(from_attributes=True)
@@ -99,6 +101,9 @@ class SubjectBase(BaseModel):
     exam_date: Optional[str] = None
     exam_duration_minutes: Optional[int] = None
     syllabus_json: Optional[Dict[str, Any]] = None
+    exam_type: Optional[str] = None
+    exam_name: Optional[str] = None
+    university_name: Optional[str] = None
 
 class SubjectCreate(SubjectBase):
     name: str
@@ -119,6 +124,9 @@ class SubjectUpdate(BaseModel):
     exam_date: Optional[str] = None
     exam_duration_minutes: Optional[int] = None
     syllabus_json: Optional[Dict[str, Any]] = None
+    exam_type: Optional[str] = None
+    exam_name: Optional[str] = None
+    university_name: Optional[str] = None
 
 class SubjectResponse(SubjectBase):
     model_config = ConfigDict(from_attributes=True)
@@ -587,23 +595,53 @@ class Question(BaseModel):
         return v
 
 
+GOVERNMENT_EXAMS_V1 = frozenset({"NEET", "JEE"})
+
+
 class WizardStep1(BaseModel):
+    """Step 1: track selection + exam timing.
+
+    exam_type:
+      government → exam_name must be NEET or JEE (v1)
+      university  → exam_name free text + optional university_name
+    """
+    exam_type: Literal["government", "university"]
     exam_name: str
     days_until_exam: int
-    
-    @field_validator('exam_name')
+    university_name: Optional[str] = None
+
+    @field_validator("exam_name")
     @classmethod
-    def validate_exam_name(cls, v):
+    def validate_exam_name(cls, v: str) -> str:
         if not v or len(v.strip()) < 2:
-            raise ValueError('Exam name must be at least 2 characters long')
+            raise ValueError("Exam name must be at least 2 characters long")
         return v.strip()
-    
-    @field_validator('days_until_exam')
+
+    @field_validator("days_until_exam")
     @classmethod
-    def validate_days_until_exam(cls, v):
+    def validate_days_until_exam(cls, v: int) -> int:
         if v < 1 or v > 365:
-            raise ValueError('Days until exam must be between 1 and 365')
+            raise ValueError("Days until exam must be between 1 and 365")
         return v
+
+    @model_validator(mode="after")
+    def validate_track_rules(self):
+        et = self.exam_type
+        name = self.exam_name.strip()
+        if et == "government":
+            upper = name.upper()
+            if upper not in GOVERNMENT_EXAMS_V1:
+                raise ValueError(
+                    f"Government track v1 only supports NEET or JEE "
+                    f"(got {name!r}). Other exams are not supported yet."
+                )
+            self.exam_name = upper
+            self.university_name = None
+        else:
+            # university — free text exam_name; university_name optional but recommended
+            if self.university_name is not None:
+                self.university_name = self.university_name.strip() or None
+        return self
 
 
 class WizardStep2(BaseModel):
