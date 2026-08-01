@@ -95,21 +95,34 @@ async def generate_prediction(
             detail=f"Error generating prediction: {str(e)}",
         )
 
-    if result.get("id") is None:
+    preds = result.get("predictions") or []
+    has_preds = isinstance(preds, list) and len(preds) > 0
+    pred_id = result.get("id")
+
+    # True empty tier (no papers/questions)
+    if not has_preds and not pred_id:
+        msg = (
+            result.get("message")
+            or result.get("warning")
+            or "Upload at least one past paper to get predictions."
+        )
         return {
             "prediction_id": "none",
             "status": "no_data",
-            "message": result.get(
-                "message",
-                "Upload at least one past paper to get predictions.",
-            ),
+            "message": str(msg),
             "progress": 0,
         }
 
+    # Generated OK (possibly in-memory only if persist failed)
+    msg = (
+        result.get("warning")
+        or result.get("message")
+        or "Prediction generated successfully."
+    )
     return {
-        "prediction_id": result["id"],
+        "prediction_id": str(pred_id) if pred_id else "none",
         "status": "completed",
-        "message": result.get("warning") or "Prediction generated successfully.",
+        "message": str(msg),
         "progress": 100,
     }
 
