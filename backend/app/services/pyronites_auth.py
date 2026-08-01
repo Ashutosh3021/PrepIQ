@@ -432,10 +432,20 @@ class PyronitesAuthService:
         if not uid:
             raise HTTPException(status_code=401, detail="Invalid authentication token")
 
-        profile = users_repo.get(uid)
+        # Profile is best-effort. JWT claims alone authorize the request.
+        # Login already swallowed users-table errors; token validation must too,
+        # otherwise every authenticated route becomes a generic 500 when the
+        # Pyronites `users` table is missing, unreachable, or rejects the query.
+        profile: Dict[str, Any] = {}
+        try:
+            profile = users_repo.get(uid) or {}
+        except Exception as e:
+            logger.warning("users_repo.get failed for %s (continuing with JWT claims): %s", uid, e)
+            profile = {}
+
         if not profile and email:
             try:
-                profile = users_repo.upsert_profile(uid, email, {})
+                profile = users_repo.upsert_profile(uid, email, {}) or {}
             except Exception as e:
                 logger.warning("lazy profile create failed: %s", e)
                 profile = {}
