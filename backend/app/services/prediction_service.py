@@ -274,29 +274,40 @@ Rules:
     else:
         coverage_percentage = 0
 
-    record = predictions_repo.create(
-        user_id,
-        subject_id,
-        {
-            "predictions": final,
-            "total_questions": len(final),
-            "total_marks": total_marks,
-            "unit_coverage": unit_coverage,
-            "ml_analysis_json": {
-                "source": source_tag,
-                "fallback_used": fallback_used,
-                "paper_count": paper_count,
-                "stats": {
-                    "unit_frequency": stats.get("unit_frequency"),
-                    "total_questions": stats.get("total_questions"),
+    record_id: Optional[str] = None
+    persist_warning: Optional[str] = None
+    try:
+        record = predictions_repo.create(
+            user_id,
+            subject_id,
+            {
+                "predictions": final,
+                "total_questions": len(final),
+                "total_marks": total_marks,
+                "unit_coverage": unit_coverage,
+                "ml_analysis_json": {
+                    "source": source_tag,
+                    "fallback_used": fallback_used,
+                    "paper_count": paper_count,
+                    "stats": {
+                        "unit_frequency": stats.get("unit_frequency"),
+                        "total_questions": stats.get("total_questions"),
+                    },
                 },
+                "prediction_accuracy_score": 0.0,
             },
-            "prediction_accuracy_score": 0.0,
-        },
-    )
+        )
+        record_id = str(record.get("id")) if record else None
+    except Exception as e:
+        logger.error("Failed to persist prediction for subject %s: %s", subject_id, e)
+        persist_warning = f"Generated in-memory only (persist failed: {e})"
+
+    combined_warning = warning
+    if persist_warning:
+        combined_warning = f"{warning + ' ' if warning else ''}{persist_warning}".strip()
 
     return {
-        "id": str(record.get("id")),
+        "id": record_id,
         "subject_id": subject_id,
         "predictions": final,
         "predicted_questions": final,
@@ -307,7 +318,7 @@ Rules:
         "fallback_used": fallback_used or cold,
         "fallback_reason": "llm_unavailable" if fallback_used else ("limited_papers" if cold else None),
         "message": None,
-        "warning": warning,
+        "warning": combined_warning,
         "source": source_tag,
     }
 
