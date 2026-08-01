@@ -52,7 +52,15 @@ def create_many(paper_id: str, subject_id: str, items: List[Dict[str, Any]]) -> 
             "correct_answer": item.get("correct_answer"),
             "topics_json": item.get("topics_json"),
             "text_length": item.get("length") or len(str(item.get("text") or "")),
+            # Government-track syllabus tagging (filled in a later phase)
+            "tagged_unit": item.get("tagged_unit"),
+            "tagging_confidence": item.get("tagging_confidence"),
             "created_at": now,
         }
         created.append(base.insert_row(TABLE, row))
     return created
+
+
+def update(question_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Patch fields (e.g. tagged_unit / tagging_confidence after LLM tagging)."""
+    return base.update_eq(TABLE, "id", question_id, fields)

@@ -9,6 +9,9 @@ from app.repositories import base
 
 TABLE = "predictions"
 
+# source_type: "government_ml" | "university_llm" (nullable until two-track ships)
+# model_version: government track only — which trained model produced the row
+
 
 def _as_json_value(value: Any, default: Any) -> Any:
     """Normalize to a JSON-serializable object for PyroCore JSON columns.
@@ -86,6 +89,8 @@ def create(user_id: str, subject_id: str, data: Dict[str, Any]) -> Dict[str, Any
         "prediction_accuracy_score": float(
             data.get("prediction_accuracy_score") or data.get("accuracy_score") or 0
         ),
+        "source_type": data.get("source_type"),
+        "model_version": data.get("model_version"),
         "created_at": now,
         "updated_at": now,
     }

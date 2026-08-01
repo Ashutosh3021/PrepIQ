@@ -8,6 +8,10 @@ from app.repositories import base
 
 TABLE = "subjects"
 
+# exam_type: "government" | "university" (nullable until wizard sets it)
+# exam_name: "NEET" | "JEE" for government; free text for university
+# university_name: university track only (nullable)
+
 
 def list_for_user(user_id: str) -> List[Dict[str, Any]]:
     return base.select_eq(TABLE, "user_id", user_id)
@@ -37,6 +41,9 @@ def create(user_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
         "exam_date": data.get("exam_date"),
         "exam_duration_minutes": data.get("exam_duration_minutes"),
         "syllabus_json": data.get("syllabus_json"),
+        "exam_type": data.get("exam_type"),
+        "exam_name": data.get("exam_name"),
+        "university_name": data.get("university_name"),
         "papers_uploaded": data.get("papers_uploaded", 0),
         "predictions_generated": data.get("predictions_generated", 0),
         "mock_tests_created": data.get("mock_tests_created", 0),
