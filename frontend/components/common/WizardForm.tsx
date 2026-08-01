@@ -1,10 +1,10 @@
 /**
  * WizardForm — 3-step onboarding wizard.
  *
- * Fields match the backend schemas exactly:
- *   Step 1 → POST /wizard/step1  { exam_name: string, days_until_exam: int }
- *   Step 2 → POST /wizard/step2  { focus_subjects: string[], study_hours_per_day: int }
- *   Step 3 → POST /wizard/step3  { target_score: int, preparation_level: string }
+ *   Step 1 → POST /wizard/step1
+ *     { exam_type, exam_name, days_until_exam, university_name? }
+ *   Step 2 → POST /wizard/step2  { focus_subjects, study_hours_per_day }
+ *   Step 3 → POST /wizard/step3  { target_score, preparation_level }
  *   Final  → POST /wizard/complete { wizard_completed: true }
  */
 import { useState } from 'react';
@@ -12,10 +12,10 @@ import { useRouter } from 'next/router';
 import { apiFetch } from '@/lib/services/base.service';
 import { getDashboardPath } from '@/lib/utils/device';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 interface Step1Data {
+  exam_type: 'government' | 'university' | '';
   exam_name: string;
+  university_name: string;
   days_until_exam: number | '';
 }
 
@@ -29,12 +29,9 @@ interface Step3Data {
   preparation_level: string;
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 const PREP_LEVELS = ['beginner', 'intermediate', 'advanced'] as const;
 const HOURS_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
-
-// ── Sub-components ────────────────────────────────────────────────────────────
+const GOVT_EXAMS = ['NEET', 'JEE'] as const;
 
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -96,16 +93,7 @@ function NextButton({
     >
       {loading ? (
         <>
-          <svg
-            className="animate-spin"
-            xmlns="http://www.w3.org/2000/svg"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
+          <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M21 12a9 9 0 1 1-6.219-8.56" />
           </svg>
           Saving…
@@ -113,18 +101,7 @@ function NextButton({
       ) : (
         <>
           {label}
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="group-hover:translate-x-1 transition-transform duration-150"
-          >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="group-hover:translate-x-1 transition-transform duration-150">
             <line x1="5" y1="12" x2="19" y2="12" />
             <polyline points="12 5 19 12 12 19" />
           </svg>
@@ -146,17 +123,7 @@ function BackButton({ onClick }: { onClick: () => void }) {
         opacity: 0.7,
       }}
     >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <line x1="19" y1="12" x2="5" y2="12" />
         <polyline points="12 19 5 12 12 5" />
       </svg>
@@ -165,25 +132,22 @@ function BackButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
-
 export default function WizardForm() {
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Step 1 state — matches WizardStep1 schema
-  const [step1, setStep1] = useState<Step1Data>({ exam_name: '', days_until_exam: '' });
+  const [step1, setStep1] = useState<Step1Data>({
+    exam_type: '',
+    exam_name: '',
+    university_name: '',
+    days_until_exam: '',
+  });
 
-  // Step 2 state — matches WizardStep2 schema
   const [step2, setStep2] = useState<Step2Data>({ focus_subjects: [], study_hours_per_day: '' });
   const [subjectInput, setSubjectInput] = useState('');
-
-  // Step 3 state — matches WizardStep3 schema
   const [step3, setStep3] = useState<Step3Data>({ target_score: '', preparation_level: '' });
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
 
   const addSubject = () => {
     const trimmed = subjectInput.trim();
@@ -196,31 +160,52 @@ export default function WizardForm() {
   const removeSubject = (s: string) =>
     setStep2((p) => ({ ...p, focus_subjects: p.focus_subjects.filter((x) => x !== s) }));
 
-  // ── Submit handlers ────────────────────────────────────────────────────────
+  const step1Valid =
+    !!step1.exam_type &&
+    !!step1.exam_name.trim() &&
+    !!step1.days_until_exam &&
+    (step1.exam_type === 'university' || GOVT_EXAMS.includes(step1.exam_name as (typeof GOVT_EXAMS)[number]));
 
   const submitStep = async (stepNum: number) => {
     setLoading(true);
     setError('');
     try {
       if (stepNum === 1) {
-        // Validate before sending
-        if (!step1.exam_name.trim()) { setError('Exam name is required.'); return; }
+        if (!step1.exam_type) {
+          setError('Select government or university track.');
+          return;
+        }
+        if (!step1.exam_name.trim()) {
+          setError('Exam name is required.');
+          return;
+        }
+        if (step1.exam_type === 'government' && !GOVT_EXAMS.includes(step1.exam_name as (typeof GOVT_EXAMS)[number])) {
+          setError('Government track currently supports NEET or JEE only.');
+          return;
+        }
         if (!step1.days_until_exam || step1.days_until_exam < 1 || step1.days_until_exam > 365) {
-          setError('Days until exam must be between 1 and 365.'); return;
+          setError('Days until exam must be between 1 and 365.');
+          return;
         }
         await apiFetch('/wizard/step1', {}, {
           method: 'POST',
           body: JSON.stringify({
+            exam_type: step1.exam_type,
             exam_name: step1.exam_name.trim(),
             days_until_exam: Number(step1.days_until_exam),
+            university_name:
+              step1.exam_type === 'university' ? step1.university_name.trim() || null : null,
           }),
         });
         setStep(2);
-
       } else if (stepNum === 2) {
-        if (step2.focus_subjects.length === 0) { setError('Add at least one subject.'); return; }
+        if (step2.focus_subjects.length === 0) {
+          setError('Add at least one subject.');
+          return;
+        }
         if (!step2.study_hours_per_day || step2.study_hours_per_day < 1) {
-          setError('Select how many hours per day you can study.'); return;
+          setError('Select how many hours per day you can study.');
+          return;
         }
         await apiFetch('/wizard/step2', {}, {
           method: 'POST',
@@ -230,12 +215,15 @@ export default function WizardForm() {
           }),
         });
         setStep(3);
-
       } else {
         if (!step3.target_score || Number(step3.target_score) < 1 || Number(step3.target_score) > 100) {
-          setError('Target score must be between 1 and 100.'); return;
+          setError('Target score must be between 1 and 100.');
+          return;
         }
-        if (!step3.preparation_level) { setError('Select your preparation level.'); return; }
+        if (!step3.preparation_level) {
+          setError('Select your preparation level.');
+          return;
+        }
         await apiFetch('/wizard/step3', {}, {
           method: 'POST',
           body: JSON.stringify({
@@ -256,26 +244,18 @@ export default function WizardForm() {
     }
   };
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-
   return (
     <div
       className="min-h-screen flex flex-col"
       style={{ backgroundColor: 'var(--color-background)', color: 'var(--color-on-surface)' }}
     >
-      {/* Top bar */}
       <header
         className="flex items-center justify-between px-6 sm:px-12 py-6 border-b"
         style={{ borderColor: 'var(--color-outline-variant)' }}
       >
-        <span
-          className="text-xs font-bold uppercase tracking-[0.25em]"
-          style={{ color: 'var(--color-primary)' }}
-        >
+        <span className="text-xs font-bold uppercase tracking-[0.25em]" style={{ color: 'var(--color-primary)' }}>
           PrepIQ
         </span>
-
-        {/* Step indicators */}
         <div className="flex items-center gap-3">
           {[1, 2, 3].map((n) => (
             <div key={n} className="flex items-center gap-3">
@@ -303,11 +283,8 @@ export default function WizardForm() {
         </div>
       </header>
 
-      {/* Main */}
       <main className="flex-1 flex items-start justify-center px-6 sm:px-12 py-16">
         <div className="w-full max-w-lg">
-
-          {/* Error banner */}
           {error && (
             <div
               className="mb-8 px-4 py-3 text-sm font-medium border-l-2"
@@ -321,13 +298,9 @@ export default function WizardForm() {
             </div>
           )}
 
-          {/* ── STEP 1: Exam details ── */}
           {step === 1 && (
             <div>
-              <p
-                className="text-xs font-bold uppercase tracking-[0.2em] mb-3"
-                style={{ color: 'var(--color-primary)' }}
-              >
+              <p className="text-xs font-bold uppercase tracking-[0.2em] mb-3" style={{ color: 'var(--color-primary)' }}>
                 Step 1 of 3
               </p>
               <h1
@@ -339,20 +312,78 @@ export default function WizardForm() {
                   lineHeight: 1.15,
                 }}
               >
-                Tell us about your upcoming exam.
+                What are you preparing for?
               </h1>
 
               <div className="border-t" style={{ borderColor: 'var(--color-outline-variant)' }}>
-                <FieldRow label="Exam Name">
-                  <input
-                    type="text"
-                    value={step1.exam_name}
-                    onChange={(e) => setStep1({ ...step1, exam_name: e.target.value })}
-                    placeholder="e.g. Final Semester Exam, GATE 2026"
-                    className="w-full bg-transparent outline-none text-base font-medium placeholder:font-normal placeholder:opacity-40"
-                    style={{ color: 'var(--color-on-surface)' }}
-                  />
+                <FieldRow label="Track">
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <Chip
+                      label="Government (NEET / JEE)"
+                      active={step1.exam_type === 'government'}
+                      onClick={() =>
+                        setStep1({
+                          ...step1,
+                          exam_type: 'government',
+                          exam_name: '',
+                          university_name: '',
+                        })
+                      }
+                    />
+                    <Chip
+                      label="University"
+                      active={step1.exam_type === 'university'}
+                      onClick={() =>
+                        setStep1({
+                          ...step1,
+                          exam_type: 'university',
+                          exam_name: '',
+                        })
+                      }
+                    />
+                  </div>
                 </FieldRow>
+
+                {step1.exam_type === 'government' && (
+                  <FieldRow label="Exam">
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {GOVT_EXAMS.map((ex) => (
+                        <Chip
+                          key={ex}
+                          label={ex}
+                          active={step1.exam_name === ex}
+                          onClick={() => setStep1({ ...step1, exam_name: ex })}
+                        />
+                      ))}
+                    </div>
+                    <p className="text-xs opacity-40 mt-2">v1 supports NEET and JEE only.</p>
+                  </FieldRow>
+                )}
+
+                {step1.exam_type === 'university' && (
+                  <>
+                    <FieldRow label="University Name">
+                      <input
+                        type="text"
+                        value={step1.university_name}
+                        onChange={(e) => setStep1({ ...step1, university_name: e.target.value })}
+                        placeholder="e.g. VTU, Anna University"
+                        className="w-full bg-transparent outline-none text-base font-medium placeholder:font-normal placeholder:opacity-40"
+                        style={{ color: 'var(--color-on-surface)' }}
+                      />
+                    </FieldRow>
+                    <FieldRow label="Exam Name">
+                      <input
+                        type="text"
+                        value={step1.exam_name}
+                        onChange={(e) => setStep1({ ...step1, exam_name: e.target.value })}
+                        placeholder="e.g. Final Semester Exam, GATE 2026"
+                        className="w-full bg-transparent outline-none text-base font-medium placeholder:font-normal placeholder:opacity-40"
+                        style={{ color: 'var(--color-on-surface)' }}
+                      />
+                    </FieldRow>
+                  </>
+                )}
 
                 <FieldRow label="Days Until Exam">
                   <input
@@ -361,7 +392,10 @@ export default function WizardForm() {
                     max={365}
                     value={step1.days_until_exam}
                     onChange={(e) =>
-                      setStep1({ ...step1, days_until_exam: e.target.value === '' ? '' : Number(e.target.value) })
+                      setStep1({
+                        ...step1,
+                        days_until_exam: e.target.value === '' ? '' : Number(e.target.value),
+                      })
                     }
                     placeholder="e.g. 60"
                     className="w-full bg-transparent outline-none text-base font-medium placeholder:font-normal placeholder:opacity-40"
@@ -372,22 +406,14 @@ export default function WizardForm() {
               </div>
 
               <div className="mt-10">
-                <NextButton
-                  onClick={() => submitStep(1)}
-                  loading={loading}
-                  disabled={!step1.exam_name.trim() || !step1.days_until_exam}
-                />
+                <NextButton onClick={() => submitStep(1)} loading={loading} disabled={!step1Valid} />
               </div>
             </div>
           )}
 
-          {/* ── STEP 2: Subjects & study hours ── */}
           {step === 2 && (
             <div>
-              <p
-                className="text-xs font-bold uppercase tracking-[0.2em] mb-3"
-                style={{ color: 'var(--color-primary)' }}
-              >
+              <p className="text-xs font-bold uppercase tracking-[0.2em] mb-3" style={{ color: 'var(--color-primary)' }}>
                 Step 2 of 3
               </p>
               <h1
@@ -439,11 +465,7 @@ export default function WizardForm() {
                           }}
                         >
                           {s}
-                          <button
-                            type="button"
-                            onClick={() => removeSubject(s)}
-                            className="opacity-70 hover:opacity-100 leading-none"
-                          >
+                          <button type="button" onClick={() => removeSubject(s)} className="opacity-70 hover:opacity-100 leading-none">
                             ×
                           </button>
                         </span>
@@ -477,13 +499,9 @@ export default function WizardForm() {
             </div>
           )}
 
-          {/* ── STEP 3: Target score & preparation level ── */}
           {step === 3 && (
             <div>
-              <p
-                className="text-xs font-bold uppercase tracking-[0.2em] mb-3"
-                style={{ color: 'var(--color-primary)' }}
-              >
+              <p className="text-xs font-bold uppercase tracking-[0.2em] mb-3" style={{ color: 'var(--color-primary)' }}>
                 Step 3 of 3
               </p>
               <h1
@@ -506,7 +524,10 @@ export default function WizardForm() {
                     max={100}
                     value={step3.target_score}
                     onChange={(e) =>
-                      setStep3({ ...step3, target_score: e.target.value === '' ? '' : Number(e.target.value) })
+                      setStep3({
+                        ...step3,
+                        target_score: e.target.value === '' ? '' : Number(e.target.value),
+                      })
                     }
                     placeholder="e.g. 80"
                     className="w-full bg-transparent outline-none text-base font-medium placeholder:font-normal placeholder:opacity-40"
