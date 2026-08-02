@@ -104,7 +104,6 @@ async def lifespan(app: FastAPI):
     if settings.ENVIRONMENT == "production" and settings.SECRET_KEY == _insecure_default:
         raise RuntimeError("Cannot start in production with the default insecure SECRET_KEY.")
 
-    # Ensure local upload root exists
     try:
         from app.core.local_storage import _upload_root
 
@@ -113,7 +112,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("[WARN] Upload root init: %s", e)
 
-    # Optional connectivity probe
     try:
         from app.core.pyronites_client import pyronites_configured, get_pyronites_client
 
@@ -134,10 +132,32 @@ async def lifespan(app: FastAPI):
         _keep_alive_thread = start_keep_alive_thread(url=_keep_alive_endpoint, logger=logger)
         logger.info("[keep-alive] Pinging %s every 14 min", _keep_alive_endpoint)
 
+    # Exam context cache job (NEET/JEE) — monthly refresh via daemon thread
+    # Same pattern as keep-alive; not request-triggered. See exam_context_job.py.
+    _exam_context_thread = None
+    try:
+        from app.services.exam_context_job import (
+            start_exam_context_thread,
+            stop_exam_context_thread,
+        )
+
+        _exam_context_thread = start_exam_context_thread(logger_=logger)
+        logger.info(
+            "[exam-context] background thread started "
+            "(monthly refresh; EXAM_CONTEXT_REFRESH_DAYS / EXAM_CONTEXT_CHECK_HOURS)"
+        )
+    except Exception as e:
+        logger.warning("[exam-context] failed to start background thread: %s", e)
+
     yield
 
     if _keep_alive_thread is not None:
         stop_keep_alive_thread()
+    if _exam_context_thread is not None:
+        try:
+            stop_exam_context_thread()
+        except Exception:
+            pass
     logger.info("[INFO] Shutting down PrepIQ Backend Application")
 
 
@@ -168,7 +188,6 @@ def create_app() -> FastAPI:
         )
     else:
         if not allowed_origins:
-            # Live Vercel deployment + common aliases
             allowed_origins = [
                 "https://prep-iq-three.vercel.app",
                 "https://prepiq.vercel.app",
