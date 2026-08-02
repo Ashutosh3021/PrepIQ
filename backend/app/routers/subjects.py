@@ -5,6 +5,7 @@ import logging
 from .. import schemas
 from ..services.pyronites_auth import get_current_user_from_token
 from ..services.syllabus_gate import get_syllabus_status, subject_requires_syllabus_gate
+from ..services.syllabus_extraction import run_syllabus_extraction, SyllabusExtractionError
 from ..core.local_storage import save_upload
 from ..repositories import subjects as subjects_repo
 from ..repositories import papers as papers_repo
@@ -132,7 +133,7 @@ async def upload_syllabus(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
 ):
-    """Store syllabus PDF reference only. OCR/taxonomy extraction is Phase 2."""
+    """Store syllabus PDF, then extract ordered unit taxonomy (Phase 2)."""
     subject = subjects_repo.get_for_user(subject_id, current_user["id"])
     if not subject:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
@@ -152,6 +153,7 @@ async def upload_syllabus(
         current_user["id"],
         subject_id,
     )
+    # Persist file ref first; taxonomy stays null until extraction succeeds
     row = syllabus_repo.upsert_for_subject(
         subject_id,
         {
@@ -160,18 +162,54 @@ async def upload_syllabus(
             "extracted_at": None,
         },
     )
-    return {
-        "success": True,
-        "subject_id": subject_id,
-        "syllabus_id": str(row.get("id")),
-        "raw_pdf_ref": rel,
-        "extracted_taxonomy": None,
-        "message": (
-            "Syllabus file stored. Taxonomy extraction runs in a later step — "
-            "PYQ upload stays blocked until extracted_taxonomy is populated."
-        ),
-        "pyq_upload_blocked": True,
-    }
+
+    try:
+        result = run_syllabus_extraction(
+            subject_id,
+            exam_name=str(subject.get("exam_name") or ""),
+            raw_pdf_ref=rel,
+        )
+        return result
+    except SyllabusExtractionError as e:
+        logger.warning("Syllabus extraction failed for %s: %s", subject_id, e.message)
+        return {
+            "success": False,
+            "subject_id": subject_id,
+            "syllabus_id": str(row.get("id")),
+            "raw_pdf_ref": rel,
+            "extracted_taxonomy": None,
+            "extracted_at": None,
+            "error_code": e.code,
+            "message": e.message,
+            "pyq_upload_blocked": True,
+            "retry": f"POST /api/v1/subjects/{subject_id}/syllabus/extract after fixing the PDF or LLM config",
+        }
+
+
+@router.post("/{subject_id}/syllabus/extract")
+async def extract_subject_syllabus(
+    subject_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Re-run taxonomy extraction on the stored syllabus PDF (retry without re-upload)."""
+    subject = subjects_repo.get_for_user(subject_id, current_user["id"])
+    if not subject:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
+    if not subject_requires_syllabus_gate(subject):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Syllabus extraction is only for government-track (NEET/JEE) subjects.",
+        )
+    try:
+        return run_syllabus_extraction(
+            subject_id,
+            exam_name=str(subject.get("exam_name") or ""),
+        )
+    except SyllabusExtractionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error_code": e.code, "message": e.message, "pyq_upload_blocked": True},
+        )
 
 
 @router.get("/{subject_id}/syllabus")
