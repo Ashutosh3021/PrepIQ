@@ -12,17 +12,13 @@ from app.repositories import base
 logger = logging.getLogger(__name__)
 
 TABLE = "subjects"
-
-# Track metadata (Phase 0). Prefer syllabus_json until PyroCore has native columns.
 _PHASE0_KEYS = ("exam_type", "exam_name", "university_name")
 
-# Set PREPIQ_SUBJECTS_HAS_TRACK_COLUMNS=1 after ALTER TABLE adds the three columns.
+# After successful ALTER on PyroCore, default to native columns.
+# Set PREPIQ_SUBJECTS_HAS_TRACK_COLUMNS=0 to force syllabus_json-only mode.
 def _native_track_columns() -> bool:
-    return (os.getenv("PREPIQ_SUBJECTS_HAS_TRACK_COLUMNS") or "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    raw = (os.getenv("PREPIQ_SUBJECTS_HAS_TRACK_COLUMNS") or "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def _parse_jsonish(value: Any) -> Any:
@@ -42,7 +38,6 @@ def _parse_jsonish(value: Any) -> Any:
 
 
 def normalize_subject(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Surface exam_type / exam_name / university_name from syllabus_json if needed."""
     if not row:
         return row
     out = dict(row)
@@ -72,7 +67,7 @@ def get_for_user(subject_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _merge_phase0_into_syllabus_json(data: Dict[str, Any]) -> Any:
+def _merge_phase0_into_syllabus_json(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     sj = _parse_jsonish(data.get("syllabus_json"))
     if not isinstance(sj, dict):
         sj = {}
@@ -88,43 +83,80 @@ def _drop_nones(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def create(user_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
-    base_payload: Dict[str, Any] = {
+    track = {k: data.get(k) for k in _PHASE0_KEYS if data.get(k) is not None}
+    sj = _merge_phase0_into_syllabus_json({**data, **track})
+
+    # Minimal core set that has worked on this project historically
+    payload: Dict[str, Any] = {
         "id": str(data.get("id") or uuid.uuid4()),
         "user_id": user_id,
         "name": data.get("name") or "Untitled",
         "code": data.get("code"),
-        "semester": data.get("semester"),
-        "academic_year": data.get("academic_year"),
-        "total_marks": data.get("total_marks"),
-        "exam_date": data.get("exam_date"),
-        "exam_duration_minutes": data.get("exam_duration_minutes"),
-        "papers_uploaded": data.get("papers_uploaded", 0),
-        "predictions_generated": data.get("predictions_generated", 0),
-        "mock_tests_created": data.get("mock_tests_created", 0),
+        "semester": data.get("semester") if data.get("semester") is not None else 1,
+        "academic_year": data.get("academic_year") or str(datetime.now().year),
         "created_at": now,
         "updated_at": now,
     }
-
-    track = {k: data.get(k) for k in _PHASE0_KEYS if data.get(k) is not None}
-    sj = _merge_phase0_into_syllabus_json({**data, **track})
-    base_payload["syllabus_json"] = sj
+    if sj is not None:
+        payload["syllabus_json"] = sj
 
     if _native_track_columns():
-        for k, v in track.items():
-            base_payload[k] = v
+        payload.update(track)
 
-    payload = _drop_nones(base_payload)
+    # Optional counters only if caller provided them (avoid unknown-column 500s)
+    for opt in (
+        "total_marks",
+        "exam_date",
+        "exam_duration_minutes",
+        "papers_uploaded",
+        "predictions_generated",
+        "mock_tests_created",
+    ):
+        if data.get(opt) is not None:
+            payload[opt] = data.get(opt)
+
+    payload = _drop_nones(payload)
+    logger.info("subjects.create payload keys=%s", sorted(payload.keys()))
+
     try:
         return normalize_subject(base.insert_row(TABLE, payload)) or payload
     except Exception as e:
-        # If native columns were enabled but still missing, strip and retry once.
         msg = str(e)
-        if any(k in msg for k in _PHASE0_KEYS) or "Identifier" in msg:
-            logger.warning("subjects insert retry without track columns: %s", e)
-            fallback = {k: v for k, v in payload.items() if k not in _PHASE0_KEYS}
-            fallback["syllabus_json"] = sj
-            return normalize_subject(base.insert_row(TABLE, _drop_nones(fallback))) or fallback
-        raise
+        logger.error("subjects.create failed: %s", e)
+        # Progressive strip: track cols → syllabus_json → bare minimum
+        attempts = [
+            {k: v for k, v in payload.items() if k not in _PHASE0_KEYS},
+            {
+                k: v
+                for k, v in payload.items()
+                if k not in _PHASE0_KEYS and k != "syllabus_json"
+            },
+            {
+                "id": payload["id"],
+                "user_id": user_id,
+                "name": payload["name"],
+                "created_at": now,
+                "updated_at": now,
+            },
+        ]
+        last_err = e
+        for attempt in attempts:
+            try:
+                logger.warning("subjects.create retry keys=%s", sorted(attempt.keys()))
+                row = base.insert_row(TABLE, _drop_nones(attempt))
+                # If we stripped track cols, patch syllabus_json in a second update if possible
+                if sj and "syllabus_json" not in attempt:
+                    try:
+                        base.update_eq(TABLE, "id", payload["id"], {"syllabus_json": sj})
+                    except Exception:
+                        pass
+                # Reflect track fields in returned object for gate logic
+                merged = {**(row or attempt), **track, "syllabus_json": sj}
+                return normalize_subject(merged) or merged
+            except Exception as e2:
+                last_err = e2
+                continue
+        raise last_err
 
 
 def update(subject_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -145,7 +177,6 @@ def update(subject_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     except Exception as e:
         msg = str(e)
         if any(k in msg for k in _PHASE0_KEYS) or "Identifier" in msg:
-            logger.warning("subjects update retry without track columns: %s", e)
             fallback = {k: v for k, v in fields.items() if k not in _PHASE0_KEYS}
             return normalize_subject(base.update_eq(TABLE, "id", subject_id, _drop_nones(fallback)))
         raise
