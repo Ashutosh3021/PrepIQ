@@ -54,7 +54,14 @@ async def get_predictions_for_subject(
     try:
         result = prediction_service.generate_predictions(current_user["id"], subject_id)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        msg = str(e)
+        # Unsupported government exam_name is a client error, not "not found"
+        code = (
+            status.HTTP_400_BAD_REQUEST
+            if "only support NEET or JEE" in msg
+            else status.HTTP_404_NOT_FOUND
+        )
+        raise HTTPException(status_code=code, detail=msg)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -89,6 +96,14 @@ async def generate_prediction(
         result = prediction_service.generate_predictions(
             current_user["id"], prediction_request.subject_id
         )
+    except ValueError as e:
+        msg = str(e)
+        code = (
+            status.HTTP_400_BAD_REQUEST
+            if "only support NEET or JEE" in msg
+            else status.HTTP_404_NOT_FOUND
+        )
+        raise HTTPException(status_code=code, detail=msg)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
