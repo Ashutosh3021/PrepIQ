@@ -38,6 +38,9 @@ _VALID_PROB = {"very_high", "high", "moderate", "low"}
 SOURCE_TYPE_UNIVERSITY = "university_llm"
 SOURCE_TYPE_GOVERNMENT = "government_ml"
 
+# v1 government prediction track — must match schemas.GOVERNMENT_EXAMS_V1
+GOVERNMENT_EXAMS_V1 = frozenset({"NEET", "JEE"})
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -197,7 +200,6 @@ def _build_stats(question_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def _feature_rank_score(v: FeatureVector) -> float:
     """Higher = more likely to appear again (shared ranking for fallback)."""
-    # Recency-weighted recurrence, boost rising marks, penalize long silence lightly
     trend_boost = 1.0 + max(-0.5, min(0.5, v.marks_trend / 20.0))
     gap_pen = 1.0 / (1.0 + 0.15 * max(0, v.last_asked_gap))
     return float(v.recency_weight) * max(1, v.recurrence_count) * trend_boost * gap_pen
@@ -296,8 +298,8 @@ def _stats_fallback_predictions(stats: Dict[str, Any], source: str) -> List[Dict
 def _strip_fences(raw: str) -> str:
     text = raw.strip()
     if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
+        text = re.sub(r"^```[a-zA-Z0-9_-]*\\n?", "", text)
+        text = re.sub(r"\\n?```$", "", text)
     return text.strip()
 
 
@@ -376,9 +378,20 @@ def generate_predictions(user_id: str, subject_id: str) -> Dict[str, Any]:
             "warning": None,
         }
 
-    # Government track (NEET/JEE): per-user causal ML — no cross-user pooling
+    # Track routing (v1)
+    # - government + NEET/JEE → Phase 6 causal ML
+    # - government + anything else → explicit rejection (not silent university fallback)
+    # - university (any exam_name) → Phase 5 enhanced LLM
     exam_type = str(subject.get("exam_type") or "").strip().lower()
+    exam_name = str(subject.get("exam_name") or "").strip().upper()
+
     if exam_type == "government":
+        if exam_name not in GOVERNMENT_EXAMS_V1:
+            raise ValueError(
+                f"Government-track predictions in v1 only support NEET or JEE "
+                f"(got exam_name={exam_name or 'empty'!r}). "
+                f"Create the subject as university track, or use exam_name NEET/JEE."
+            )
         return _generate_government_predictions(user_id, subject_id, subject)
 
     stats = _build_stats(question_rows)
@@ -439,16 +452,16 @@ Sample extracted questions (for wording/style grounding only):
 {sample_block}
 
 Return JSON only with this shape:
-{{"predictions":[{{"question_number":1,"text":"...","topic":"...","unit":"...","marks":5,"probability":"high","confidence_score":0.0,"reasoning":"..."}}],"total_marks":0,"coverage_percentage":0,"unit_coverage":{{}},"generated_at":"ISO"}}
+{{\"predictions\":[{{\"question_number\":1,\"text\":\"...\",\"topic\":\"...\",\"unit\":\"...\",\"marks\":5,\"probability\":\"high\",\"confidence_score\":0.0,\"reasoning\":\"...\"}}],\"total_marks\":0,\"coverage_percentage\":0,\"unit_coverage\":{{}},\"generated_at\":\"ISO\"}}
 
 Rules:
 - Rank topics using the structured signals (high recurrence + high recency_weight + rising marks_trend + small last_asked_gap).
 - In every reasoning field, cite the numeric signals that most influenced the item
-  (e.g. "recurrence=3, recency_weight=1.72, marks_trend=+2.1, last_asked_gap=1").
+  (e.g. \"recurrence=3, recency_weight=1.72, marks_trend=+2.1, last_asked_gap=1\").
 - Do not invent past papers you were not given.
 - confidence_score between 0 and 1.
 - At most {MAX_ITEMS} predictions, ranked by likelihood.
-- Sample question text is for style/grounding only; do not copy it verbatim as a "prediction".
+- Sample question text is for style/grounding only; do not copy it verbatim as a \"prediction\".
 """
 
     llm_preds = _call_llm(prompt)
@@ -510,7 +523,6 @@ Rules:
         record_id = str(record.get("id")) if record else None
     except Exception as e:
         logger.error("Failed to persist prediction for subject %s: %s", subject_id, e)
-        # Retry without source_type if column missing on remote schema
         msg = str(e)
         if "source_type" in msg or "Identifier" in msg:
             try:
