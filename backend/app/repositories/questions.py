@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
+import logging
 import uuid
 
 from app.repositories import base
 from app.repositories import papers as papers_repo
+
+logger = logging.getLogger(__name__)
 
 TABLE = "questions"
 
@@ -18,7 +21,6 @@ def list_for_subject(subject_id: str) -> List[Dict[str, Any]]:
     paper_ids = {str(p["id"]) for p in papers_repo.list_for_subject(subject_id)}
     if not paper_ids:
         return []
-    # Prefer server-side filter when available; else filter client-side
     try:
         rows = base.select_eq(TABLE, "subject_id", subject_id)
         if rows:
@@ -52,15 +54,32 @@ def create_many(paper_id: str, subject_id: str, items: List[Dict[str, Any]]) -> 
             "correct_answer": item.get("correct_answer"),
             "topics_json": item.get("topics_json"),
             "text_length": item.get("length") or len(str(item.get("text") or "")),
-            # Government-track syllabus tagging (filled in a later phase)
-            "tagged_unit": item.get("tagged_unit"),
-            "tagging_confidence": item.get("tagging_confidence"),
             "created_at": now,
         }
-        created.append(base.insert_row(TABLE, row))
+        # Only send tag fields when present (columns may be missing until ALTER)
+        if item.get("tagged_unit") is not None:
+            row["tagged_unit"] = item.get("tagged_unit")
+        if item.get("tagging_confidence") is not None:
+            row["tagging_confidence"] = item.get("tagging_confidence")
+        # Drop Nones so PyroCore does not reject unknown null keys
+        row = {k: v for k, v in row.items() if v is not None}
+        try:
+            created.append(base.insert_row(TABLE, row))
+        except Exception as e:
+            msg = str(e)
+            if "tagged_unit" in msg or "tagging_confidence" in msg:
+                row.pop("tagged_unit", None)
+                row.pop("tagging_confidence", None)
+                created.append(base.insert_row(TABLE, row))
+            else:
+                logger.error("questions create failed: %s", e)
+                raise
     return created
 
 
 def update(question_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Patch fields (e.g. tagged_unit / tagging_confidence after LLM tagging)."""
-    return base.update_eq(TABLE, "id", question_id, fields)
+    payload = {k: v for k, v in fields.items() if v is not None or k in ("tagged_unit",)}
+    # Allow explicit null for unmatched tags
+    if "tagged_unit" in fields and fields["tagged_unit"] is None:
+        payload["tagged_unit"] = None
+    return base.update_eq(TABLE, "id", question_id, payload)

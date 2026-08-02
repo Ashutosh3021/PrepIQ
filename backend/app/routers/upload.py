@@ -16,6 +16,7 @@ from ..core.llm_provider import get_llm_client
 from ..core.local_storage import save_upload, resolve_path
 from ..services.pyronites_auth import get_current_user_from_token
 from ..services.syllabus_gate import assert_pyq_upload_allowed
+from ..services.unit_tagging import tag_after_upload
 from ..repositories import subjects as subjects_repo
 from ..repositories import papers as papers_repo
 from ..repositories import questions as questions_repo
@@ -61,7 +62,6 @@ async def upload_and_analyze(
         if not subject:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
 
-        # Government track: require extracted_taxonomy before any PYQ / question_paper upload
         if material_type in ("pyq", "question_paper", "past_paper"):
             assert_pyq_upload_allowed(subject)
 
@@ -125,6 +125,10 @@ async def upload_and_analyze(
         paper_id = str(paper.get("id"))
         questions_repo.create_many(paper_id, subject_id, parsed_questions)
 
+        # Phase 3: government-track only — tag against syllabus taxonomy
+        upload_progress[upload_id]["current_step"] = "Tagging units..."
+        tagging_result = tag_after_upload(subject, paper_id)
+
         analysis_result = await generate_upload_analysis(subject_id, parsed_questions)
 
         upload_progress[upload_id]["status"] = "completed"
@@ -153,6 +157,7 @@ async def upload_and_analyze(
                 ],
             },
             "analysis": analysis_result,
+            "unit_tagging": tagging_result,
         }
 
     except HTTPException:
