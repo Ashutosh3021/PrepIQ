@@ -15,6 +15,7 @@ from .. import schemas
 from ..core.local_storage import delete_upload, resolve_path, save_upload
 from ..services.pyronites_auth import get_current_user_from_token
 from ..services.syllabus_gate import assert_pyq_upload_allowed
+from ..services.unit_tagging import tag_after_upload
 from ..repositories import subjects as subjects_repo
 from ..repositories import papers as papers_repo
 from ..repositories import questions as questions_repo
@@ -121,7 +122,6 @@ async def upload_papers(
             parser = _get_pdf_parser()
             text_content = parser.extract_text(str(abs_path))
             questions_data = parser.parse_questions_from_text(text_content or "")
-            # de-dupe lightly by normalized text
             seen = set()
             unique = []
             for q in questions_data:
@@ -140,6 +140,8 @@ async def upload_papers(
                     "extraction_method": "local_parser",
                 },
             )
+            # Phase 3 — government only (no-op for university)
+            tagging = tag_after_upload(subject, paper_id)
             results.append(
                 {
                     "paper_id": paper_id,
@@ -147,7 +149,7 @@ async def upload_papers(
                     "message": f"Successfully processed {len(unique)} questions",
                     "estimated_time": "0",
                     "questions_count": len(unique),
-                    "metadata": {},
+                    "metadata": {"unit_tagging": tagging},
                     "images_extracted": 0,
                 }
             )
@@ -199,7 +201,7 @@ async def get_paper_preview(
                 if len(str(q.get("question_text") or "")) > 100
                 else q.get("question_text"),
                 "marks": q.get("marks"),
-                "unit": q.get("unit_name"),
+                "unit": q.get("tagged_unit") or q.get("unit_name"),
             }
             for q in qs
         ],
@@ -244,7 +246,6 @@ async def delete_paper(
         except Exception as e:
             logger.warning("Local file delete failed: %s", e)
 
-    # Best-effort: delete paper row (questions may remain orphaned if cascade absent)
     from app.repositories import base
 
     base.delete_eq("question_papers", "id", paper_id)
