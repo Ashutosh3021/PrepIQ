@@ -28,9 +28,8 @@ def get_for_subject(subject_id: str) -> Optional[Dict[str, Any]]:
 
 def create(subject_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
+    # Keep extracted_taxonomy null until Phase 2 pipeline succeeds — do not coerce to [].
     taxonomy = data.get("extracted_taxonomy")
-    if taxonomy is None:
-        taxonomy = []
     row = {
         "id": str(data.get("id") or uuid.uuid4()),
         "subject_id": subject_id,
