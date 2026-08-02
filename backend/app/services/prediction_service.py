@@ -1,8 +1,11 @@
 """
-Pyronites-backed prediction pipeline (Fix Phase C).
+Pyronites-backed prediction pipeline (Fix Phase C + Phase 6 university signals).
 
-Single entry for live API. LLM via provider capability="prediction".
-No SQLAlchemy. No Bytez on this path.
+University track: LLM prompt + stats fallback consume shared feature_engineering
+signals (recurrence, recency_weight, marks_trend, last_asked_gap) per topic.
+
+Tiering (Tier 0 / cold / full via PREDICTION_MIN_PAPERS_FULL) is unchanged.
+source_type persisted as "university_llm" for this path.
 """
 from __future__ import annotations
 
@@ -12,13 +15,18 @@ import os
 import re
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from app.core.llm_provider import get_llm_client
 from app.repositories import papers as papers_repo
 from app.repositories import predictions as predictions_repo
 from app.repositories import questions as questions_repo
 from app.repositories import subjects as subjects_repo
+from app.services.feature_engineering import (
+    FeatureVector,
+    compute_university_topic_features,
+    features_to_prompt_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +35,7 @@ MAX_ITEMS = int(os.getenv("PREDICTION_MAX_ITEMS", "10") or "10")
 CONTEXT_CHARS = int(os.getenv("PREDICTION_CONTEXT_CHARS", "12000") or "12000")
 
 _VALID_PROB = {"very_high", "high", "moderate", "low"}
+SOURCE_TYPE_UNIVERSITY = "university_llm"
 
 
 def _now() -> datetime:
@@ -74,7 +83,6 @@ def normalize_predicted_item(raw: Dict[str, Any], index: int, source: str) -> Di
         "confidence_score": conf,
         "reasoning": str(raw.get("reasoning") or ""),
         "source": source,
-        # help mock-test sample keys
         "question_text": text,
         "id": str(raw.get("id") or f"pred-{index}"),
     }
@@ -104,7 +112,74 @@ def _build_stats(question_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _feature_rank_score(v: FeatureVector) -> float:
+    """Higher = more likely to appear again (shared ranking for fallback)."""
+    # Recency-weighted recurrence, boost rising marks, penalize long silence lightly
+    trend_boost = 1.0 + max(-0.5, min(0.5, v.marks_trend / 20.0))
+    gap_pen = 1.0 / (1.0 + 0.15 * max(0, v.last_asked_gap))
+    return float(v.recency_weight) * max(1, v.recurrence_count) * trend_boost * gap_pen
+
+
+def _trend_phrase(slope: float) -> str:
+    if slope > 0.5:
+        return "marks trend increasing"
+    if slope < -0.5:
+        return "marks trend decreasing"
+    return "marks trend flat"
+
+
+def _stats_fallback_from_features(
+    vectors: Sequence[FeatureVector],
+    source: str,
+) -> List[Dict[str, Any]]:
+    """
+    Ranked fallback items grounded in the same 4-signal table as the LLM prompt.
+    Not generic study tips — each item cites recurrence / recency / trend / gap.
+    """
+    ranked = sorted(vectors, key=_feature_rank_score, reverse=True)
+    out: List[Dict[str, Any]] = []
+    for i, v in enumerate(ranked[:MAX_ITEMS], start=1):
+        trend = _trend_phrase(v.marks_trend)
+        conf = min(
+            0.75,
+            max(
+                0.35,
+                0.3
+                + 0.12 * min(v.recurrence_count, 5)
+                + 0.08 * min(v.recency_weight, 3.0)
+                + (0.05 if v.marks_trend > 0 else 0.0),
+            ),
+        )
+        text = (
+            f"Likely exam focus: {v.key} — appeared across {v.recurrence_count} year(s), "
+            f"recency_weight={v.recency_weight:.3f}, {trend} (slope={v.marks_trend:.2f}), "
+            f"last asked {v.last_asked_gap} year(s) ago."
+        )
+        reasoning = (
+            f"Signal-ranked fallback (no LLM). Primary signals: recurrence={v.recurrence_count}, "
+            f"recency_weight={v.recency_weight:.3f}, marks_trend={v.marks_trend:.3f}, "
+            f"last_asked_gap={v.last_asked_gap}."
+        )
+        out.append(
+            normalize_predicted_item(
+                {
+                    "question_number": i,
+                    "text": text,
+                    "topic": v.key,
+                    "unit": v.key,
+                    "marks": 5,
+                    "confidence_score": conf,
+                    "reasoning": reasoning,
+                },
+                i,
+                source,
+            )
+        )
+    return out
+
+
 def _stats_fallback_predictions(stats: Dict[str, Any], source: str) -> List[Dict[str, Any]]:
+    """Legacy frequency-only fallback when feature vectors are empty."""
     units = stats.get("unit_frequency") or {}
     ranked = sorted(units.items(), key=lambda x: x[1], reverse=True)
     out: List[Dict[str, Any]] = []
@@ -115,12 +190,18 @@ def _stats_fallback_predictions(stats: Dict[str, Any], source: str) -> List[Dict
             normalize_predicted_item(
                 {
                     "question_number": i,
-                    "text": f"Focus revision on unit/topic: {unit} (appeared {count} times in uploaded papers).",
+                    "text": (
+                        f"Topic focus: {unit} (raw frequency={count}/{total}; "
+                        f"year-level feature signals unavailable for this subject)."
+                    ),
                     "topic": unit,
                     "unit": unit,
                     "marks": 5,
                     "confidence_score": conf,
-                    "reasoning": "Derived from frequency statistics only (LLM unavailable or parse failed).",
+                    "reasoning": (
+                        f"Frequency-only fallback. count={count}, total_questions={total}. "
+                        f"Feature signals missing (no exam_year / topic years)."
+                    ),
                 },
                 i,
                 source,
@@ -175,7 +256,6 @@ def generate_predictions(user_id: str, subject_id: str) -> Dict[str, Any]:
         raise ValueError("Subject not found")
 
     completed = papers_repo.list_completed_for_subject(subject_id)
-    # Also count any paper with questions even if status lagging
     paper_count = len(completed)
     question_rows = questions_repo.list_for_subject(subject_id)
     completed_ids = {str(p.get("id")) for p in completed}
@@ -185,10 +265,9 @@ def generate_predictions(user_id: str, subject_id: str) -> Dict[str, Any]:
             question_rows = filtered
 
     if paper_count == 0 and question_rows:
-        # questions exist but status not marked completed — still allow cold/full by unique papers
         paper_count = len({str(q.get("paper_id")) for q in question_rows if q.get("paper_id")})
 
-    # Tier 0
+    # Tier 0 — unchanged
     if paper_count == 0 or not question_rows:
         return {
             "id": None,
@@ -206,6 +285,7 @@ def generate_predictions(user_id: str, subject_id: str) -> Dict[str, Any]:
                 f"Add {MIN_PAPERS_FULL}+ papers for fuller AI-powered predictions."
             ),
             "source": "no_data",
+            "source_type": SOURCE_TYPE_UNIVERSITY,
             "warning": None,
         }
 
@@ -215,6 +295,25 @@ def generate_predictions(user_id: str, subject_id: str) -> Dict[str, Any]:
     syllabus_text = ""
     if syllabus:
         syllabus_text = json.dumps(syllabus) if isinstance(syllabus, (dict, list)) else str(syllabus)
+
+    # Phase 4 university signals (on-request; no unit_features write)
+    try:
+        topic_features = compute_university_topic_features(subject_id)
+    except Exception as e:
+        logger.warning("university topic features failed: %s", e)
+        topic_features = []
+
+    feature_block = features_to_prompt_block(topic_features, limit=25)
+    feature_json = [
+        {
+            "topic": v.key,
+            "recurrence_count": v.recurrence_count,
+            "recency_weight": v.recency_weight,
+            "marks_trend": v.marks_trend,
+            "last_asked_gap": v.last_asked_gap,
+        }
+        for v in topic_features
+    ]
 
     cold = paper_count < MIN_PAPERS_FULL
     source_tag = "cold_start" if cold else "full"
@@ -226,31 +325,47 @@ def generate_predictions(user_id: str, subject_id: str) -> Dict[str, Any]:
 
     samples = stats.get("sample_questions") or []
     sample_block = "\n".join(f"- {s}" for s in samples)[:CONTEXT_CHARS]
-    prompt = f"""You are an exam prediction engine for engineering students.
+
+    prompt = f"""You are an exam prediction engine for university/engineering students.
 Subject: {subject_name}
 Papers analyzed: {paper_count}
 Question count: {stats.get('total_questions')}
-Unit frequency: {json.dumps(stats.get('unit_frequency') or {})}
+
+STRUCTURED TOPIC SIGNALS (primary evidence — use these numbers):
+Each row is topic | recurrence_count | recency_weight | marks_trend_slope | last_asked_gap_years
+{feature_block}
+
+Structured JSON of the same signals:
+{json.dumps(feature_json)[:4000]}
+
+Raw frequency counts (secondary, for volume only):
+{json.dumps(stats.get('unit_frequency') or {})}
 Marks distribution: {json.dumps(stats.get('marks_distribution') or {})}
 Syllabus (optional): {syllabus_text[:2000]}
 
-Sample extracted questions:
+Sample extracted questions (for wording/style grounding only):
 {sample_block}
 
 Return JSON only with this shape:
 {{"predictions":[{{"question_number":1,"text":"...","topic":"...","unit":"...","marks":5,"probability":"high","confidence_score":0.0,"reasoning":"..."}}],"total_marks":0,"coverage_percentage":0,"unit_coverage":{{}},"generated_at":"ISO"}}
 
 Rules:
-- Ground topics in the provided samples and unit frequencies.
-- Do not invent university-specific past papers you were not given.
+- Rank topics using the structured signals (high recurrence + high recency_weight + rising marks_trend + small last_asked_gap).
+- In every reasoning field, cite the numeric signals that most influenced the item
+  (e.g. "recurrence=3, recency_weight=1.72, marks_trend=+2.1, last_asked_gap=1").
+- Do not invent past papers you were not given.
 - confidence_score between 0 and 1.
 - At most {MAX_ITEMS} predictions, ranked by likelihood.
+- Sample question text is for style/grounding only; do not copy it verbatim as a "prediction".
 """
 
     llm_preds = _call_llm(prompt)
     fallback_used = False
     if not llm_preds:
-        llm_preds = _stats_fallback_predictions(stats, "stats")
+        if topic_features:
+            llm_preds = _stats_fallback_from_features(topic_features, "stats")
+        else:
+            llm_preds = _stats_fallback_predictions(stats, "stats")
         fallback_used = True
         source_tag = "stats" if not cold else "cold_start"
 
@@ -267,7 +382,6 @@ Rules:
         unit_coverage[u] = unit_coverage.get(u, 0) + 1
     total_marks = sum(int(p.get("marks") or 0) for p in final)
 
-    # Honest coverage: share of observed historical units represented in predictions
     hist_units = set((stats.get("unit_frequency") or {}).keys())
     if hist_units and final:
         coverage_percentage = int(round(100 * len(set(unit_coverage) & hist_units) / len(hist_units)))
@@ -287,20 +401,50 @@ Rules:
                 "unit_coverage": unit_coverage,
                 "ml_analysis_json": {
                     "source": source_tag,
+                    "source_type": SOURCE_TYPE_UNIVERSITY,
                     "fallback_used": fallback_used,
                     "paper_count": paper_count,
+                    "topic_features": feature_json,
                     "stats": {
                         "unit_frequency": stats.get("unit_frequency"),
                         "total_questions": stats.get("total_questions"),
                     },
                 },
                 "prediction_accuracy_score": 0.0,
+                "source_type": SOURCE_TYPE_UNIVERSITY,
+                "model_version": None,
             },
         )
         record_id = str(record.get("id")) if record else None
     except Exception as e:
         logger.error("Failed to persist prediction for subject %s: %s", subject_id, e)
-        persist_warning = f"Generated in-memory only (persist failed: {e})"
+        # Retry without source_type if column missing on remote schema
+        msg = str(e)
+        if "source_type" in msg or "Identifier" in msg:
+            try:
+                record = predictions_repo.create(
+                    user_id,
+                    subject_id,
+                    {
+                        "predictions": final,
+                        "total_questions": len(final),
+                        "total_marks": total_marks,
+                        "unit_coverage": unit_coverage,
+                        "ml_analysis_json": {
+                            "source": source_tag,
+                            "source_type": SOURCE_TYPE_UNIVERSITY,
+                            "fallback_used": fallback_used,
+                            "paper_count": paper_count,
+                            "topic_features": feature_json,
+                        },
+                        "prediction_accuracy_score": 0.0,
+                    },
+                )
+                record_id = str(record.get("id")) if record else None
+            except Exception as e2:
+                persist_warning = f"Generated in-memory only (persist failed: {e2})"
+        else:
+            persist_warning = f"Generated in-memory only (persist failed: {e})"
 
     combined_warning = warning
     if persist_warning:
@@ -320,6 +464,7 @@ Rules:
         "message": None,
         "warning": combined_warning,
         "source": source_tag,
+        "source_type": SOURCE_TYPE_UNIVERSITY,
     }
 
 
@@ -349,7 +494,6 @@ def _row_to_response(row: Dict[str, Any]) -> Dict[str, Any]:
             preds = []
     else:
         preds = raw if isinstance(raw, list) else []
-    # re-normalize for stable fields
     if isinstance(preds, list):
         preds = [
             normalize_predicted_item(p, i + 1, str(p.get("source") or "stored"))
@@ -373,5 +517,6 @@ def _row_to_response(row: Dict[str, Any]) -> Dict[str, Any]:
         "generated_at": row.get("created_at") or _now(),
         "fallback_used": False,
         "source": "stored",
+        "source_type": row.get("source_type") or SOURCE_TYPE_UNIVERSITY,
         "accuracy_score": row.get("prediction_accuracy_score"),
     }
