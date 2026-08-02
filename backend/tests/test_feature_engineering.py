@@ -35,28 +35,22 @@ def test_recurrence_distinct_years():
 
 
 def test_recency_weight_prefers_recent():
-    # Same number of distinct years; more recent set should score higher
     older = compute_recency_weight([2018, 2019], reference_year=2024)
     newer = compute_recency_weight([2022, 2023], reference_year=2024)
     assert newer > older
 
 
 def test_recency_weight_formula():
-    # Single year at reference → weight 1.0
     assert compute_recency_weight([2024], reference_year=2024) == 1.0
-    # One year back: decay ** 1
     expected = round(RECENCY_DECAY ** 1, 6)
     assert compute_recency_weight([2023], reference_year=2024) == expected
-    # Two distinct years at ref and ref-1
     expected2 = round(1.0 + RECENCY_DECAY, 6)
     assert compute_recency_weight([2023, 2024], reference_year=2024) == expected2
 
 
 def test_marks_trend_increasing():
-    # marks rise with year → positive slope
     slope = compute_marks_trend([(2020, 10), (2021, 20), (2022, 30)])
     assert slope > 0
-    # Exactly +10 marks/year
     assert math.isclose(slope, 10.0, rel_tol=1e-6)
 
 
@@ -79,11 +73,11 @@ def test_last_asked_gap():
 
 
 def test_aggregate_observations():
-    # Unit A: 2020 (5m), 2022 (10m) — increasing, gap 2 from 2024
-    # Unit B: 2023 (8m) only — recurrence 1, gap 1
+    # Unit A: 2020 totals 10 marks, 2022 totals 15 → slope +2.5, gap 2 from 2024
+    # Unit B: 2023 only — recurrence 1, gap 1
     obs = [
         ("Unit A", 2020, 5),
-        ("Unit A", 2022, 10),
+        ("Unit A", 2022, 15),
         ("Unit B", 2023, 8),
         ("Unit A", 2020, 5),  # same year again — recurrence still 2
     ]
@@ -95,6 +89,7 @@ def test_aggregate_observations():
     assert a.recurrence_count == 2
     assert a.last_asked_gap == 2
     assert a.marks_trend > 0
+    assert math.isclose(a.marks_trend, 2.5, rel_tol=1e-6)
     assert a.recency_weight > 0
 
     b = by_key["Unit B"]
@@ -106,7 +101,7 @@ def test_aggregate_observations():
 def test_skips_empty_keys_and_bad_years():
     obs = [
         ("", 2020, 5),
-        ("Unit X", 1800, 5),  # out of range year
+        ("Unit X", 1800, 5),
         ("Unit X", 2021, 5),
     ]
     vectors = compute_features_for_observations(obs, reference_year=2024)
@@ -116,7 +111,6 @@ def test_skips_empty_keys_and_bad_years():
 
 
 if __name__ == "__main__":
-    # Minimal runner without pytest
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
     for fn in tests:
