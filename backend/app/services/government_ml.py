@@ -561,6 +561,22 @@ def generate_government_predictions(
                 "model_version": model_version,
             }
 
+    # Phase 7 — external exam context (post-hoc, not a regression feature).
+    # See exam_context_job.apply_context_post_hoc docstring for rationale.
+    exam_name = str(subject.get("exam_name") or "").strip()
+    context_summary = ""
+    try:
+        from app.services.exam_context_job import (
+            apply_context_post_hoc,
+            load_context_summary_for_exam,
+        )
+
+        context_summary = load_context_summary_for_exam(exam_name)
+        if context_summary:
+            preds = apply_context_post_hoc(preds, context_summary)
+    except Exception as e:
+        logger.warning("exam context post-hoc skipped: %s", e)
+
     unit_coverage: Dict[str, int] = {}
     for p in preds:
         u = str(p.get("unit") or "General")
@@ -589,6 +605,10 @@ def generate_government_predictions(
             "unit_features_table": feature_table,
             "min_history_years": MIN_HISTORY_YEARS,
             "feature_names": list(FEATURE_NAMES),
+            "exam_context_applied": bool(context_summary),
+            "exam_context_len": len(context_summary or ""),
+            # Note: context_summary itself is intentionally NOT echoed here to
+            # reduce risk of accidental API leakage; only length/flag.
         },
     }
 
