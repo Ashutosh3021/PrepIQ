@@ -36,10 +36,93 @@ CONTEXT_CHARS = int(os.getenv("PREDICTION_CONTEXT_CHARS", "12000") or "12000")
 
 _VALID_PROB = {"very_high", "high", "moderate", "low"}
 SOURCE_TYPE_UNIVERSITY = "university_llm"
+SOURCE_TYPE_GOVERNMENT = "government_ml"
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _generate_government_predictions(
+    user_id: str, subject_id: str, subject: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Dispatch to government_ml service and persist with source_type/model_version."""
+    from app.services.government_ml import generate_government_predictions as gov_gen
+
+    result = gov_gen(user_id, subject_id, subject)
+    final = result.get("predictions") or []
+    unit_coverage = result.get("unit_coverage") or {}
+    total_marks = int(result.get("total_marks") or 0)
+    model_version = result.get("model_version")
+    ml_analysis = result.get("ml_analysis_json") or {}
+
+    record_id: Optional[str] = None
+    persist_warning: Optional[str] = None
+    try:
+        record = predictions_repo.create(
+            user_id,
+            subject_id,
+            {
+                "predictions": final,
+                "total_questions": len(final),
+                "total_marks": total_marks,
+                "unit_coverage": unit_coverage,
+                "ml_analysis_json": ml_analysis,
+                "prediction_accuracy_score": 0.0,
+                "source_type": SOURCE_TYPE_GOVERNMENT,
+                "model_version": model_version,
+            },
+        )
+        record_id = str(record.get("id")) if record else None
+    except Exception as e:
+        logger.error("Failed to persist government prediction for %s: %s", subject_id, e)
+        msg = str(e)
+        if "source_type" in msg or "model_version" in msg or "Identifier" in msg:
+            try:
+                record = predictions_repo.create(
+                    user_id,
+                    subject_id,
+                    {
+                        "predictions": final,
+                        "total_questions": len(final),
+                        "total_marks": total_marks,
+                        "unit_coverage": unit_coverage,
+                        "ml_analysis_json": {
+                            **ml_analysis,
+                            "source_type": SOURCE_TYPE_GOVERNMENT,
+                            "model_version": model_version,
+                        },
+                        "prediction_accuracy_score": 0.0,
+                    },
+                )
+                record_id = str(record.get("id")) if record else None
+            except Exception as e2:
+                persist_warning = f"Generated in-memory only (persist failed: {e2})"
+        else:
+            persist_warning = f"Generated in-memory only (persist failed: {e})"
+
+    warning = result.get("warning")
+    if persist_warning:
+        warning = f"{warning + ' ' if warning else ''}{persist_warning}".strip()
+
+    return {
+        "id": record_id,
+        "subject_id": subject_id,
+        "predictions": final,
+        "predicted_questions": final,
+        "total_marks": total_marks,
+        "coverage_percentage": int(result.get("coverage_percentage") or 0),
+        "unit_coverage": unit_coverage,
+        "generated_at": result.get("generated_at") or _now(),
+        "fallback_used": bool(result.get("fallback_used")),
+        "fallback_reason": result.get("fallback_reason"),
+        "message": result.get("message"),
+        "warning": warning,
+        "source": result.get("source") or "government_ml",
+        "source_type": SOURCE_TYPE_GOVERNMENT,
+        "model_version": model_version,
+        "ml_analysis_json": ml_analysis,
+    }
 
 
 def _prob_from_confidence(conf: float) -> str:
@@ -269,6 +352,10 @@ def generate_predictions(user_id: str, subject_id: str) -> Dict[str, Any]:
 
     # Tier 0 — unchanged
     if paper_count == 0 or not question_rows:
+        exam_type = str(subject.get("exam_type") or "").strip().lower()
+        empty_source = (
+            "government_ml" if exam_type == "government" else SOURCE_TYPE_UNIVERSITY
+        )
         return {
             "id": None,
             "subject_id": subject_id,
@@ -285,9 +372,14 @@ def generate_predictions(user_id: str, subject_id: str) -> Dict[str, Any]:
                 f"Add {MIN_PAPERS_FULL}+ papers for fuller AI-powered predictions."
             ),
             "source": "no_data",
-            "source_type": SOURCE_TYPE_UNIVERSITY,
+            "source_type": empty_source,
             "warning": None,
         }
+
+    # Government track (NEET/JEE): per-user causal ML — no cross-user pooling
+    exam_type = str(subject.get("exam_type") or "").strip().lower()
+    if exam_type == "government":
+        return _generate_government_predictions(user_id, subject_id, subject)
 
     stats = _build_stats(question_rows)
     subject_name = str(subject.get("name") or "Subject")
