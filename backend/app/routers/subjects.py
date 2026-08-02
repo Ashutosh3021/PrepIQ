@@ -6,6 +6,7 @@ from .. import schemas
 from ..services.pyronites_auth import get_current_user_from_token
 from ..services.syllabus_gate import get_syllabus_status, subject_requires_syllabus_gate
 from ..services.syllabus_extraction import run_syllabus_extraction, SyllabusExtractionError
+from ..services.unit_tagging import tag_questions_for_subject
 from ..core.local_storage import save_upload
 from ..repositories import subjects as subjects_repo
 from ..repositories import papers as papers_repo
@@ -228,3 +229,21 @@ async def get_subject_syllabus(
         **st,
         "pyq_upload_blocked": subject_requires_syllabus_gate(subject) and not st["taxonomy_ready"],
     }
+
+
+@router.post("/{subject_id}/questions/retag")
+async def retag_subject_questions(
+    subject_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Backfill unit tags for all questions on a government subject."""
+    subject = subjects_repo.get_for_user(subject_id, current_user["id"])
+    if not subject:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
+    if not subject_requires_syllabus_gate(subject):
+        return {
+            "skipped": True,
+            "reason": "not_government",
+            "message": "Unit tagging applies only to government-track subjects.",
+        }
+    return tag_questions_for_subject(subject_id)
