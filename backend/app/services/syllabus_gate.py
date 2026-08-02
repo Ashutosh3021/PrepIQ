@@ -1,11 +1,14 @@
 """Hard gate: government-track subjects require syllabus taxonomy before PYQ upload."""
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import logging
+from typing import Any, Dict
 
 from fastapi import HTTPException, status
 
 from app.repositories import syllabus as syllabus_repo
+
+logger = logging.getLogger(__name__)
 
 GATE_MESSAGE = (
     "Upload your official syllabus first. "
@@ -31,7 +34,19 @@ def subject_requires_syllabus_gate(subject: Dict[str, Any]) -> bool:
 
 
 def get_syllabus_status(subject_id: str) -> Dict[str, Any]:
-    row = syllabus_repo.get_for_subject(subject_id)
+    try:
+        row = syllabus_repo.get_for_subject(subject_id)
+    except Exception as e:
+        # Table missing / PyroCore 404 — treat as no syllabus yet, do not 500 the request
+        logger.warning("get_syllabus_status failed for %s: %s", subject_id, e)
+        return {
+            "has_row": False,
+            "raw_pdf_ref": None,
+            "extracted_taxonomy": None,
+            "taxonomy_ready": False,
+            "extracted_at": None,
+            "error": str(e),
+        }
     tax = row.get("extracted_taxonomy") if row else None
     return {
         "has_row": row is not None,
