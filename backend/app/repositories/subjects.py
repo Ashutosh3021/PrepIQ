@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 TABLE = "subjects"
 _PHASE0_KEYS = ("exam_type", "exam_name", "university_name")
 
-# After successful ALTER on PyroCore, default to native columns.
-# Set PREPIQ_SUBJECTS_HAS_TRACK_COLUMNS=0 to force syllabus_json-only mode.
+
 def _native_track_columns() -> bool:
+    # Default ON — columns confirmed present after ALTER on production PyroCore.
     raw = (os.getenv("PREPIQ_SUBJECTS_HAS_TRACK_COLUMNS") or "1").strip().lower()
     return raw not in ("0", "false", "no", "off")
 
@@ -67,26 +67,13 @@ def get_for_user(subject_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _merge_phase0_into_syllabus_json(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    sj = _parse_jsonish(data.get("syllabus_json"))
-    if not isinstance(sj, dict):
-        sj = {}
-    for key in _PHASE0_KEYS:
-        if data.get(key) is not None:
-            sj[key] = data.get(key)
-    return sj or None
-
-
 def _drop_nones(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in payload.items() if v is not None}
 
 
 def create(user_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Insert subject using the same shape that succeeds via direct PyroCore POST."""
     now = datetime.now(timezone.utc).isoformat()
-    track = {k: data.get(k) for k in _PHASE0_KEYS if data.get(k) is not None}
-    sj = _merge_phase0_into_syllabus_json({**data, **track})
-
-    # Minimal core set that has worked on this project historically
     payload: Dict[str, Any] = {
         "id": str(data.get("id") or uuid.uuid4()),
         "user_id": user_id,
@@ -97,13 +84,12 @@ def create(user_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": now,
         "updated_at": now,
     }
-    if sj is not None:
-        payload["syllabus_json"] = sj
-
+    # Native track columns (do NOT send nested syllabus_json — causes 500 on some PyroCore builds)
     if _native_track_columns():
-        payload.update(track)
+        for k in _PHASE0_KEYS:
+            if data.get(k) is not None:
+                payload[k] = data.get(k)
 
-    # Optional counters only if caller provided them (avoid unknown-column 500s)
     for opt in (
         "total_marks",
         "exam_date",
@@ -117,67 +103,49 @@ def create(user_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
 
     payload = _drop_nones(payload)
     logger.info("subjects.create payload keys=%s", sorted(payload.keys()))
-
     try:
         return normalize_subject(base.insert_row(TABLE, payload)) or payload
     except Exception as e:
-        msg = str(e)
         logger.error("subjects.create failed: %s", e)
-        # Progressive strip: track cols → syllabus_json → bare minimum
-        attempts = [
-            {k: v for k, v in payload.items() if k not in _PHASE0_KEYS},
-            {
-                k: v
-                for k, v in payload.items()
-                if k not in _PHASE0_KEYS and k != "syllabus_json"
-            },
-            {
-                "id": payload["id"],
-                "user_id": user_id,
-                "name": payload["name"],
-                "created_at": now,
-                "updated_at": now,
-            },
-        ]
-        last_err = e
-        for attempt in attempts:
+        # Last-resort bare insert, then PATCH track fields
+        bare = {
+            "id": payload["id"],
+            "user_id": user_id,
+            "name": payload["name"],
+            "code": payload.get("code"),
+            "semester": payload.get("semester", 1),
+            "academic_year": payload.get("academic_year"),
+            "created_at": now,
+            "updated_at": now,
+        }
+        bare = _drop_nones(bare)
+        row = base.insert_row(TABLE, bare)
+        track = {k: data.get(k) for k in _PHASE0_KEYS if data.get(k) is not None}
+        if track:
             try:
-                logger.warning("subjects.create retry keys=%s", sorted(attempt.keys()))
-                row = base.insert_row(TABLE, _drop_nones(attempt))
-                # If we stripped track cols, patch syllabus_json in a second update if possible
-                if sj and "syllabus_json" not in attempt:
-                    try:
-                        base.update_eq(TABLE, "id", payload["id"], {"syllabus_json": sj})
-                    except Exception:
-                        pass
-                # Reflect track fields in returned object for gate logic
-                merged = {**(row or attempt), **track, "syllabus_json": sj}
-                return normalize_subject(merged) or merged
+                updated = base.update_eq(TABLE, "id", payload["id"], track)
+                if updated:
+                    row = updated
             except Exception as e2:
-                last_err = e2
-                continue
-        raise last_err
+                logger.warning("subjects track field patch failed: %s", e2)
+        merged = {**(row or bare), **track}
+        return normalize_subject(merged) or merged
 
 
 def update(subject_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     fields = dict(fields)
     fields["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-    existing = get(subject_id) or {}
-    merged = {**existing, **fields}
-    if any(k in fields for k in _PHASE0_KEYS) or "syllabus_json" in fields:
-        fields["syllabus_json"] = _merge_phase0_into_syllabus_json(merged)
-
-    if not _native_track_columns():
-        for k in _PHASE0_KEYS:
-            fields.pop(k, None)
-
+    # Avoid nested syllabus_json writes unless explicitly provided as already-safe value
+    if "syllabus_json" in fields and isinstance(fields["syllabus_json"], dict):
+        # leave as dict — some clients accept it; if it fails caller can retry without
+        pass
     try:
         return normalize_subject(base.update_eq(TABLE, "id", subject_id, _drop_nones(fields)))
     except Exception as e:
         msg = str(e)
-        if any(k in msg for k in _PHASE0_KEYS) or "Identifier" in msg:
-            fallback = {k: v for k, v in fields.items() if k not in _PHASE0_KEYS}
+        if "syllabus_json" in fields:
+            logger.warning("subjects update without syllabus_json: %s", e)
+            fallback = {k: v for k, v in fields.items() if k != "syllabus_json"}
             return normalize_subject(base.update_eq(TABLE, "id", subject_id, _drop_nones(fallback)))
         raise
 
