@@ -82,9 +82,10 @@ async def create_subject(
         created = subjects_repo.create(current_user["id"], data)
         return _enrich(created)
     except Exception as e:
+        logger.exception("create_subject failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create subject: {str(e)}",
+            detail=f"Failed to create subject: {type(e).__name__}: {str(e)}",
         )
 
 
@@ -153,7 +154,6 @@ async def upload_syllabus(
         current_user["id"],
         subject_id,
     )
-    # Persist file ref first; taxonomy stays null until extraction succeeds
     row = syllabus_repo.upsert_for_subject(
         subject_id,
         {
