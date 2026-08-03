@@ -3,9 +3,12 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 import json
+import logging
 import uuid
 
 from app.repositories import base
+
+logger = logging.getLogger(__name__)
 
 TABLE = "predictions"
 
@@ -75,7 +78,7 @@ def create(user_id: str, subject_id: str, data: Dict[str, Any]) -> Dict[str, Any
     if not isinstance(ml_analysis, dict):
         ml_analysis = {}
 
-    row = {
+    row: Dict[str, Any] = {
         "id": str(data.get("id") or uuid.uuid4()),
         "user_id": user_id,
         "subject_id": subject_id,
@@ -89,12 +92,26 @@ def create(user_id: str, subject_id: str, data: Dict[str, Any]) -> Dict[str, Any
         "prediction_accuracy_score": float(
             data.get("prediction_accuracy_score") or data.get("accuracy_score") or 0
         ),
-        "source_type": data.get("source_type"),
-        "model_version": data.get("model_version"),
         "created_at": now,
         "updated_at": now,
     }
-    return base.insert_row(TABLE, row)
+    # Only send optional Phase 0 columns when present — avoids
+    # "Identifier 'source_type' not found" on older PyroCore schemas.
+    if data.get("source_type") is not None:
+        row["source_type"] = data.get("source_type")
+    if data.get("model_version") is not None:
+        row["model_version"] = data.get("model_version")
+
+    try:
+        return base.insert_row(TABLE, row)
+    except Exception as e:
+        msg = str(e)
+        if "source_type" in msg or "model_version" in msg or "Identifier" in msg:
+            logger.warning("predictions insert retry without track columns: %s", e)
+            row.pop("source_type", None)
+            row.pop("model_version", None)
+            return base.insert_row(TABLE, row)
+        raise
 
 
 def update(prediction_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
