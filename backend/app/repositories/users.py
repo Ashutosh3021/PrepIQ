@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 
 from app.repositories import base
+
+logger = logging.getLogger(__name__)
 
 TABLE = "users"
 
