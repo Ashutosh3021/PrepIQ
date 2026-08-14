@@ -51,4 +51,17 @@ export const userService = {
   /** BUG-M14: write to localStorage — no network call */
   updateSettings: (settings: Partial<UserSettings>): Promise<UserSettings> =>
     Promise.resolve(writeLocalSettings(settings)),
+
+  /**
+   * POST /wizard/reset — "Change Exam".
+   * Wipes all previously saved targeting information (exam track, timing,
+   * focus subjects, study-plan inputs) and the subjects derived from the prior
+   * setup, then lets the caller re-launch the configuration wizard.
+   */
+  resetTargeting: () =>
+    apiFetch<{ id: string; email: string }>(
+      '/wizard/reset',
+      { id: '', email: '' },
+      { method: 'POST' }
+    ),
 };

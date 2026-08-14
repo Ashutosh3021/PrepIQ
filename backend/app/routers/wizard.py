@@ -171,11 +171,63 @@ async def complete_wizard(
     }
 
 
-@router.put("/update", response_model=schemas.WizardStepResponse)
+@router.post("/update", response_model=schemas.WizardStepResponse)
 async def update_wizard_data(
     update_data: schemas.UserUpdate,
     current_user: dict = Depends(get_current_user),
 ):
+    fields = {}
+    data = update_data.model_dump(exclude_unset=True) if hasattr(update_data, "model_dump") else {
+        k: v for k, v in vars(update_data).items() if v is not None
+    }
+    for key in (
+        "full_name",
+        "college_name",
+        "program",
+        "year_of_study",
+        "exam_name",
+        "exam_type",
+        "university_name",
+        "days_until_exam",
+        "focus_subjects",
+        "study_hours_per_day",
+        "target_score",
+        "preparation_level",
+        "wizard_completed",
+    ):
+        if key in data and data[key] is not None:
+            fields[key] = data[key]
+    if "days_until_exam" in fields:
+        fields["exam_date"] = (
+            datetime.now(timezone.utc) + timedelta(days=int(fields["days_until_exam"]))
+        ).isoformat()
+    if fields:
+        users_repo.update(current_user["id"], fields)
+    return {
+        "id": str(current_user["id"]),
+        "email": current_user["email"],
+        "full_name": fields.get("full_name") or current_user.get("full_name", ""),
+        "access_token": None,
+    }
+
+
+@router.post("/reset", response_model=schemas.WizardStepResponse)
+async def reset_wizard(current_user: dict = Depends(get_current_user)):
+    """Change Exam — clear all previously saved targeting information.
+
+    Completely wipes the user's targeting parameters (exam track, timing,
+    focus subjects, study-plan inputs) and deletes the subjects derived from
+    the prior setup. This prevents the old configuration from conflicting with
+    the new one when the wizard is replayed.
+    """
+    users_repo.reset_targeting(current_user["id"])
+    subjects_repo.delete_for_user(current_user["id"])
+    return {
+        "id": str(current_user["id"]),
+        "email": current_user["email"],
+        "full_name": current_user.get("full_name", ""),
+        "access_token": None,
+    }
     fields = {}
     data = update_data.model_dump(exclude_unset=True) if hasattr(update_data, "model_dump") else {
         k: v for k, v in vars(update_data).items() if v is not None

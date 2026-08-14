@@ -152,3 +152,9 @@ def update(subject_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def delete(subject_id: str) -> bool:
     return base.delete_eq(TABLE, "id", subject_id)
+
+
+def delete_for_user(user_id: str) -> bool:
+    """Delete every subject belonging to a user (cascades to papers,
+    predictions, mock tests, study plans and chat history)."""
+    return base.delete_eq(TABLE, "user_id", user_id)

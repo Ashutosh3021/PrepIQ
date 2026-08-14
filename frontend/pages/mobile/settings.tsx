@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/router';
 import { MobileLayout } from '@/components/mobile';
 import { Skeleton } from '@/components/common';
 import { useProfile } from '@/lib/hooks/useProfile';
+import { userService } from '@/lib/services/user.service';
+import { getWizardPath } from '@/lib/utils/device';
 
 export default function MobileSettings() {
   const { profile, isLoading, updateProfile } = useProfile();
+  const router = useRouter();
+  const [changingExam, setChangingExam] = useState(false);
+  const [changeExamError, setChangeExamError] = useState('');
 
   const [emailNotifs, setEmailNotifs] = useState(true);
   const [studyReminders, setStudyReminders] = useState(true);
@@ -39,6 +45,23 @@ export default function MobileSettings() {
       // error handled silently — profile hook manages state
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleChangeExam = async () => {
+    if (!window.confirm(
+      'Change your exam? This will erase your current targeting settings and subjects, then restart the setup wizard.'
+    )) {
+      return;
+    }
+    setChangingExam(true);
+    setChangeExamError('');
+    try {
+      await userService.resetTargeting();
+      router.replace(getWizardPath());
+    } catch (err: unknown) {
+      setChangeExamError(err instanceof Error ? err.message : 'Could not reset exam. Please try again.');
+      setChangingExam(false);
     }
   };
 
@@ -195,7 +218,29 @@ export default function MobileSettings() {
             </div>
           </section>
 
-          {/* Section 3: Account Security */}
+          {/* Section 3: Exam Targeting */}
+          <section className="border border-outline-variant p-5 space-y-4">
+            <div className="flex items-center gap-3 border-l-2 border-outline-variant pl-3">
+              <h2 className="text-sm font-semibold uppercase tracking-widest">Exam Targeting</h2>
+            </div>
+            <p className="text-xs text-on-surface-variant leading-relaxed">
+              Re-run the setup wizard to target a different exam. This completely clears your
+              previously saved targeting information and the subjects from your last setup, so the new
+              configuration starts clean and cannot conflict with the old one.
+            </p>
+            <button
+              onClick={handleChangeExam}
+              disabled={changingExam}
+              className="w-full h-11 bg-primary text-on-primary font-medium text-sm transition-all border border-outline-variant disabled:opacity-40 flex items-center justify-center gap-2"
+            >
+              {changingExam ? 'RESETTING…' : 'CHANGE EXAM'}
+            </button>
+            {changeExamError && (
+              <p className="text-[10px] text-error uppercase tracking-wider">{changeExamError}</p>
+            )}
+          </section>
+
+          {/* Section 4: Account Security */}
           <section className="border border-outline-variant p-5 space-y-4">
             <div className="flex items-center gap-3 border-l-2 border-outline-variant pl-3">
               <h2 className="text-sm font-semibold uppercase tracking-widest">Account Security</h2>

@@ -5,6 +5,8 @@ import { DesktopLayout } from '@/components/desktop';
 import { Skeleton } from '@/components/common';
 import { useAuth } from '@/lib/context/AuthContext';
 import { useProfile } from '@/lib/hooks/useProfile';
+import { userService } from '@/lib/services/user.service';
+import { getWizardPath } from '@/lib/utils/device';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -38,6 +40,10 @@ export default function DesktopSettings() {
   const { signOut } = useAuth();
   const router = useRouter();
   const { profile, isLoading: profileLoading, updateProfile } = useProfile();
+
+  // ── Change Exam state ──────────────────────────────────────────────────────
+  const [changingExam, setChangingExam] = useState(false);
+  const [changeExamError, setChangeExamError] = useState('');
 
   // ── Profile form state ─────────────────────────────────────────────────────
   const [fullName, setFullName] = useState('');
@@ -119,6 +125,24 @@ export default function DesktopSettings() {
     setYearOfStudy(String(profile.year_of_study ?? ''));
     setSaveStatus('idle');
     setSaveError('');
+  };
+
+  // ── Change Exam — wipe targeting and re-run the wizard ─────────────────────
+  const handleChangeExam = async () => {
+    if (!window.confirm(
+      'Change your exam? This will erase your current targeting settings and subjects, then restart the setup wizard.'
+    )) {
+      return;
+    }
+    setChangingExam(true);
+    setChangeExamError('');
+    try {
+      await userService.resetTargeting();
+      router.replace(getWizardPath());
+    } catch (err: unknown) {
+      setChangeExamError(err instanceof Error ? err.message : 'Could not reset exam. Please try again.');
+      setChangingExam(false);
+    }
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -332,10 +356,49 @@ export default function DesktopSettings() {
               </div>
             </section>
 
-            {/* ── 03. Account Security ── */}
-            <section className="space-y-8" id="security">
+            {/* ── 03. Exam Targeting ── */}
+            <section className="space-y-8" id="exam-targeting">
               <div className="flex items-center gap-4">
                 <span className="text-4xl font-serif italic text-primary">03.</span>
+                <h2 className="text-2xl font-semibold text-on-surface">Exam Targeting</h2>
+              </div>
+              <div className="bg-surface-container p-8 space-y-6">
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold text-on-surface">Change Exam</p>
+                  <p className="text-xs text-on-surface/70 leading-relaxed">
+                    Re-run the setup wizard to target a different exam. This completely clears your
+                    previously saved targeting information — exam track, dates, focus subjects and
+                    study plan — along with the subjects created from your last setup, so the new
+                    configuration starts from a clean slate and cannot conflict with the old one.
+                  </p>
+                </div>
+                <button
+                  onClick={handleChangeExam}
+                  disabled={changingExam}
+                  className="inline-flex items-center gap-3 bg-primary text-on-primary px-6 py-3 text-xs font-bold uppercase tracking-widest hover:bg-primary/90 transition-all duration-150 disabled:opacity-40"
+                >
+                  {changingExam ? (
+                    <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                      <path d="M3 3v5h5" />
+                    </svg>
+                  )}
+                  {changingExam ? 'Resetting…' : 'Change Exam'}
+                </button>
+                {changeExamError && (
+                  <p className="text-xs text-error">{changeExamError}</p>
+                )}
+              </div>
+            </section>
+
+            {/* ── 04. Account Security ── */}
+            <section className="space-y-8" id="security">
+              <div className="flex items-center gap-4">
+                <span className="text-4xl font-serif italic text-primary">04.</span>
                 <h2 className="text-2xl font-semibold text-on-surface">Account Security</h2>
               </div>
               <div className="bg-surface-container-highest p-10 space-y-12">
