@@ -219,12 +219,23 @@ async def reset_wizard(current_user: dict = Depends(get_current_user)):
     focus subjects, study-plan inputs) and deletes the subjects derived from
     the prior setup. This prevents the old configuration from conflicting with
     the new one when the wizard is replayed.
+
+    Both steps are best-effort: the Pyronites `users` table can be rate-limited
+    or not yet migrated, and that must not 500 the reset (the wizard replay
+    itself does not depend on the row update succeeding).
     """
-    users_repo.reset_targeting(current_user["id"])
-    subjects_repo.delete_for_user(current_user["id"])
+    user_id = current_user["id"]
+    try:
+        users_repo.reset_targeting(user_id)
+    except Exception as e:
+        logger.warning("reset_targeting failed for %s (continuing): %s", user_id, e)
+    try:
+        subjects_repo.delete_for_user(user_id)
+    except Exception as e:
+        logger.warning("subject delete on reset failed for %s (continuing): %s", user_id, e)
     return {
-        "id": str(current_user["id"]),
-        "email": current_user["email"],
+        "id": str(user_id),
+        "email": current_user.get("email", ""),
         "full_name": current_user.get("full_name", ""),
         "access_token": None,
     }

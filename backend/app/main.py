@@ -187,11 +187,20 @@ def create_app() -> FastAPI:
             max_age=600,
         )
     else:
-        if not allowed_origins:
-            allowed_origins = [
-                "https://prep-iq-three.vercel.app",
-                "https://prepiq.vercel.app",
-            ]
+        # Always permit the known PrepIQ frontend deployments. The deployed
+        # ALLOWED_ORIGINS may be empty or configured for a different domain,
+        # which caused the browser to be blocked by CORS even when the request
+        # succeeded server-side (e.g. from https://prep-iq-three.vercel.app).
+        _known_frontends = [
+            "https://prep-iq-three.vercel.app",
+            "https://prepiq.vercel.app",
+        ]
+        frontend_url = (os.getenv("FRONTEND_URL") or "").strip()
+        if frontend_url:
+            _known_frontends.append(frontend_url)
+        for origin in _known_frontends:
+            if origin and origin not in allowed_origins:
+                allowed_origins.append(origin)
         app.add_middleware(
             CORSMiddleware,
             allow_origins=allowed_origins,

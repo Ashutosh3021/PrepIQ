@@ -2,11 +2,38 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from app.core.pyronites_client import get_pyronites_client
 
 logger = logging.getLogger(__name__)
+
+# PyroCore free-tier rate limits surface as 429 "Too Many Requests". A short,
+# bounded retry with backoff lets transient throttling recover instead of
+# bubbling up as a 500 to the caller.
+_RATE_LIMIT_MAX_RETRIES = 3
+_RATE_LIMIT_BACKOFF = 0.5
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "429" in msg or "too many requests" in msg
+
+
+def _retry(fn):
+    """Run fn() with bounded retry on 429 rate-limit errors."""
+    last = None
+    for attempt in range(_RATE_LIMIT_MAX_RETRIES):
+        try:
+            return fn()
+        except Exception as e:
+            if _is_rate_limited(e) and attempt < _RATE_LIMIT_MAX_RETRIES - 1:
+                time.sleep(_RATE_LIMIT_BACKOFF * (attempt + 1))
+                last = e
+                continue
+            raise
+    raise last
 
 
 def _as_list(result: Any) -> List[Dict[str, Any]]:
@@ -43,7 +70,7 @@ def select_eq(table_name: str, column: str, value: Any) -> List[Dict[str, Any]]:
         q = table(table_name).select()
         if hasattr(q, "eq"):
             q = q.eq(column, value)
-        result = q.execute() if hasattr(q, "execute") else q
+        result = _retry(lambda: q.execute()) if hasattr(q, "execute") else q
         return _as_list(result)
     except Exception as e:
         logger.error("select_eq %s.%s=%s failed: %s", table_name, column, value, e)
@@ -53,7 +80,7 @@ def select_eq(table_name: str, column: str, value: Any) -> List[Dict[str, Any]]:
 def select_all(table_name: str) -> List[Dict[str, Any]]:
     try:
         q = table(table_name).select()
-        result = q.execute() if hasattr(q, "execute") else q
+        result = _retry(lambda: q.execute()) if hasattr(q, "execute") else q
         return _as_list(result)
     except Exception as e:
         logger.error("select_all %s failed: %s", table_name, e)
@@ -64,7 +91,10 @@ def get_by_id(table_name: str, row_id: str) -> Optional[Dict[str, Any]]:
     try:
         t = table(table_name)
         if hasattr(t, "get"):
-            result = t.get(row_id)
+            try:
+                result = _retry(lambda: t.get(row_id))
+            except Exception:
+                result = None
             one = _as_one(result)
             if one:
                 return one
@@ -80,7 +110,7 @@ def insert_row(table_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         t = table(table_name)
         result = t.insert(payload)
         if hasattr(result, "execute"):
-            result = result.execute()
+            result = _retry(lambda: result.execute())
         row = _as_one(result)
         if row:
             return row
@@ -101,7 +131,7 @@ def update_eq(table_name: str, column: str, value: Any, payload: Dict[str, Any])
         q = t.update(payload)
         if hasattr(q, "eq"):
             q = q.eq(column, value)
-        result = q.execute() if hasattr(q, "execute") else q
+        result = _retry(lambda: q.execute()) if hasattr(q, "execute") else q
         row = _as_one(result)
         if row:
             return row
@@ -121,7 +151,7 @@ def delete_eq(table_name: str, column: str, value: Any) -> bool:
         if hasattr(q, "eq"):
             q = q.eq(column, value)
         if hasattr(q, "execute"):
-            q.execute()
+            _retry(lambda: q.execute())
         return True
     except Exception as e:
         logger.error("delete %s failed: %s", table_name, e)

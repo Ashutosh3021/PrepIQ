@@ -1,10 +1,13 @@
 """Dashboard stats — Pyronites data plane (Fix Phase D)."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Set
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+
+logger = logging.getLogger(__name__)
 
 from ..services.pyronites_auth import get_current_user_from_token
 from ..repositories import subjects as subjects_repo
@@ -50,7 +53,14 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
                 predictions_repo.list_for_user_subject(user_id, str(s.get("id")))
             )
 
-        profile = users_repo.get(user_id) or {}
+        # Profile is best-effort: the users table may be missing/unreachable
+        # (e.g. PyroCore rate limits or not yet migrated). JWT claims already
+        # carry the targeting fields, so a failed read must not 500 the stats.
+        try:
+            profile = users_repo.get(user_id) or {}
+        except Exception as e:
+            logger.warning("dashboard profile read failed (continuing): %s", e)
+            profile = {}
         days_to_exam = current_user.get("days_until_exam") or profile.get("days_until_exam")
         exam_date = current_user.get("exam_date") or profile.get("exam_date")
         if exam_date and days_to_exam is None:
