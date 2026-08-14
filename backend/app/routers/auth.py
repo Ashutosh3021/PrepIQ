@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -9,6 +11,8 @@ from app.services.pyronites_auth import (
     get_current_user_from_token,
 )
 from app.repositories import users as users_repo
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 security = HTTPBearer()
@@ -43,7 +47,14 @@ async def logout():
 @router.get("/profile")
 async def get_profile(credentials: HTTPAuthorizationCredentials = Depends(security)):
     user = await get_current_user_from_token(f"Bearer {credentials.credentials}")
-    db_user = users_repo.get(user["id"]) or {}
+    db_user = {}
+    try:
+        db_user = users_repo.get(user["id"]) or {}
+    except Exception as e:
+        # PyroCore can be rate-limited (429); JWT claims already carry the
+        # identity fields, so a failed read must not 500 the profile endpoint.
+        logger.warning("profile read failed (continuing): %s", e)
+        db_user = {}
     return {
         "id": user["id"],
         "email": user["email"],

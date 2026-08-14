@@ -23,7 +23,13 @@ async def get_current_user(authorization: str = Header(None)):
 
 @router.get("/status")
 async def get_wizard_status(current_user: dict = Depends(get_current_user)):
-    profile = users_repo.get(current_user["id"]) or {}
+    try:
+        profile = users_repo.get(current_user["id"]) or {}
+    except Exception as e:
+        # PyroCore can be rate-limited (429); JWT claims already carry the
+        # targeting fields, so a failed read must not 500 the status endpoint.
+        logger.warning("wizard status profile read failed (continuing): %s", e)
+        profile = {}
     days_until_exam = current_user.get("days_until_exam") or profile.get("days_until_exam")
     exam_date = current_user.get("exam_date") or profile.get("exam_date")
     if exam_date and not days_until_exam:
@@ -153,7 +159,13 @@ async def complete_wizard(
     wizard_data: schemas.WizardCompletion,
     current_user: dict = Depends(get_current_user),
 ):
-    profile = users_repo.get(current_user["id"]) or {}
+    try:
+        profile = users_repo.get(current_user["id"]) or {}
+    except Exception as e:
+        # PyroCore can be rate-limited (429); fall back to JWT claims so the
+        # wizard can still complete instead of 500-ing the whole request.
+        logger.warning("complete_wizard profile read failed (continuing): %s", e)
+        profile = {}
     missing = []
     if not (profile.get("exam_type") or current_user.get("exam_type")):
         missing.append("exam_type")
