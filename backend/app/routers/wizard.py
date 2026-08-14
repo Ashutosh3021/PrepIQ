@@ -88,26 +88,38 @@ async def complete_step2(
             "study_hours_per_day": wizard_data.study_hours_per_day,
         },
     )
-    profile = users_repo.get(current_user["id"]) or {}
+    try:
+        profile = users_repo.get(current_user["id"]) or {}
+    except Exception as e:
+        logger.warning("step2 profile read failed (continuing): %s", e)
+        profile = {}
     exam_type = profile.get("exam_type") or current_user.get("exam_type")
     exam_name = profile.get("exam_name") or current_user.get("exam_name")
     university_name = profile.get("university_name") or current_user.get("university_name")
 
-    existing = {str(s.get("name") or "").lower() for s in subjects_repo.list_for_user(current_user["id"])}
+    # Best-effort: a rate-limited/un-migrated subjects table must not 500 step2.
+    try:
+        existing = {str(s.get("name") or "").lower() for s in subjects_repo.list_for_user(current_user["id"])}
+    except Exception as e:
+        logger.warning("step2 subject list failed (continuing): %s", e)
+        existing = set()
     for name in wizard_data.focus_subjects:
         if name and name.lower() not in existing:
-            subjects_repo.create(
-                current_user["id"],
-                {
-                    "name": name,
-                    "code": f"SUB-{(name[:3] if len(name) >= 3 else name.ljust(3, 'X')).upper()}-{datetime.now().year}",
-                    "semester": 1,
-                    "academic_year": str(datetime.now().year),
-                    "exam_type": exam_type,
-                    "exam_name": exam_name,
-                    "university_name": university_name,
-                },
-            )
+            try:
+                subjects_repo.create(
+                    current_user["id"],
+                    {
+                        "name": name,
+                        "code": f"SUB-{(name[:3] if len(name) >= 3 else name.ljust(3, 'X')).upper()}-{datetime.now().year}",
+                        "semester": 1,
+                        "academic_year": str(datetime.now().year),
+                        "exam_type": exam_type,
+                        "exam_name": exam_name,
+                        "university_name": university_name,
+                    },
+                )
+            except Exception as e:
+                logger.warning("subject create on step2 failed for %s (continuing): %s", name, e)
     return {
         "id": str(current_user["id"]),
         "email": current_user["email"],

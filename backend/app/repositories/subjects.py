@@ -154,7 +154,26 @@ def delete(subject_id: str) -> bool:
     return base.delete_eq(TABLE, "id", subject_id)
 
 
-def delete_for_user(user_id: str) -> bool:
+def delete_for_user(user_id: str) -> int:
     """Delete every subject belonging to a user (cascades to papers,
-    predictions, mock tests, study plans and chat history)."""
-    return base.delete_eq(TABLE, "user_id", user_id)
+    predictions, mock tests, study plans and chat history).
+
+    PyroCore only supports delete-by-id, so list the user's subjects first
+    and delete each individually.
+    """
+    try:
+        subs = list_for_user(user_id)
+    except Exception as e:
+        logger.warning("delete_for_user list failed for %s: %s", user_id, e)
+        return 0
+    count = 0
+    for s in subs:
+        sid = s.get("id")
+        if not sid:
+            continue
+        try:
+            if delete(sid):
+                count += 1
+        except Exception as e:
+            logger.warning("delete_for_user failed to delete subject %s: %s", sid, e)
+    return count

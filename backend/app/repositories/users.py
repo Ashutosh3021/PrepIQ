@@ -39,9 +39,20 @@ def upsert_profile(user_id: str, email: str, profile: Optional[Dict[str, Any]] =
 
 
 def update(user_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    fields = dict(fields)
-    fields["updated_at"] = datetime.now(timezone.utc).isoformat()
-    return base.update_eq(TABLE, "id", user_id, fields)
+    try:
+        fields = dict(fields)
+        fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+        return base.update_eq(TABLE, "id", user_id, fields)
+    except Exception as e:
+        # PyroCore can be rate-limited (429) or the users table may be
+        # un-migrated; the wizard steps and reset must not 500 on that.
+        # Return the attempted fields (augmented with id) as a best-effort
+        # result so callers that don't depend on the persisted row proceed.
+        logger.warning("users.update failed for %s (continuing): %s", user_id, e)
+        fields = dict(fields)
+        fields.pop("updated_at", None)
+        fields["id"] = user_id
+        return fields
 
 
 # Targeting parameters captured by the setup wizard. Clearing these fully resets

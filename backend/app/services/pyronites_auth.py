@@ -436,19 +436,15 @@ class PyronitesAuthService:
         # Login already swallowed users-table errors; token validation must too,
         # otherwise every authenticated route becomes a generic 500 when the
         # Pyronites `users` table is missing, unreachable, or rejects the query.
+        # NOTE: we intentionally do NOT attempt a lazy upsert here — doing so on
+        # every authenticated request (esp. while the table is rate-limited)
+        # amplifies PyroCore 429s. The users row is created at signup/login.
         profile: Dict[str, Any] = {}
         try:
             profile = users_repo.get(uid) or {}
         except Exception as e:
             logger.warning("users_repo.get failed for %s (continuing with JWT claims): %s", uid, e)
             profile = {}
-
-        if not profile and email:
-            try:
-                profile = users_repo.upsert_profile(uid, email, {}) or {}
-            except Exception as e:
-                logger.warning("lazy profile create failed: %s", e)
-                profile = {}
 
         profile = profile or {}
         return {
