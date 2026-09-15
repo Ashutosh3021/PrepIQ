@@ -1,0 +1,3 @@
+﻿{
+    "sql":  "DELETE FROM predictions WHERE id = \u0027smoke-pred-001\u0027; DELETE FROM subjects WHERE id = \u0027smoke-subj-001\u0027"
+}

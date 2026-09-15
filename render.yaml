@@ -13,17 +13,13 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.6"
-      - key: DATABASE_URL
+      - key: PYRONITES_URL
+        value: https://pyrocore-backend.onrender.com
+      - key: PYRONITES_KEY
         sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_KEY
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
+      - key: PYRONITES_PROJECT_ID
+        value: 0c416980-d323-48cf-8b8a-1ffb07b751a7
       - key: JWT_SECRET
-        sync: false
-      - key: BYTEZ_API_KEY
         sync: false
       - key: ENVIRONMENT
         value: production

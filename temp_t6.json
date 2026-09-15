@@ -1,0 +1,1 @@
+﻿{"table":"syllabus","primary_key":"id","columns":[{"name":"id","type":"TEXT"},{"name":"subject_id","type":"TEXT"},{"name":"raw_pdf_ref","type":"TEXT"},{"name":"extracted_taxonomy","type":"JSON"},{"name":"extracted_at","type":"TEXT"},{"name":"created_at","type":"TEXT"},{"name":"updated_at","type":"TEXT"}]}
