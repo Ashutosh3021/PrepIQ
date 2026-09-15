@@ -1,1 +1,0 @@
-﻿{"table":"test_create","primary_key":"id","columns":[{"name":"id","type":"TEXT"},{"name":"val","type":"TEXT"}]}

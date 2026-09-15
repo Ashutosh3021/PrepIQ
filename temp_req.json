@@ -1,3 +1,0 @@
-﻿{
-    "sql":  "DELETE FROM subjects WHERE id = \u0027test-json-001\u0027"
-}

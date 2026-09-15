@@ -1,3 +1,0 @@
-﻿{
-    "sql":  "SELECT id, name, exam_type, exam_name, university_name, syllabus_json FROM subjects WHERE id = \u0027smoke-subj-001\u0027"
-}

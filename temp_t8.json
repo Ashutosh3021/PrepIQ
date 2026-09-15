@@ -1,1 +1,0 @@
-﻿{"table":"exam_context_cache","primary_key":"id","columns":[{"name":"id","type":"TEXT"},{"name":"exam_name","type":"TEXT"},{"name":"context_summary","type":"TEXT"},{"name":"fetched_at","type":"TEXT"},{"name":"created_at","type":"TEXT"},{"name":"updated_at","type":"TEXT"}]}

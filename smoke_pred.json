@@ -1,3 +1,0 @@
-﻿{
-    "sql":  "INSERT INTO predictions (id, user_id, subject_id, predicted_questions_json, total_questions, total_predicted_marks, unit_coverage_json, ml_analysis_json, prediction_accuracy_score, source_type, model_version, created_at, updated_at) VALUES (\u0027smoke-pred-001\u0027, \u0027smoke-user\u0027, \u0027smoke-subj-001\u0027, \u0027[{\"text\":\"Define Newton second law\",\"marks\":5}]\u0027, 1, 5, \u0027{\"Mechanics\":0.8}\u0027, \u0027{\"model\":\"test\"}\u0027, 0.85, \u0027university_llm\u0027, \u0027v1.0\u0027, \u00272026-09-15T00:00:00Z\u0027, \u00272026-09-15T00:00:00Z\u0027)"
-}
