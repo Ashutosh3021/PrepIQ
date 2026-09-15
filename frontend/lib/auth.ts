@@ -158,5 +158,11 @@ export function isStrongPassword(password: string): {
   if (!/[0-9]/.test(password)) {
     return { ok: false, message: "Include at least one number" };
   }
+  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(password)) {
+    return {
+      ok: false,
+      message: "Include at least one special character (!@#$%^&*...)",
+    };
+  }
   return { ok: true };
 }

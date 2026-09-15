@@ -375,7 +375,7 @@ export default function AuthPage() {
                     }}
                   >
                     At least 8 characters · one uppercase · one lowercase · one
-                    number
+                    number · one special character
                   </p>
                 )}
               </div>
