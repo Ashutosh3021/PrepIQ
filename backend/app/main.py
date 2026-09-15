@@ -237,7 +237,11 @@ def create_app() -> FastAPI:
     if settings.ENVIRONMENT == "production":
         app.add_middleware(
             TrustedHostMiddleware,
-            allowed_hosts=["prepiq.onrender.com", "prep-iq-three.vercel.app", "prepiq.vercel.app"],
+            allowed_hosts=[
+                "prepiq-narg.onrender.com",
+                "prep-iq-three.vercel.app",
+                "prepiq.vercel.app",
+            ],
         )
 
     app.add_middleware(SecurityHeadersMiddleware)
