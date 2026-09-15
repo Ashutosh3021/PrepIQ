@@ -50,7 +50,7 @@ def get_missing_environment_vars():
     required_vars = {
         "PYRONITES_URL": "Pyronites project URL",
         "PYRONITES_KEY": "Pyronites API key",
-        "SECRET_KEY": "JWT secret key (openssl rand -base64 32)",
+        "JWT_SECRET": "JWT secret key (openssl rand -base64 32)",
         "ALLOWED_ORIGINS": "Comma-separated list of allowed CORS origins",
     }
     missing = []
