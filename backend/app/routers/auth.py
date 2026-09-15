@@ -39,8 +39,12 @@ async def logout():
         client = get_pyronites_client()
         if hasattr(client.auth, "sign_out"):
             client.auth.sign_out()
-    except Exception:
-        pass
+    except Exception as e:
+        # 429 from PyroCore is non-fatal for logout — user's JWT is discarded client-side
+        if "429" in str(e) or "too many requests" in str(e).lower():
+            logger.info("PyroCore sign_out rate-limited (non-fatal): %s", e)
+        else:
+            logger.warning("PyroCore sign_out failed (non-fatal): %s", e)
     return {"message": "Logged out successfully"}
 
 

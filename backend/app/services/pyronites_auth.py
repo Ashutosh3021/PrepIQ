@@ -15,11 +15,13 @@ Test user (env-var gated, disabled when TEST_USER_EMAIL is unset):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import random
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
 
 from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr, Field
@@ -30,6 +32,62 @@ from app.core.pyronites_client import get_pyronites_client, pyronites_configured
 from app.repositories import users as users_repo
 
 logger = logging.getLogger(__name__)
+
+# ── Retry helper for 429 Too Many Requests ────────────────────────────────────
+T = TypeVar("T")
+
+_MAX_RETRIES = 3
+_BASE_DELAY = 2.0   # seconds — first retry after 2s
+_MAX_DELAY = 30.0    # cap backoff
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    """Return True if the exception looks like a 429 rate-limit response."""
+    msg = str(exc).lower()
+    return "429" in msg or "too many requests" in msg or "rate limit" in msg
+
+
+def _parse_retry_after(exc: Exception) -> Optional[float]:
+    """Try to extract Retry-After seconds from the exception message/headers."""
+    msg = str(exc)
+    # Common patterns: "Retry-After: 5", "retry-after: 5", "retry after 5"
+    for token in ("retry-after:", "retry after"):
+        idx = msg.lower().find(token)
+        if idx >= 0:
+            tail = msg[idx + len(token):].strip().split()[0]
+            try:
+                return float(tail)
+            except ValueError:
+                pass
+    return None
+
+
+async def _retry_on_429(fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    """Call *fn* with retries when PyroCore returns 429.
+
+    Uses Retry-After header if present, otherwise exponential backoff
+    with jitter (2s → 4s → 8s, capped at 30s).
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            if not _is_rate_limited(exc) or attempt == _MAX_RETRIES - 1:
+                raise
+            last_exc = exc
+            retry_after = _parse_retry_after(exc)
+            if retry_after and retry_after > 0:
+                delay = min(retry_after, _MAX_DELAY)
+            else:
+                delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+            delay += random.uniform(0, 0.5)  # jitter
+            logger.warning(
+                "PyroCore 429 (attempt %d/%d) — retrying in %.1fs",
+                attempt + 1, _MAX_RETRIES, delay,
+            )
+            await asyncio.sleep(delay)
+    raise last_exc  # type: ignore[misc]
 
 # ── Test user (env-var gated — leave both unset to disable) ───────────────────
 TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL", "").strip().lower()
@@ -296,11 +354,17 @@ class PyronitesAuthService:
 
         client = get_pyronites_client()
         try:
-            response = client.auth.sign_up(email, req.password)
+            response = await _retry_on_429(client.auth.sign_up, email, req.password)
         except Exception as e:
             msg = str(e).lower()
             if "already" in msg or "exists" in msg or "registered" in msg or "409" in msg:
                 raise HTTPException(status_code=400, detail="Email already registered")
+            if _is_rate_limited(e):
+                logger.warning("signup rate-limited after retries: %s", e)
+                raise HTTPException(
+                    status_code=429,
+                    detail="Auth service is rate-limited. Please try again later.",
+                )
             logger.error("signup failed: %s", e)
             raise HTTPException(status_code=400, detail=f"Signup failed: {e}")
 
@@ -359,10 +423,16 @@ class PyronitesAuthService:
 
         client = get_pyronites_client()
         try:
-            response = client.auth.sign_in(email, req.password)
+            response = await _retry_on_429(client.auth.sign_in, email, req.password)
         except Exception as e:
             msg = str(e).lower()
             logger.info("login failed: %s", e)
+            if _is_rate_limited(e):
+                logger.warning("login rate-limited after retries: %s", e)
+                raise HTTPException(
+                    status_code=429,
+                    detail="Auth service is rate-limited. Please try again later.",
+                )
             if "confirm" in msg or "verified" in msg or "not confirmed" in msg:
                 raise HTTPException(
                     status_code=401,
