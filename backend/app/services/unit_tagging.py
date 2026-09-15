@@ -13,6 +13,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.llm_provider import get_llm_client
+from app.core.text_utils import strip_fences as _strip_fences
 from app.repositories import questions as questions_repo
 from app.repositories import subjects as subjects_repo
 from app.repositories import syllabus as syllabus_repo
@@ -26,14 +27,6 @@ TAGGING_CONFIDENCE_THRESHOLD = 0.55
 # Soft batch size for multi-question LLM calls (keeps prompts manageable).
 _TAG_BATCH_SIZE = 8
 _TEXT_SNIPPET = 400
-
-
-def _strip_fences(raw: str) -> str:
-    text = (raw or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
-    return text.strip()
 
 
 def _normalize_taxonomy(tax: Any) -> List[str]:

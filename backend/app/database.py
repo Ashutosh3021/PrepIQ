@@ -1,11 +1,10 @@
 """
-PrepIQ Database Configuration
-PostgreSQL with Supabase configuration
+PrepIQ Database Configuration (Legacy)
+PostgreSQL with Supabase — retained for reference. All live data via Pyronites.
 """
 
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 import os
 import logging
 
@@ -98,9 +97,9 @@ def get_db():
     db = _SessionLocal()
     try:
         yield db
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise e
+        raise
     finally:
         db.close()
 
@@ -116,7 +115,7 @@ def create_tables():
     _init_engine()
     from .models import Base as ModelsBase
     ModelsBase.metadata.create_all(bind=_engine)
-    print("✅ Database tables created successfully")
+    logger.info("Database tables created successfully")
 
 
 def drop_tables():
@@ -124,4 +123,4 @@ def drop_tables():
     _init_engine()
     from .models import Base as ModelsBase
     ModelsBase.metadata.drop_all(bind=_engine)
-    print("⚠️  Database tables dropped")
+    logger.warning("Database tables dropped")

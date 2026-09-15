@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.local_storage import resolve_path
 from app.core.llm_provider import get_llm_client
+from app.core.text_utils import strip_fences as _strip_fences
 from app.repositories import syllabus as syllabus_repo
 
 logger = logging.getLogger(__name__)
@@ -40,14 +41,6 @@ def _get_pdf_parser():
     from app.pdf_parser import PDFParser
 
     return PDFParser
-
-
-def _strip_fences(raw: str) -> str:
-    text = (raw or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
-    return text.strip()
 
 
 def extract_text_from_syllabus_file(raw_pdf_ref: str) -> str:

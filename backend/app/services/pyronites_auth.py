@@ -8,11 +8,10 @@ Pyronites (PyroCore) auth model:
 
 PrepIQ frontend expects Bearer access_token, so after a successful Pyronites
 sign_in/sign_up we resolve the user id (via /auth/me or signup body) and mint
-our own JWT with JWT_SECRET.
+our own JWT with SECRET_KEY.
 
-Temporary hardcoded test user (bypass provider):
-  email:    tets@test.com
-  password: 123aA@
+Test user (env-var gated, disabled when TEST_USER_EMAIL is unset):
+  Set TEST_USER_EMAIL + TEST_USER_PASSWORD in .env to enable.
 """
 from __future__ import annotations
 
@@ -20,21 +19,27 @@ import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr, Field
 
+from app.core.config import settings
 from app.core.password_rules import validate_email, validate_password
 from app.core.pyronites_client import get_pyronites_client, pyronites_configured
 from app.repositories import users as users_repo
 
 logger = logging.getLogger(__name__)
 
-# ── Temporary hardcoded test account (remove before public launch) ────────────
-TEST_USER_EMAIL = "tets@test.com"
-TEST_USER_PASSWORD = "123aA@"
-TEST_USER_ID = str(uuid.uuid5(uuid.NAMESPACE_URL, f"prepiq:{TEST_USER_EMAIL}"))
+# ── Test user (env-var gated — leave both unset to disable) ───────────────────
+TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL", "").strip().lower()
+TEST_USER_PASSWORD = os.getenv("TEST_USER_PASSWORD", "")
+TEST_USER_ENABLED = bool(TEST_USER_EMAIL and TEST_USER_PASSWORD)
+TEST_USER_ID = (
+    str(uuid.uuid5(uuid.NAMESPACE_URL, f"prepiq:{TEST_USER_EMAIL}"))
+    if TEST_USER_ENABLED
+    else ""
+)
 TEST_USER_FULL_NAME = "Test User"
 
 
@@ -67,6 +72,8 @@ class UserResponse(BaseModel):
 
 
 def _is_test_user(email: str, password: str) -> bool:
+    if not TEST_USER_ENABLED:
+        return False
     return (
         email.strip().lower() == TEST_USER_EMAIL
         and password == TEST_USER_PASSWORD
@@ -122,24 +129,24 @@ def _login_test_user(
 
 
 def _jwt_secret() -> str:
-    secret = (os.getenv("JWT_SECRET") or os.getenv("SECRET_KEY") or "").strip()
+    secret = settings.SECRET_KEY.strip()
     if not secret or secret == "default-insecure-change-me":
-        secret = secret or "default-insecure-change-me"
+        raise RuntimeError(
+            "SECRET_KEY is not set or is the insecure default. "
+            "Set a strong SECRET_KEY in your environment."
+        )
     return secret
 
 
 def _jwt_algorithm() -> str:
-    return os.getenv("JWT_ALGORITHM", "HS256")
+    return settings.JWT_ALGORITHM
 
 
 def _token_expire_minutes() -> int:
-    try:
-        return int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(60 * 24 * 8)))
-    except ValueError:
-        return 60 * 24 * 8
+    return settings.ACCESS_TOKEN_EXPIRE_MINUTES
 
 
-def _mint_access_token(user_id: str, email: str) -> tuple[str, int]:
+def _mint_access_token(user_id: str, email: str) -> Tuple[str, int]:
     """Issue PrepIQ JWT for the frontend (Pyronites uses cookies, not bearer tokens)."""
     import jwt
 
@@ -164,18 +171,10 @@ def _decode_bearer_payload(token: str) -> Optional[Dict[str, Any]]:
 
         secret = _jwt_secret()
         algorithms = [_jwt_algorithm()]
-        verify = bool(secret and secret != "default-insecure-change-me")
-        if not verify:
-            return jwt.decode(token, options={"verify_signature": False})
         return jwt.decode(token, secret, algorithms=algorithms)
     except Exception as e:
         logger.debug("JWT decode failed: %s", e)
-        try:
-            import jwt as _jwt
-
-            return _jwt.decode(token, options={"verify_signature": False})
-        except Exception:
-            return None
+        return None
 
 
 def _as_dict(obj: Any) -> Optional[Dict[str, Any]]:
@@ -273,15 +272,6 @@ class PyronitesAuthService:
     async def signup(req: SignupRequest) -> UserResponse:
         email = str(req.email).strip().lower()
 
-        # Hardcoded test user — works even if Pyronites is down
-        if _is_test_user(email, req.password):
-            return _login_test_user(
-                full_name=req.full_name or TEST_USER_FULL_NAME,
-                college_name=req.college_name,
-                program=req.program,
-                year_of_study=str(req.year_of_study),
-            )
-
         if not pyronites_configured():
             raise HTTPException(
                 status_code=503,
@@ -294,6 +284,15 @@ class PyronitesAuthService:
         ok, err = validate_password(req.password)
         if not ok:
             raise HTTPException(status_code=400, detail=err)
+
+        # Test user — checked AFTER validation so credentials are still vetted
+        if _is_test_user(email, req.password):
+            return _login_test_user(
+                full_name=req.full_name or TEST_USER_FULL_NAME,
+                college_name=req.college_name,
+                program=req.program,
+                year_of_study=str(req.year_of_study),
+            )
 
         client = get_pyronites_client()
         try:
@@ -342,10 +341,6 @@ class PyronitesAuthService:
     async def login(req: LoginRequest) -> UserResponse:
         email = str(req.email).strip().lower()
 
-        # Hardcoded test user — works even if Pyronites is down / unconfigured
-        if _is_test_user(email, req.password):
-            return _login_test_user()
-
         if not pyronites_configured():
             raise HTTPException(
                 status_code=503,
@@ -357,6 +352,10 @@ class PyronitesAuthService:
             raise HTTPException(status_code=400, detail=err)
         if not req.password:
             raise HTTPException(status_code=400, detail="Password is required")
+
+        # Test user — checked AFTER validation so credentials are still vetted
+        if _is_test_user(email, req.password):
+            return _login_test_user()
 
         client = get_pyronites_client()
         try:

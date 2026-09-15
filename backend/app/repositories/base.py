@@ -103,13 +103,10 @@ def _cached(key: str, producer, fail_ttl: float = _FAIL_CACHE_TTL) -> Any:
 def _invalidate(table_name: str, row_id: Any) -> None:
     """Drop cached reads for a row after a successful write."""
     rid = str(row_id)
-    prefixes = (
-        f"get:{table_name}:{rid}",
-        f"select:{table_name}:id:{rid}",
-    )
+    prefix = f"select:{table_name}:id:{rid}"
     with _read_cache_lock:
         for k in list(_read_cache.keys()):
-            if k in prefixes or k == f"select:{table_name}:id:{rid}":
+            if k.startswith(f"get:{table_name}:{rid}") or k.startswith(prefix):
                 _read_cache.pop(k, None)
 
 # PyroCore free-tier rate limits surface as 429 "Too Many Requests". A short,
@@ -143,12 +140,14 @@ def _as_list(result: Any) -> List[Dict[str, Any]]:
     if result is None:
         return []
     if isinstance(result, list):
-        return [r for r in result if isinstance(r, dict)]
+        return [r for r in result if isinstance(r, dict) and "code" not in r and "message" not in r]
     if isinstance(result, dict):
         for key in ("data", "rows", "items", "results"):
             if key in result and isinstance(result[key], list):
-                return [r for r in result[key] if isinstance(r, dict)]
-        # single row object
+                return [r for r in result[key] if isinstance(r, dict) and "code" not in r and "message" not in r]
+        # single row object — but reject error shapes
+        if "code" in result or "message" in result:
+            return []
         if "id" in result or any(k in result for k in ("email", "name", "subject_id", "user_id")):
             return [result]
         return []
@@ -189,9 +188,11 @@ def select_eq(table_name: str, column: str, value: Any) -> List[Dict[str, Any]]:
         return []
 
 
-def select_all(table_name: str) -> List[Dict[str, Any]]:
+def select_all(table_name: str, limit: int = 500) -> List[Dict[str, Any]]:
     try:
         q = table(table_name).select()
+        if hasattr(q, "limit"):
+            q = q.limit(limit)
         result = _retry(lambda: q.execute()) if hasattr(q, "execute") else q
         return _as_list(result)
     except Exception as e:

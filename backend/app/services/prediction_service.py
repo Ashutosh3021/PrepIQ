@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from app.core.llm_provider import get_llm_client
+from app.core.text_utils import strip_fences as _strip_fences
 from app.repositories import papers as papers_repo
 from app.repositories import predictions as predictions_repo
 from app.repositories import questions as questions_repo
@@ -293,14 +294,6 @@ def _stats_fallback_predictions(stats: Dict[str, Any], source: str) -> List[Dict
             )
         )
     return out
-
-
-def _strip_fences(raw: str) -> str:
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z0-9_-]*\\n?", "", text)
-        text = re.sub(r"\\n?```$", "", text)
-    return text.strip()
 
 
 def _call_llm(prompt: str) -> List[Dict[str, Any]]:

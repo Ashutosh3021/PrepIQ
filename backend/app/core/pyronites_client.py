@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ _lock = threading.Lock()
 _client: Any = None
 
 
-def _require_env() -> tuple[str, str]:
+def _require_env() -> Tuple[str, str]:
     url = (os.getenv("PYRONITES_URL") or "").strip()
     key = (os.getenv("PYRONITES_KEY") or "").strip()
     if not url or not key:
@@ -102,13 +102,17 @@ def get_pyronites_client() -> Any:
             ) from e
         _client = create_client(url, key)
         if project_id:
-            # Swap the HttpTransport for a project-scoped wrapper
-            scoped = _ProjectScopedTransport(_client._http, project_id)
-            _client._http = scoped
-            logger.info(
-                "Pyronites client initialised (url=%s, project=%s)",
-                url[:48], project_id,
-            )
+            if not hasattr(_client, "_http"):
+                logger.warning(
+                    "Pyronites client has no _http attribute — project-scoped routing disabled"
+                )
+            else:
+                scoped = _ProjectScopedTransport(_client._http, project_id)
+                _client._http = scoped
+                logger.info(
+                    "Pyronites client initialised (url=%s, project=%s)",
+                    url[:48], project_id,
+                )
         else:
             logger.info("Pyronites client initialised (url=%s, legacy unscoped)", url[:48])
         return _client

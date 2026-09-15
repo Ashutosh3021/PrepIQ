@@ -35,6 +35,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 import logging
 
@@ -49,7 +50,7 @@ def get_missing_environment_vars():
     required_vars = {
         "PYRONITES_URL": "Pyronites project URL",
         "PYRONITES_KEY": "Pyronites API key",
-        "JWT_SECRET": "JWT secret key (openssl rand -base64 32)",
+        "SECRET_KEY": "JWT secret key (openssl rand -base64 32)",
         "ALLOWED_ORIGINS": "Comma-separated list of allowed CORS origins",
     }
     missing = []
@@ -60,6 +61,18 @@ def get_missing_environment_vars():
 
 
 from app.core.config import settings
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        if settings.ENVIRONMENT == "production":
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+        return response
 
 import sys as _sys
 import os as _os
@@ -129,6 +142,11 @@ async def lifespan(app: FastAPI):
             "HEALTH_ENDPOINT",
             "https://prepiq-narg.onrender.com/health",
         )
+        if not _keep_alive_endpoint.startswith("https://"):
+            logger.warning(
+                "[keep-alive] HEALTH_ENDPOINT is not HTTPS (%s) — using it anyway",
+                _keep_alive_endpoint,
+            )
         _keep_alive_thread = start_keep_alive_thread(url=_keep_alive_endpoint, logger=logger)
         logger.info("[keep-alive] Pinging %s every 14 min", _keep_alive_endpoint)
 
@@ -178,9 +196,15 @@ def create_app() -> FastAPI:
     is_development = os.getenv("ENVIRONMENT", "development").lower() == "development"
 
     if is_development:
+        _dev_origins = [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+        ]
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=_dev_origins,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -213,8 +237,10 @@ def create_app() -> FastAPI:
     if settings.ENVIRONMENT == "production":
         app.add_middleware(
             TrustedHostMiddleware,
-            allowed_hosts=["*.onrender.com", "*.vercel.app", "localhost"],
+            allowed_hosts=["prepiq.onrender.com", "prep-iq-three.vercel.app", "prepiq.vercel.app"],
         )
+
+    app.add_middleware(SecurityHeadersMiddleware)
 
     @app.exception_handler(ConnectionResetError)
     async def connection_reset_handler(request: Request, exc: ConnectionResetError):
@@ -226,7 +252,7 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        logger.error("Unhandled exception: %s", exc, exc_info=True)
+        logger.error("Unhandled exception: %s", exc)
         return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
     @app.get("/health", tags=["Health"])

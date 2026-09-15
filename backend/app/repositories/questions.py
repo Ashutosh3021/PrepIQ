@@ -6,7 +6,6 @@ import logging
 import uuid
 
 from app.repositories import base
-from app.repositories import papers as papers_repo
 
 logger = logging.getLogger(__name__)
 
@@ -18,19 +17,13 @@ def list_for_paper(paper_id: str) -> List[Dict[str, Any]]:
 
 
 def list_for_subject(subject_id: str) -> List[Dict[str, Any]]:
-    paper_ids = {str(p["id"]) for p in papers_repo.list_for_subject(subject_id)}
-    if not paper_ids:
-        return []
+    """Return all questions for a subject. Relies on subject_id column in the
+    questions table (set during create_many). No per-paper fallback."""
     try:
-        rows = base.select_eq(TABLE, "subject_id", subject_id)
-        if rows:
-            return rows
-    except Exception:
-        pass
-    all_rows: List[Dict[str, Any]] = []
-    for pid in paper_ids:
-        all_rows.extend(list_for_paper(pid))
-    return all_rows
+        return base.select_eq(TABLE, "subject_id", subject_id)
+    except Exception as e:
+        logger.error("list_for_subject %s failed: %s", subject_id, e)
+        return []
 
 
 def get(question_id: str) -> Optional[Dict[str, Any]]:

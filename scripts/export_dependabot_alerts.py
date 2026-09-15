@@ -11,6 +11,7 @@ Environment variables:
 """
 
 import argparse
+import csv
 import json
 import os
 import sys
@@ -58,22 +59,15 @@ class DependabotAlertsExporter:
         Returns:
             List of alert dictionaries
         """
-        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/dependabot/alerts"
-        params = {
-            "state": state,
-            "per_page": per_page,
-            "sort": "updated",
-            "direction": "desc",
-        }
+        next_url = f"{self.base_url}/repos/{self.owner}/{self.repo}/dependabot/alerts?state={state}&per_page={per_page}&sort=updated&direction=desc"
 
-        page = 1
         alerts = []
+        page_num = 1
 
         print(f"Fetching {state} Dependabot alerts...")
 
-        while True:
-            params["page"] = page
-            response = requests.get(url, headers=self.headers, params=params)
+        while next_url:
+            response = requests.get(next_url, headers=self.headers)
 
             if response.status_code == 404:
                 print(
@@ -94,9 +88,17 @@ class DependabotAlertsExporter:
                 break
 
             alerts.extend(page_alerts)
-            print(f"  Fetched page {page}: {len(page_alerts)} alerts (total: {len(alerts)})")
+            print(f"  Fetched page {page_num}: {len(page_alerts)} alerts (total: {len(alerts)})")
 
-            page += 1
+            # Extract next page URL from Link header (no parsing/cursor extraction)
+            next_url = None
+            link_header = response.headers.get("Link", "")
+            for part in link_header.split(","):
+                if 'rel="next"' in part:
+                    next_url = part.strip().split(";")[0].strip().strip("<").strip(">")
+                    break
+
+            page_num += 1
 
         self.alerts = alerts
         return alerts
@@ -131,37 +133,34 @@ class DependabotAlertsExporter:
         Returns:
             Path to created file
         """
-        try:
-            import pandas as pd
-        except ImportError:
-            print("Error: pandas library not found. Install with: pip install pandas")
-            sys.exit(1)
-
         if not filename:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"dependabot_alerts_{timestamp}.csv"
 
-        # Flatten nested data
-        rows = []
-        for alert in self.alerts:
-            row = {
-                "number": alert.get("number"),
-                "state": alert.get("state"),
-                "dependency": alert.get("dependency", {}).get("package", {}).get("name"),
-                "ecosystem": alert.get("dependency", {}).get("package", {}).get("ecosystem"),
-                "vulnerability_severity": alert.get("security_advisory", {}).get("severity"),
-                "vulnerability_cve": alert.get("security_advisory", {}).get("cve_id"),
-                "updated_at": alert.get("updated_at"),
-                "created_at": alert.get("created_at"),
-                "dismissed_at": alert.get("dismissed_at"),
-                "url": alert.get("html_url"),
-            }
-            rows.append(row)
+        headers = [
+            "number", "state", "dependency", "ecosystem",
+            "vulnerability_severity", "vulnerability_cve",
+            "updated_at", "created_at", "dismissed_at", "url",
+        ]
 
-        df = pd.DataFrame(rows)
-        df.to_csv(filename, index=False)
+        with open(filename, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            for alert in self.alerts:
+                writer.writerow({
+                    "number": alert.get("number"),
+                    "state": alert.get("state"),
+                    "dependency": alert.get("dependency", {}).get("package", {}).get("name"),
+                    "ecosystem": alert.get("dependency", {}).get("package", {}).get("ecosystem"),
+                    "vulnerability_severity": alert.get("security_advisory", {}).get("severity"),
+                    "vulnerability_cve": alert.get("security_advisory", {}).get("cve_id"),
+                    "updated_at": alert.get("updated_at"),
+                    "created_at": alert.get("created_at"),
+                    "dismissed_at": alert.get("dismissed_at"),
+                    "url": alert.get("html_url"),
+                })
 
-        print(f"\n✓ Exported {len(self.alerts)} alerts to {filename}")
+        print(f"\nExported {len(self.alerts)} alerts to {filename}")
         return filename
 
     def export_markdown(self, filename: str = None) -> str:

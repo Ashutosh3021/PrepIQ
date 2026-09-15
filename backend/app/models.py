@@ -1,12 +1,11 @@
 """
-PrepIQ Database Models
-SQLAlchemy models for PostgreSQL with Supabase
+PrepIQ Database Models (Legacy)
+SQLAlchemy models retained for reference. All live data flows through Pyronites.
 """
 
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, LargeBinary, Index, Numeric
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import func
 import uuid
 
@@ -385,9 +384,3 @@ class StudyPlan(Base):
         Index('idx_study_plans_user_id', 'user_id'),
         Index('idx_study_plans_subject_id', 'subject_id'),
     )
-
-
-# Standalone function to create all tables
-def create_tables(engine):
-    """Create all database tables"""
-    Base.metadata.create_all(bind=engine)
