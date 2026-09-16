@@ -136,6 +136,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("[WARN] Pyronites client init failed: %s", e)
 
+    # ── Auto-provision missing Pyronites tables ────────────────────────────
+    try:
+        from app.core.migration import run_startup_migration
+
+        run_startup_migration()
+    except Exception as e:
+        logger.warning("[migration] Startup table check failed: %s", e)
+
     _keep_alive_thread = None
     if settings.ENVIRONMENT == "production" and _KEEP_ALIVE_AVAILABLE:
         _keep_alive_endpoint = os.getenv(

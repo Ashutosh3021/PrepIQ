@@ -352,6 +352,17 @@ class PyronitesAuthService:
                 year_of_study=str(req.year_of_study),
             )
 
+        # Check for existing user before attempting signup to avoid duplicate token
+        try:
+            existing = users_repo.get_by_email(email)
+            if existing:
+                raise HTTPException(status_code=409, detail="Email already registered")
+        except HTTPException:
+            raise
+        except Exception as e:
+            # DB read failure is non-fatal — proceed with signup attempt
+            logger.debug("Existing-user check failed (continuing): %s", e)
+
         client = get_pyronites_client()
         try:
             response = await _retry_on_429(client.auth.sign_up, email, req.password)

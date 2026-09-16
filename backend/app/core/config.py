@@ -59,7 +59,7 @@ class Settings(BaseSettings):
 
     # Phase 1 LLM
     LLM_DEFAULT_PROVIDER: str = os.getenv("LLM_DEFAULT_PROVIDER", "gemini")
-    LLM_DEFAULT_MODEL: str = os.getenv("LLM_DEFAULT_MODEL", "gemini-1.5-flash")
+    LLM_DEFAULT_MODEL: str = os.getenv("LLM_DEFAULT_MODEL", "gemini-2.0-flash")
     LLM_DEFAULT_API_KEY: str = os.getenv("LLM_DEFAULT_API_KEY", "")
     LLM_DEFAULT_BASE_URL: str = os.getenv("LLM_DEFAULT_BASE_URL", "")
     PREDICTION_PROVIDER: str = os.getenv("PREDICTION_PROVIDER", "")

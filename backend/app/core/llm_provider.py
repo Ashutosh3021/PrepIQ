@@ -41,7 +41,7 @@ def resolve_llm_settings(capability: str) -> Dict[str, str]:
     prefix = cap.upper()  # PREDICTION | EXTRACTION | CHAT
 
     provider = _env(f"{prefix}_PROVIDER") or _env("LLM_DEFAULT_PROVIDER") or "gemini"
-    model = _env(f"{prefix}_MODEL") or _env("LLM_DEFAULT_MODEL") or "gemini-1.5-flash"
+    model = _env(f"{prefix}_MODEL") or _env("LLM_DEFAULT_MODEL") or "gemini-2.0-flash"
     api_key = (
         _env(f"{prefix}_API_KEY")
         or _env("LLM_DEFAULT_API_KEY")

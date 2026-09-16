@@ -144,6 +144,7 @@ async def complete_step3(
         {
             "target_score": wizard_data.target_score,
             "preparation_level": wizard_data.preparation_level,
+            "wizard_completed": True,
         },
     )
     return {
@@ -261,38 +262,5 @@ async def reset_wizard(current_user: dict = Depends(get_current_user)):
         "id": str(user_id),
         "email": current_user.get("email", ""),
         "full_name": current_user.get("full_name", ""),
-        "access_token": None,
-    }
-    fields = {}
-    data = update_data.model_dump(exclude_unset=True) if hasattr(update_data, "model_dump") else {
-        k: v for k, v in vars(update_data).items() if v is not None
-    }
-    for key in (
-        "full_name",
-        "college_name",
-        "program",
-        "year_of_study",
-        "exam_name",
-        "exam_type",
-        "university_name",
-        "days_until_exam",
-        "focus_subjects",
-        "study_hours_per_day",
-        "target_score",
-        "preparation_level",
-        "wizard_completed",
-    ):
-        if key in data and data[key] is not None:
-            fields[key] = data[key]
-    if "days_until_exam" in fields:
-        fields["exam_date"] = (
-            datetime.now(timezone.utc) + timedelta(days=int(fields["days_until_exam"]))
-        ).isoformat()
-    if fields:
-        users_repo.update(current_user["id"], fields)
-    return {
-        "id": str(current_user["id"]),
-        "email": current_user["email"],
-        "full_name": fields.get("full_name") or current_user.get("full_name", ""),
         "access_token": None,
     }

@@ -7,8 +7,9 @@ Legacy `/message` and `/history/*` are unused by the current frontend
 No SQLAlchemy / DATABASE_URL required for any route in this module.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Header
-from typing import List, Optional, Dict
+from typing import Any, List, Optional, Dict
 import logging
+import threading
 
 from .. import schemas
 from ..core.llm_provider import get_llm_client
@@ -27,6 +28,39 @@ _LEGACY_MSG = (
     "Use POST /api/v1/chat/tutor (client-side conversation history). "
     "Server-backed /message and /history will return in a later phase."
 )
+
+# In-memory chat store keyed by (user_id, subject_id)
+# This provides basic /message and /history support so the frontend
+# doesn't break with 501 errors.
+_chat_store: Dict[str, List[Dict[str, Any]]] = {}
+_chat_store_lock = threading.Lock()
+
+
+def _chat_key(user_id: str, subject_id: str) -> str:
+    return f"{user_id}:{subject_id}"
+
+
+def _store_message(user_id: str, subject_id: str, role: str, content: str) -> Dict[str, Any]:
+    import uuid
+    from datetime import datetime, timezone
+
+    msg = {
+        "id": str(uuid.uuid4()),
+        "role": role,
+        "content": content,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    key = _chat_key(user_id, subject_id)
+    with _chat_store_lock:
+        _chat_store.setdefault(key, []).append(msg)
+    return msg
+
+
+def _get_history(user_id: str, subject_id: str, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    key = _chat_key(user_id, subject_id)
+    with _chat_store_lock:
+        msgs = list(_chat_store.get(key, []))
+    return msgs[offset: offset + limit]
 
 
 async def get_current_user(authorization: str = Header(None)):
@@ -185,7 +219,32 @@ async def send_message(
     chat_request: schemas.ChatRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    _not_implemented()
+    """Store a user message and return a placeholder response.
+
+    Full AI responses are handled by the /tutor endpoint.
+    This exists so the frontend doesn't break with 501.
+    """
+    import uuid as _uuid
+
+    _store_message(
+        current_user["id"],
+        chat_request.subject_id,
+        "user",
+        chat_request.message,
+    )
+    bot_msg = _store_message(
+        current_user["id"],
+        chat_request.subject_id,
+        "assistant",
+        "I received your message. Please use the AI Tutor for detailed responses.",
+    )
+    return {
+        "message_id": bot_msg["id"],
+        "response": bot_msg["content"],
+        "related_questions": [],
+        "references": [],
+        "suggested_actions": [],
+    }
 
 
 @router.get("/history/{subject_id}", response_model=List[schemas.ChatHistoryResponse])
@@ -195,7 +254,17 @@ async def get_chat_history(
     offset: int = 0,
     current_user: dict = Depends(get_current_user),
 ):
-    _not_implemented()
+    """Return in-memory chat history for a subject."""
+    msgs = _get_history(current_user["id"], subject_id, limit, offset)
+    return [
+        {
+            "id": m["id"],
+            "timestamp": m["timestamp"],
+            "user_message": m["content"] if m["role"] == "user" else "",
+            "bot_response": m["content"] if m["role"] == "assistant" else "",
+        }
+        for m in msgs
+    ]
 
 
 @router.delete("/history/{subject_id}")
@@ -203,7 +272,11 @@ async def clear_chat_history(
     subject_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    _not_implemented()
+    """Clear in-memory chat history for a subject."""
+    key = _chat_key(current_user["id"], subject_id)
+    with _chat_store_lock:
+        _chat_store.pop(key, None)
+    return {"message": f"Chat history cleared for subject {subject_id}"}
 
 
 # ── AI Tutor (Pyronites data plane) ──────────────────────────────────────────
