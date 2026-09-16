@@ -84,11 +84,15 @@ def create(user_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": now,
         "updated_at": now,
     }
-    # Native track columns (do NOT send nested syllabus_json — causes 500 on some PyroCore builds)
+    # Native track columns
     if _native_track_columns():
         for k in _PHASE0_KEYS:
             if data.get(k) is not None:
                 payload[k] = data.get(k)
+
+    # JSON columns — send native objects; PyroCore coerces them
+    if isinstance(data.get("syllabus_json"), (dict, list)):
+        payload["syllabus_json"] = data["syllabus_json"]
 
     for opt in (
         "total_marks",
@@ -118,6 +122,8 @@ def create(user_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
             "created_at": now,
             "updated_at": now,
         }
+        if isinstance(data.get("syllabus_json"), (dict, list)):
+            bare["syllabus_json"] = data["syllabus_json"]
         bare = _drop_nones(bare)
         row = base.insert_row(TABLE, bare)
         track = {k: data.get(k) for k in _PHASE0_KEYS if data.get(k) is not None}

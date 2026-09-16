@@ -28,151 +28,160 @@ _ran = False
 # Each entry: (table_name, column_definitions)
 # PyroCore accepts {"columns": [...]} for table creation.
 
-_TABLES: List[Tuple[str, List[Dict[str, Any]]]] = [
+_TABLES: List[Tuple[str, str, List[Dict[str, Any]]]] = [
     (
         "subjects",
+        "id",
         [
-            {"name": "id", "type": "string", "primary_key": True},
-            {"name": "user_id", "type": "string"},
-            {"name": "name", "type": "string"},
-            {"name": "code", "type": "string"},
-            {"name": "semester", "type": "number"},
-            {"name": "academic_year", "type": "string"},
-            {"name": "exam_type", "type": "string"},
-            {"name": "exam_name", "type": "string"},
-            {"name": "university_name", "type": "string"},
-            {"name": "total_marks", "type": "number"},
-            {"name": "exam_date", "type": "string"},
-            {"name": "exam_duration_minutes", "type": "number"},
-            {"name": "papers_uploaded", "type": "number"},
-            {"name": "predictions_generated", "type": "number"},
-            {"name": "mock_tests_created", "type": "number"},
-            {"name": "syllabus_json", "type": "json"},
-            {"name": "created_at", "type": "string"},
-            {"name": "updated_at", "type": "string"},
+            {"name": "id", "type": "TEXT"},
+            {"name": "user_id", "type": "TEXT"},
+            {"name": "name", "type": "TEXT"},
+            {"name": "code", "type": "TEXT"},
+            {"name": "semester", "type": "INTEGER"},
+            {"name": "academic_year", "type": "TEXT"},
+            {"name": "total_marks", "type": "INTEGER"},
+            {"name": "exam_date", "type": "TEXT"},
+            {"name": "exam_duration_minutes", "type": "INTEGER"},
+            {"name": "syllabus_json", "type": "JSON"},
+            {"name": "papers_uploaded", "type": "INTEGER"},
+            {"name": "predictions_generated", "type": "INTEGER"},
+            {"name": "mock_tests_created", "type": "INTEGER"},
+            {"name": "exam_type", "type": "TEXT"},
+            {"name": "exam_name", "type": "TEXT"},
+            {"name": "university_name", "type": "TEXT"},
+            {"name": "created_at", "type": "TEXT"},
+            {"name": "updated_at", "type": "TEXT"},
         ],
     ),
     (
         "question_papers",
+        "id",
         [
-            {"name": "id", "type": "string", "primary_key": True},
-            {"name": "subject_id", "type": "string"},
-            {"name": "file_name", "type": "string"},
-            {"name": "file_path", "type": "string"},
-            {"name": "file_size_bytes", "type": "number"},
-            {"name": "exam_year", "type": "number"},
-            {"name": "exam_semester", "type": "number"},
-            {"name": "total_marks", "type": "number"},
-            {"name": "duration_minutes", "type": "number"},
-            {"name": "raw_text", "type": "string"},
-            {"name": "metadata_json", "type": "json"},
-            {"name": "extraction_confidence", "type": "number"},
-            {"name": "extraction_method", "type": "string"},
-            {"name": "processing_status", "type": "string"},
-            {"name": "error_message", "type": "string"},
-            {"name": "processed_at", "type": "string"},
-            {"name": "created_at", "type": "string"},
-            {"name": "updated_at", "type": "string"},
+            {"name": "id", "type": "TEXT"},
+            {"name": "subject_id", "type": "TEXT"},
+            {"name": "file_name", "type": "TEXT"},
+            {"name": "file_path", "type": "TEXT"},
+            {"name": "file_size_bytes", "type": "INTEGER"},
+            {"name": "exam_year", "type": "INTEGER"},
+            {"name": "exam_semester", "type": "TEXT"},
+            {"name": "total_marks", "type": "INTEGER"},
+            {"name": "duration_minutes", "type": "INTEGER"},
+            {"name": "raw_text", "type": "TEXT"},
+            {"name": "metadata_json", "type": "JSON"},
+            {"name": "extraction_confidence", "type": "REAL"},
+            {"name": "extraction_method", "type": "TEXT"},
+            {"name": "processing_status", "type": "TEXT"},
+            {"name": "error_message", "type": "TEXT"},
+            {"name": "processed_at", "type": "TEXT"},
+            {"name": "created_at", "type": "TEXT"},
+            {"name": "updated_at", "type": "TEXT"},
         ],
     ),
     (
         "questions",
+        "id",
         [
-            {"name": "id", "type": "string", "primary_key": True},
-            {"name": "paper_id", "type": "string"},
-            {"name": "subject_id", "type": "string"},
-            {"name": "question_text", "type": "string"},
-            {"name": "question_number", "type": "number"},
-            {"name": "marks", "type": "number"},
-            {"name": "unit_name", "type": "string"},
-            {"name": "question_type", "type": "string"},
-            {"name": "difficulty", "type": "string"},
-            {"name": "correct_answer", "type": "string"},
-            {"name": "topics_json", "type": "json"},
-            {"name": "text_length", "type": "number"},
-            {"name": "tagged_unit", "type": "string"},
-            {"name": "tagging_confidence", "type": "number"},
-            {"name": "created_at", "type": "string"},
+            {"name": "id", "type": "TEXT"},
+            {"name": "paper_id", "type": "TEXT"},
+            {"name": "subject_id", "type": "TEXT"},
+            {"name": "question_text", "type": "TEXT"},
+            {"name": "question_number", "type": "INTEGER"},
+            {"name": "marks", "type": "INTEGER"},
+            {"name": "unit_name", "type": "TEXT"},
+            {"name": "question_type", "type": "TEXT"},
+            {"name": "difficulty", "type": "TEXT"},
+            {"name": "correct_answer", "type": "TEXT"},
+            {"name": "topics_json", "type": "JSON"},
+            {"name": "text_length", "type": "INTEGER"},
+            {"name": "tagged_unit", "type": "TEXT"},
+            {"name": "tagging_confidence", "type": "REAL"},
+            {"name": "created_at", "type": "TEXT"},
         ],
     ),
     (
         "predictions",
+        "id",
         [
-            {"name": "id", "type": "string", "primary_key": True},
-            {"name": "user_id", "type": "string"},
-            {"name": "subject_id", "type": "string"},
-            {"name": "predicted_questions_json", "type": "json"},
-            {"name": "total_questions", "type": "number"},
-            {"name": "total_predicted_marks", "type": "number"},
-            {"name": "unit_coverage_json", "type": "json"},
-            {"name": "ml_analysis_json", "type": "json"},
-            {"name": "prediction_accuracy_score", "type": "number"},
-            {"name": "source_type", "type": "string"},
-            {"name": "model_version", "type": "string"},
-            {"name": "created_at", "type": "string"},
-            {"name": "updated_at", "type": "string"},
+            {"name": "id", "type": "TEXT"},
+            {"name": "user_id", "type": "TEXT"},
+            {"name": "subject_id", "type": "TEXT"},
+            {"name": "predicted_questions_json", "type": "JSON"},
+            {"name": "total_questions", "type": "INTEGER"},
+            {"name": "total_predicted_marks", "type": "INTEGER"},
+            {"name": "unit_coverage_json", "type": "JSON"},
+            {"name": "ml_analysis_json", "type": "JSON"},
+            {"name": "prediction_accuracy_score", "type": "REAL"},
+            {"name": "source_type", "type": "TEXT"},
+            {"name": "model_version", "type": "TEXT"},
+            {"name": "created_at", "type": "TEXT"},
+            {"name": "updated_at", "type": "TEXT"},
         ],
     ),
     (
         "mock_tests",
+        "id",
         [
-            {"name": "id", "type": "string", "primary_key": True},
-            {"name": "user_id", "type": "string"},
-            {"name": "subject_id", "type": "string"},
-            {"name": "total_questions", "type": "number"},
-            {"name": "total_marks", "type": "number"},
-            {"name": "duration_minutes", "type": "number"},
-            {"name": "difficulty_level", "type": "string"},
-            {"name": "questions_json", "type": "json"},
-            {"name": "start_time", "type": "string"},
-            {"name": "end_time", "type": "string"},
-            {"name": "is_completed", "type": "boolean"},
-            {"name": "user_answers_json", "type": "json"},
-            {"name": "score", "type": "number"},
-            {"name": "percentage", "type": "number"},
-            {"name": "correct_count", "type": "number"},
-            {"name": "incorrect_count", "type": "number"},
-            {"name": "skipped_count", "type": "number"},
-            {"name": "weak_topics_json", "type": "json"},
-            {"name": "strong_topics_json", "type": "json"},
-            {"name": "created_at", "type": "string"},
-        ],
-    ),
-    (
-        "study_plans",
-        [
-            {"name": "id", "type": "string", "primary_key": True},
-            {"name": "user_id", "type": "string"},
-            {"name": "subject_id", "type": "string"},
-            {"name": "total_days", "type": "number"},
-            {"name": "daily_schedule_json", "type": "json"},
-            {"name": "days_completed", "type": "number"},
-            {"name": "on_track", "type": "boolean"},
-            {"name": "created_at", "type": "string"},
-            {"name": "updated_at", "type": "string"},
-        ],
-    ),
-    (
-        "chat_history",
-        [
-            {"name": "id", "type": "string", "primary_key": True},
-            {"name": "user_id", "type": "string"},
-            {"name": "subject_id", "type": "string"},
-            {"name": "role", "type": "string"},
-            {"name": "content", "type": "string"},
-            {"name": "created_at", "type": "string"},
+            {"name": "id", "type": "TEXT"},
+            {"name": "user_id", "type": "TEXT"},
+            {"name": "subject_id", "type": "TEXT"},
+            {"name": "total_questions", "type": "INTEGER"},
+            {"name": "total_marks", "type": "INTEGER"},
+            {"name": "duration_minutes", "type": "INTEGER"},
+            {"name": "difficulty_level", "type": "TEXT"},
+            {"name": "questions_json", "type": "JSON"},
+            {"name": "start_time", "type": "TEXT"},
+            {"name": "end_time", "type": "TEXT"},
+            {"name": "is_completed", "type": "BOOLEAN"},
+            {"name": "user_answers_json", "type": "JSON"},
+            {"name": "score", "type": "REAL"},
+            {"name": "percentage", "type": "REAL"},
+            {"name": "correct_count", "type": "INTEGER"},
+            {"name": "incorrect_count", "type": "INTEGER"},
+            {"name": "skipped_count", "type": "INTEGER"},
+            {"name": "weak_topics_json", "type": "JSON"},
+            {"name": "strong_topics_json", "type": "JSON"},
+            {"name": "created_at", "type": "TEXT"},
         ],
     ),
     (
         "syllabus",
+        "id",
         [
-            {"name": "id", "type": "string", "primary_key": True},
-            {"name": "subject_id", "type": "string"},
-            {"name": "raw_pdf_ref", "type": "string"},
-            {"name": "extracted_taxonomy", "type": "json"},
-            {"name": "extracted_at", "type": "string"},
-            {"name": "created_at", "type": "string"},
-            {"name": "updated_at", "type": "string"},
+            {"name": "id", "type": "TEXT"},
+            {"name": "subject_id", "type": "TEXT"},
+            {"name": "raw_pdf_ref", "type": "TEXT"},
+            {"name": "extracted_taxonomy", "type": "JSON"},
+            {"name": "extracted_at", "type": "TEXT"},
+            {"name": "created_at", "type": "TEXT"},
+            {"name": "updated_at", "type": "TEXT"},
+        ],
+    ),
+    (
+        "unit_features",
+        "id",
+        [
+            {"name": "id", "type": "TEXT"},
+            {"name": "subject_id", "type": "TEXT"},
+            {"name": "unit_name", "type": "TEXT"},
+            {"name": "recurrence_count", "type": "INTEGER"},
+            {"name": "recency_weight", "type": "REAL"},
+            {"name": "marks_trend", "type": "REAL"},
+            {"name": "last_asked_gap", "type": "INTEGER"},
+            {"name": "computed_at", "type": "TEXT"},
+            {"name": "created_at", "type": "TEXT"},
+            {"name": "updated_at", "type": "TEXT"},
+        ],
+    ),
+    (
+        "exam_context_cache",
+        "id",
+        [
+            {"name": "id", "type": "TEXT"},
+            {"name": "exam_name", "type": "TEXT"},
+            {"name": "context_summary", "type": "TEXT"},
+            {"name": "fetched_at", "type": "TEXT"},
+            {"name": "created_at", "type": "TEXT"},
+            {"name": "updated_at", "type": "TEXT"},
         ],
     ),
 ]
@@ -202,18 +211,21 @@ def _check_table_exists_http(project_id: str, table_name: str, url: str, key: st
 
 
 def _create_table_http(
-    project_id: str, table_name: str, columns: List[Dict[str, Any]], url: str, key: str
+    project_id: str, table_name: str, primary_key: str, columns: List[Dict[str, Any]], url: str, key: str
 ) -> bool:
-    """Create a table via the Pyronites/PyroCore management API."""
+    """Create a table via the Pyronites/PyroCore management API.
+
+    Body format (verified):
+        {"table": "<name>", "primary_key": "<pk>", "columns": [{"name":"...", "type":"TEXT|INTEGER|REAL|JSON|BOOLEAN"}]}
+    """
     import httpx
 
-    payload = {"columns": columns}
+    payload = {"table": table_name, "primary_key": primary_key, "columns": columns}
     try:
         resp = httpx.post(
             f"{url.rstrip('/')}/api/projects/{project_id}/tables",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json=payload,
-            params={"table_name": table_name},
             timeout=15,
         )
         if resp.status_code in (200, 201):
@@ -284,7 +296,7 @@ def run_startup_migration() -> None:
     created_count = 0
     failed_count = 0
 
-    for table_name, columns in _TABLES:
+    for table_name, primary_key, columns in _TABLES:
         if _check_table_exists_http(project_id, table_name, url, key):
             continue
 
@@ -293,7 +305,7 @@ def run_startup_migration() -> None:
         # Try SDK first, then raw HTTP
         success = _create_table_via_sdk(table_name, columns)
         if not success:
-            success = _create_table_http(project_id, table_name, columns, url, key)
+            success = _create_table_http(project_id, table_name, primary_key, columns, url, key)
 
         if success:
             created_count += 1
