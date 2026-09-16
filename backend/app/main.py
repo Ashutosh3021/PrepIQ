@@ -74,6 +74,26 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         return response
 
+
+# ── Request logging middleware ────────────────────────────────────────────────
+import time as _time
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Log request method, path, status, and duration for observability."""
+
+    async def dispatch(self, request: Request, call_next):
+        start = _time.monotonic()
+        response = await call_next(request)
+        duration_ms = (_time.monotonic() - start) * 1000
+        logger.info(
+            "%s %s → %d (%.0fms)",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
+        return response
+
 import sys as _sys
 import os as _os
 
@@ -193,9 +213,9 @@ def create_app() -> FastAPI:
         description="AI-Powered Exam Preparation Platform",
         version="1.0.0",
         lifespan=lifespan,
-        docs_url="/docs" if settings.DEBUG else None,
-        redoc_url="/redoc" if settings.DEBUG else None,
-        openapi_url="/openapi.json" if settings.DEBUG else None,
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
         redirect_slashes=False,
     )
 
@@ -253,6 +273,7 @@ def create_app() -> FastAPI:
         )
 
     app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(RequestLoggingMiddleware)
 
     @app.exception_handler(ConnectionResetError)
     async def connection_reset_handler(request: Request, exc: ConnectionResetError):
@@ -287,6 +308,10 @@ def create_app() -> FastAPI:
     @app.get("/health/auth", tags=["Health"])
     async def auth_health_check():
         from app.core.pyronites_client import pyronites_configured, get_pyronites_client
+        from app.core.circuit_breaker import pyrocore_breaker
+
+        circuit_state = pyrocore_breaker.state.value
+        circuit_failures = pyrocore_breaker.failures
 
         if not pyronites_configured():
             raise HTTPException(
@@ -294,6 +319,8 @@ def create_app() -> FastAPI:
                 detail={
                     "status": "error",
                     "auth_service": "unconfigured",
+                    "circuit_breaker": circuit_state,
+                    "circuit_failures": circuit_failures,
                     "message": "PYRONITES_URL or PYRONITES_KEY is not set",
                 },
             )
@@ -302,12 +329,20 @@ def create_app() -> FastAPI:
             return {
                 "status": "ok",
                 "auth_service": "pyronites",
+                "circuit_breaker": circuit_state,
+                "circuit_failures": circuit_failures,
                 "timestamp": datetime.utcnow().isoformat(),
             }
         except Exception as e:
             raise HTTPException(
                 status_code=503,
-                detail={"status": "error", "auth_service": "unreachable", "message": str(e)},
+                detail={
+                    "status": "error",
+                    "auth_service": "unreachable",
+                    "circuit_breaker": circuit_state,
+                    "circuit_failures": circuit_failures,
+                    "message": str(e),
+                },
             )
 
     @app.get("/", tags=["Root"])
@@ -315,8 +350,27 @@ def create_app() -> FastAPI:
         return {
             "message": "Welcome to PrepIQ API",
             "version": "1.0.0",
-            "docs": "/docs" if settings.DEBUG else None,
+            "docs": "/docs",
             "health": "/health",
+        }
+
+    @app.get("/health/rate-limit", tags=["Health"])
+    async def rate_limit_status():
+        """Report circuit breaker state and rate-limit observability."""
+        from app.core.circuit_breaker import pyrocore_breaker, CircuitState
+        from app.core.logging_transport import get_last_retry_after
+
+        breaker = pyrocore_breaker
+        state = breaker.state
+
+        return {
+            "circuit_breaker": {
+                "state": state.value,
+                "failures": breaker.failures,
+                "is_open": state == CircuitState.OPEN,
+                "cooldown_seconds": int(breaker._cooldown.total_seconds()),
+            },
+            "last_retry_after": get_last_retry_after(),
         }
 
     from app.routers import (

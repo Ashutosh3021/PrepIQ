@@ -49,8 +49,12 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE: str = os.getenv("LOG_FILE", "app.log")
 
-    RATE_LIMIT_PER_MINUTE: int = 60
+    RATE_LIMIT_PER_MINUTE: int = 20  # PyroCore actual limit per IP
     RATE_LIMIT_PER_HOUR: int = 1000
+
+    # Circuit breaker for PyroCore outbound calls
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = int(os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "3"))
+    CIRCUIT_BREAKER_COOLDOWN_SECONDS: int = int(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "300"))
 
     SMTP_HOST: str = os.getenv("SMTP_HOST", "")
     SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))

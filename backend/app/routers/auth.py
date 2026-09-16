@@ -19,6 +19,8 @@ security = HTTPBearer()
 
 
 @router.post("/signup", response_model=UserResponse)
+@router.post("/register", response_model=UserResponse)
+@router.post("/sign-up", response_model=UserResponse)
 async def signup(req: SignupRequest):
     """Email + password signup via Pyronites (strong password + email validation)."""
     return await PyronitesAuthService.signup(req)

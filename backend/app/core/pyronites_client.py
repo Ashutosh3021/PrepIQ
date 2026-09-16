@@ -115,6 +115,15 @@ def get_pyronites_client() -> Any:
                 )
         else:
             logger.info("Pyronites client initialised (url=%s, legacy unscoped)", url[:48])
+
+        # Install logging transport to capture rate-limit headers
+        try:
+            from app.core.logging_transport import LoggingTransport
+            if hasattr(_client, "_http"):
+                _client._http = LoggingTransport(_client._http)
+        except Exception as e:
+            logger.debug("Could not install LoggingTransport: %s", e)
+
         return _client
 
 

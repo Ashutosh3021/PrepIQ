@@ -109,11 +109,10 @@ def _invalidate(table_name: str, row_id: Any) -> None:
             if k.startswith(f"get:{table_name}:{rid}") or k.startswith(prefix):
                 _read_cache.pop(k, None)
 
-# PyroCore free-tier rate limits surface as 429 "Too Many Requests". A short,
-# bounded retry with backoff lets transient throttling recover instead of
-# bubbling up as a 500 to the caller.
-_RATE_LIMIT_MAX_RETRIES = 3
-_RATE_LIMIT_BACKOFF = 0.5
+# The pyronites SDK (v1.2.0+) handles 429 retries and Retry-After internally.
+# We do NOT add another retry layer — that would double the request count.
+# The circuit breaker is the only additional protection we layer on top.
+_RATE_LIMIT_MAX_RETRIES = 3  # kept for reference, not used in retry logic
 
 
 def _is_rate_limited(exc: Exception) -> bool:
@@ -122,18 +121,24 @@ def _is_rate_limited(exc: Exception) -> bool:
 
 
 def _retry(fn):
-    """Run fn() with bounded retry on 429 rate-limit errors."""
-    last = None
-    for attempt in range(_RATE_LIMIT_MAX_RETRIES):
-        try:
-            return fn()
-        except Exception as e:
-            if _is_rate_limited(e) and attempt < _RATE_LIMIT_MAX_RETRIES - 1:
-                time.sleep(_RATE_LIMIT_BACKOFF * (attempt + 1))
-                last = e
-                continue
-            raise
-    raise last
+    """Call fn() with circuit breaker protection.
+
+    The pyronites SDK handles 429 retries internally. This wrapper only
+    checks the circuit breaker and records success/failure.
+    """
+    from app.core.circuit_breaker import pyrocore_breaker
+
+    if pyrocore_breaker.is_open:
+        return None  # caller gets None/empty, consistent with failure path
+
+    try:
+        result = fn()
+        pyrocore_breaker.record_success()
+        return result
+    except Exception as e:
+        if _is_rate_limited(e):
+            pyrocore_breaker.record_failure()
+        raise
 
 
 def _as_list(result: Any) -> List[Dict[str, Any]]:
