@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # Phase 2 — Pyronites (required for auth + data)
     PYRONITES_URL: str = os.getenv("PYRONITES_URL", "")
     PYRONITES_KEY: str = os.getenv("PYRONITES_KEY", "")
+    PYRONITES_PROJECT_ID: str = os.getenv("PYRONITES_PROJECT_ID", "")
 
     # Local paper storage (no cloud storage basket)
     UPLOAD_ROOT: str = os.getenv("UPLOAD_ROOT", "./uploads")

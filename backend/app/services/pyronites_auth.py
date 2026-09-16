@@ -10,6 +10,10 @@ PrepIQ frontend expects Bearer access_token, so after a successful Pyronites
 sign_in/sign_up we resolve the user id (via /auth/me or signup body) and mint
 our own JWT with SECRET_KEY.
 
+NOTE: PyroCore's /auth/me only accepts session cookies, NOT API keys.
+The pyronites SDK sends Authorization: Bearer {api_key} which fails on /auth/me.
+We make direct httpx calls with the session cookie to resolve user identity.
+
 Test user (env-var gated, disabled when TEST_USER_EMAIL is unset):
   Set TEST_USER_EMAIL + TEST_USER_PASSWORD in .env to enable.
 """
@@ -33,6 +37,33 @@ logger = logging.getLogger(__name__)
 
 # ── PyroCore call wrapper (SDK handles 429 retries internally) ────────────────
 T = TypeVar("T")
+
+
+def _extract_session_cookie(client: Any) -> str:
+    """Extract session_token cookie from the pyronites SDK's httpx client.
+
+    After sign_in/sign_up, PyroCore sets a session_token cookie in the
+    response.  httpx.Client stores it in its cookie jar automatically.
+    """
+    try:
+        http = getattr(client, "_http", None)
+        wrapped = getattr(http, "_wrapped", http)
+        http_client = getattr(wrapped, "_client", None)
+        if http_client is None:
+            return ""
+        cookies = getattr(http_client, "cookies", None)
+        if cookies is None:
+            return ""
+        # httpx.Cookies is a dict-like; iterate to find session_token
+        for name, value in cookies.items():
+            if name == "session_token":
+                return str(value)
+        # Also try direct key access
+        val = cookies.get("session_token")
+        return str(val) if val else ""
+    except Exception as e:
+        logger.debug("Could not extract session cookie: %s", e)
+        return ""
 
 
 def _is_rate_limited(exc: Exception) -> bool:
@@ -254,11 +285,53 @@ def _pick_email(data: Optional[Dict[str, Any]], fallback: str = "") -> str:
     return (fallback or "").strip().lower()
 
 
-def _resolve_user_after_auth(client: Any, response: Any, email_fallback: str) -> Dict[str, str]:
+def _call_auth_me_with_cookie(session_cookie: str) -> Optional[Dict[str, Any]]:
+    """Call PyroCore /auth/me directly with session cookie.
+
+    The pyronites SDK sends Authorization: Bearer {api_key} which PyroCore's
+    unscoped /auth/me rejects (it only accepts session cookies).  This function
+    makes a direct httpx call with the session cookie to resolve user identity.
+    """
+    import httpx
+
+    url = (os.getenv("PYRONITES_URL") or "").strip()
+    if not url or not session_cookie:
+        return None
+
+    try:
+        resp = httpx.get(
+            f"{url.rstrip('/')}/auth/me",
+            cookies={"session_token": session_cookie},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("authenticated"):
+                return data
+        logger.debug("/auth/me with cookie returned HTTP %s", resp.status_code)
+    except Exception as e:
+        logger.debug("/auth/me with cookie failed: %s", e)
+    return None
+
+
+def _resolve_user_after_auth(client: Any, response: Any, email_fallback: str, session_cookie: str = "") -> Dict[str, str]:
     body = _as_dict(response) or {}
     email = _pick_email(body, email_fallback)
     uid = _pick_id(body)
 
+    # 1. Try direct /auth/me with session cookie (most reliable for login)
+    if not uid and session_cookie:
+        try:
+            me_d = _call_auth_me_with_cookie(session_cookie)
+            if me_d:
+                uid = _pick_id(me_d)
+                email = _pick_email(me_d, email) or email
+                if uid:
+                    logger.info("Resolved user id via /auth/me (session cookie)")
+        except Exception as e:
+            logger.warning("/auth/me with cookie failed: %s", e)
+
+    # 2. Try SDK auth.user() (works for signup where response has id)
     if not uid:
         try:
             me = None
@@ -269,10 +342,11 @@ def _resolve_user_after_auth(client: Any, response: Any, email_fallback: str) ->
             uid = _pick_id(me_d)
             email = _pick_email(me_d, email) or email
             if uid:
-                logger.info("Resolved user id via /auth/me after Pyronites auth")
+                logger.info("Resolved user id via /auth/me (SDK)")
         except Exception as e:
-            logger.warning("/auth/me after auth failed: %s", e)
+            logger.warning("/auth/me via SDK failed: %s", e)
 
+    # 3. Try local users table email lookup
     if not uid and email:
         try:
             row = users_repo.get_by_email(email)
@@ -282,13 +356,6 @@ def _resolve_user_after_auth(client: Any, response: Any, email_fallback: str) ->
                     logger.info("Resolved user id via users table email lookup")
         except Exception as e:
             logger.warning("users.get_by_email failed: %s", e)
-
-    if not uid and email:
-        uid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"prepiq:{email}"))
-        logger.warning(
-            "Pyronites returned no user id; using deterministic id from email for %s",
-            email,
-        )
 
     if not uid:
         logger.error("Could not resolve user id (response keys=%s)", list(body.keys()))
@@ -360,7 +427,8 @@ class PyronitesAuthService:
             logger.error("signup failed: %s", e)
             raise HTTPException(status_code=400, detail=f"Signup failed: {e}")
 
-        resolved = _resolve_user_after_auth(client, response, email)
+        session_cookie = _extract_session_cookie(client)
+        resolved = _resolve_user_after_auth(client, response, email, session_cookie)
         uid, email = resolved["id"], resolved["email"]
 
         try:
@@ -432,7 +500,8 @@ class PyronitesAuthService:
                 )
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        resolved = _resolve_user_after_auth(client, response, email)
+        session_cookie = _extract_session_cookie(client)
+        resolved = _resolve_user_after_auth(client, response, email, session_cookie)
         uid, email = resolved["id"], resolved["email"]
 
         try:

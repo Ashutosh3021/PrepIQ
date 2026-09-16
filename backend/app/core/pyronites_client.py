@@ -114,7 +114,12 @@ def get_pyronites_client() -> Any:
                     url[:48], project_id,
                 )
         else:
-            logger.info("Pyronites client initialised (url=%s, legacy unscoped)", url[:48])
+            logger.warning(
+                "Pyronites client initialised (url=%s, legacy unscoped). "
+                "Set PYRONITES_PROJECT_ID to enable project-scoped routing "
+                "(required for correct data isolation).",
+                url[:48],
+            )
 
         # Install logging transport to capture rate-limit headers
         try:
