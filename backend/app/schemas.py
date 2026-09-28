@@ -111,8 +111,8 @@ class SubjectCreate(SubjectBase):
     @field_validator('name')
     @classmethod
     def validate_name(cls, v):
-        if not v or len(v.strip()) < 2:
-            raise ValueError('Subject name must be at least 2 characters long')
+        if not v or not v.strip():
+            raise ValueError('Subject name is required')
         return v.strip()
 
 class SubjectUpdate(BaseModel):

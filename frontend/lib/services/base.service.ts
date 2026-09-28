@@ -91,10 +91,20 @@ export async function apiFetch<T>(
     try {
       const errBody = await res.json();
       if (errBody.detail) {
-        detail =
-          typeof errBody.detail === 'string'
-            ? errBody.detail
-            : JSON.stringify(errBody.detail);
+        if (typeof errBody.detail === 'string') {
+          detail = errBody.detail;
+        } else if (Array.isArray(errBody.detail)) {
+          // Pydantic validation errors: surface the human message, not the JSON.
+          detail =
+            errBody.detail
+              .map((d: { msg?: string }) =>
+                d?.msg ? String(d.msg).replace(/^Value error, /, '') : ''
+              )
+              .filter(Boolean)
+              .join(' ') || JSON.stringify(errBody.detail);
+        } else {
+          detail = JSON.stringify(errBody.detail);
+        }
       }
     } catch {
       // ignore JSON parse error
