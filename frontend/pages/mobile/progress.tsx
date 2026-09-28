@@ -80,13 +80,16 @@ export default function MobileProgress() {
                   {focusSubject}
                 </h1>
               </div>
-              <button className="mt-6 bg-primary text-on-primary font-bold h-12 px-8 flex items-center gap-3 hover:bg-on-primary-fixed-variant mx-auto">
+              <Link
+                href="/mobile/tests"
+                className="mt-6 bg-primary text-on-primary font-bold h-12 px-8 flex items-center gap-3 hover:bg-on-primary-fixed-variant mx-auto w-fit"
+              >
                 <span className="text-sm uppercase tracking-widest">Resume Study</span>
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M5 12h14" />
                   <path d="m12 5 7 7-7 7" />
                 </svg>
-              </button>
+              </Link>
             </div>
           </div>
 
@@ -205,13 +208,13 @@ export default function MobileProgress() {
               )}
             </div>
             <div className="mt-8 flex justify-center border-t border-outline-variant/20 pt-6">
-              <button className="text-primary text-xs font-bold uppercase tracking-[0.2em] flex items-center gap-2 hover:underline">
+              <Link href="/mobile/predictions" className="text-primary text-xs font-bold uppercase tracking-[0.2em] flex items-center gap-2 hover:underline">
                 View Detailed Analytics
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M5 12h14" />
                   <path d="m12 5 7 7-7 7" />
                 </svg>
-              </button>
+              </Link>
             </div>
           </div>
 
@@ -348,9 +351,12 @@ export default function MobileProgress() {
               <p className="font-serif italic text-lg text-surface leading-tight">
                 &quot;Prioritize &apos;Integration by Parts&apos; over the next 48 hours. The algorithm predicts a high probability of this appearing in your next 3 mocks.&quot;
               </p>
-              <button className="mt-4 w-full bg-surface text-primary font-bold py-2 uppercase text-[10px] tracking-widest active:scale-[0.98] transition-transform">
+              <Link
+                href="/mobile/wizard"
+                className="mt-4 w-full bg-surface text-primary font-bold py-2 uppercase text-[10px] tracking-widest active:scale-[0.98] transition-transform block text-center"
+              >
                 Generate Study Plan
-              </button>
+              </Link>
             </div>
           </div>
         </div>

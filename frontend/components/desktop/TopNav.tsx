@@ -108,19 +108,9 @@ const TopNav = React.forwardRef<HTMLElement, TopNavProps>(
             })}
           </ul>
 
-          {/* ── Right: Notifications + Avatar + Hamburger ── */}
+          {/* ── Right: Avatar + Hamburger ── */}
           <div className="flex items-center gap-3">
-            {/* Notifications — visible on all sizes */}
-            <button
-              className="relative text-on-surface hover:text-primary transition-colors"
-              aria-label="Notifications"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-              </svg>
-              <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary rounded-full" />
-            </button>
+            {/* Notifications removed: no notifications feature exists, so the bell and its fake unread dot were a dead control. */}
 
             {/* Avatar — visible on all sizes */}
             <Avatar fallback={avatarFallback} alt={`${displayName} avatar`} size="md" />

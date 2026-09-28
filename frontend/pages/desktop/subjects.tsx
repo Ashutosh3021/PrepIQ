@@ -222,7 +222,7 @@ export default function DesktopSubjects() {
   if (error) {
     return (
       <DesktopLayout>
-        <div className="text-red-600">Failed to load subjects</div>
+        <div className="text-red-600">{error.message || 'Failed to load subjects'}</div>
       </DesktopLayout>
     );
   }

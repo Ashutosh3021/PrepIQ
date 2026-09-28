@@ -57,7 +57,7 @@ export default function TestHistory() {
     return (
       <DesktopLayout>
         <div className="text-red-600 text-center py-12">
-          <p className="text-lg">Failed to load test history</p>
+          <p className="text-lg">{error.message || 'Failed to load test history'}</p>
         </div>
       </DesktopLayout>
     );

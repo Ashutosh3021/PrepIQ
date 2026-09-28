@@ -53,7 +53,7 @@ export default function DesktopAITutor() {
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface">
-        <div className="text-red-600">Failed to connect to AI Tutor. Please try again.</div>
+        <div className="text-red-600">{error.message || 'Failed to connect to AI Tutor. Please try again.'}</div>
       </div>
     );
   }

@@ -7,6 +7,14 @@
 import { clearSession } from '@/lib/auth';
 
 const IS_MOCK = process.env.NEXT_PUBLIC_API_MODE === 'mock';
+if (IS_MOCK && process.env.NODE_ENV === 'production') {
+  // Mock mode silently answers every call with the mock fallback (usually []),
+  // which looks exactly like "user has no data" with zero errors. Make the
+  // misconfiguration impossible to miss in a deployed build.
+  console.error(
+    '[PrepIQ] NEXT_PUBLIC_API_MODE=mock is set in a production build — every API call is returning mock/empty data. Remove it.'
+  );
+}
 // NEXT_PUBLIC_API_URL should be the bare origin, e.g. https://host.onrender.com
 // (no trailing slash). /api/v1 is appended here unless already present.
 const _rawApiUrl = (process.env.NEXT_PUBLIC_API_URL ?? '').replace(/\/$/, '');

@@ -36,13 +36,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Hydrate from localStorage on first render
+  // Hydrate from localStorage on first render, and keep React state in sync
+  // with session changes made elsewhere (apiFetch clearing on 401, other tabs).
   useEffect(() => {
-    const t = getStoredToken();
-    const u = getStoredUser();
-    setToken(t);
-    setUser(u);
-    setLoading(false);
+    const hydrate = () => {
+      setToken(getStoredToken());
+      setUser(getStoredUser());
+      setLoading(false);
+    };
+    hydrate();
+    window.addEventListener('prepiq:session-changed', hydrate);
+    window.addEventListener('storage', hydrate);
+    return () => {
+      window.removeEventListener('prepiq:session-changed', hydrate);
+      window.removeEventListener('storage', hydrate);
+    };
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {

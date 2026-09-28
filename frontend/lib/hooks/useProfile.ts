@@ -18,14 +18,17 @@ export function useProfile() {
     college_name?: string;
     program?: string;
     year_of_study?: number;
+    exam_date?: string;
   }) => {
     // Optimistic update
     if (data) {
       mutate(PROFILE_SWR_KEY, { ...data, ...patch }, false);
     }
 
+    // Backend defines POST /wizard/update — a PUT here 405'd, so every save
+    // silently failed (mobile settings swallowed the error entirely).
     await apiFetch('/wizard/update', {}, {
-      method: 'PUT',
+      method: 'POST',
       body: JSON.stringify(patch),
     });
 

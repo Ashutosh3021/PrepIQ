@@ -126,6 +126,8 @@ def get(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         return _normalise(base.get_by_id(TABLE, str(user_id)))
     except Exception as e:
+        if base.is_auth_error(e):
+            raise
         logger.warning("user_profiles.get failed for %s (continuing): %s", user_id, e)
         return None
 
@@ -136,6 +138,8 @@ def get_by_email(email: str) -> Optional[Dict[str, Any]]:
     try:
         rows = base.select_eq(TABLE, "email", str(email).strip().lower())
     except Exception as e:
+        if base.is_auth_error(e):
+            raise
         logger.warning("user_profiles.get_by_email failed (continuing): %s", e)
         return None
     return _normalise(rows[0]) if rows else None

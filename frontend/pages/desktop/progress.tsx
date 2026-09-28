@@ -33,7 +33,7 @@ export default function Progress() {
         setProgress(data);
         setLoading(false);
       } catch (err) {
-        setError('Failed to load progress data');
+        setError(err instanceof Error && err.message ? err.message : 'Failed to load progress data');
         setLoading(false);
       }
     };

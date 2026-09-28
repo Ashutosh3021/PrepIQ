@@ -47,15 +47,15 @@ function TestCard({ id, category, title, time, questions, level, levelColor, com
       </div>
       {completed ? (
         <div className="flex gap-2">
-          <button className="flex-1 border border-primary text-primary font-bold py-2 text-xs tracking-widest">
+          <Link href={`/desktop/test-results?testId=${id}`} className="flex-1 border border-primary text-primary font-bold py-2 text-xs tracking-widest text-center">
             REVIEW
-          </button>
-          <button className="flex-1 bg-transparent border border-outline-variant text-on-surface-variant font-bold py-2 text-xs tracking-widest">
+          </Link>
+          <Link href={`/mobile/start-test?testId=${id}`} className="flex-1 bg-transparent border border-outline-variant text-on-surface-variant font-bold py-2 text-xs tracking-widest text-center">
             RETAKE
-          </button>
+          </Link>
         </div>
       ) : (
-        <Link href="/mobile/start-test" className="w-full bg-primary text-on-primary font-bold py-3 text-xs tracking-widest hover:bg-on-primary-fixed-variant transition-colors flex items-center justify-center">
+        <Link href={`/mobile/start-test?testId=${id}`} className="w-full bg-primary text-on-primary font-bold py-3 text-xs tracking-widest hover:bg-on-primary-fixed-variant transition-colors flex items-center justify-center">
           START TEST
         </Link>
       )}
@@ -82,7 +82,7 @@ export default function MobileTests() {
   if (error) {
     return (
       <MobileLayout title="Tests">
-        <div className="text-red-600 p-4">Failed to load tests</div>
+        <div className="text-red-600 p-4">{error.message || 'Failed to load tests'}</div>
       </MobileLayout>
     );
   }
@@ -98,19 +98,7 @@ export default function MobileTests() {
           {/* Page Title */}
           <section>
             <h1 className="font-serif italic text-4xl leading-tight">Mock Tests</h1>
-            <p className="text-on-surface-variant text-xs mt-2 font-medium tracking-tight uppercase">SELECT A DOMAIN TO BEGIN GENERATING QUESTIONS</p>
-          </section>
-
-          {/* Subject Generation Pills */}
-          <section className="grid grid-cols-2 gap-3">
-            {['QUANTITATIVE', 'VERBAL REASONING', 'LOGICAL ANALYSIS', 'DATA INSIGHTS'].map((domain) => (
-              <button key={domain} className="bg-primary text-on-primary py-4 px-4 flex flex-col justify-between items-start active:scale-95 transition-transform">
-                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-on-primary">
-                  <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
-                </svg>
-                <span className="mt-3 font-bold text-xs tracking-wide">{domain}</span>
-              </button>
-            ))}
+            <p className="text-on-surface-variant text-xs mt-2 font-medium tracking-tight uppercase">CHOOSE A TEST TO BEGIN</p>
           </section>
 
           {/* Filter Tabs */}

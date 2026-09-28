@@ -22,7 +22,7 @@ export default function TestResults() {
         setResults(data);
         setLoading(false);
       } catch (err) {
-        setError('Failed to load test results');
+        setError(err instanceof Error && err.message ? err.message : 'Failed to load test results');
         setLoading(false);
       }
     };

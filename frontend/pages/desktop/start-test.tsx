@@ -61,7 +61,7 @@ export default function StartTest() {
         }));
         setLoading(false);
       } catch (err) {
-        setError('Failed to load test');
+        setError(err instanceof Error && err.message ? err.message : 'Failed to load test');
         setLoading(false);
       }
     };
@@ -130,7 +130,7 @@ export default function StartTest() {
         await testsService.submitTest(testState.testId, testState.answers);
         router.push(`/desktop/test-results?testId=${testState.testId}`);
       } catch (err) {
-        setError('Failed to submit test');
+        setError(err instanceof Error && err.message ? err.message : 'Failed to submit test');
         setTestState((prev) => ({ ...prev, isSubmitting: false }));
       }
     } else {

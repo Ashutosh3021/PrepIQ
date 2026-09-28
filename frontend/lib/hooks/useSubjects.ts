@@ -1,11 +1,35 @@
 import useSWR from 'swr';
 import { subjectsService } from '../services/subjects.service';
+import { getStoredUser } from '../auth';
 import type { Subject } from '../types/subject.types';
+
+// Fallback: read the user id straight from the JWT sub claim.
+function decodeJwtSub(token: string): string | null {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return null;
+    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    const parsed = JSON.parse(json);
+    return typeof parsed?.sub === 'string' && parsed.sub ? parsed.sub : null;
+  } catch {
+    return null;
+  }
+}
 
 // Get user ID from localStorage to scope the SWR cache per user.
 function getUserId(): string | null {
   if (typeof window === 'undefined') return null;
   try {
+    // Current session shape: lib/auth.ts stores {id, email, ...} under 'prepiq_user'.
+    const stored = getStoredUser();
+    if (stored?.id) return stored.id;
+
+    // Token is always present while signed in; its sub claim is the user id.
+    const token = localStorage.getItem('prepiq_access_token');
+    const sub = token ? decodeJwtSub(token) : null;
+    if (sub) return sub;
+
+    // Legacy sessions (removed Supabase auth) — accept either nesting.
     const keys = Object.keys(localStorage).filter(
       (k) => k.includes('supabase') || k.includes('sb-') || k === 'prepiq-supabase-session'
     );
@@ -13,7 +37,8 @@ function getUserId(): string | null {
       const item = localStorage.getItem(key);
       if (item) {
         const parsed = JSON.parse(item);
-        if (parsed.user?.id) return parsed.user.id;
+        const id = parsed?.user?.id ?? parsed?.id;
+        if (id) return String(id);
       }
     }
   } catch {

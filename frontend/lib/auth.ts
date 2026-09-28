@@ -89,16 +89,28 @@ export function getStoredUser(): AuthUser | null {
   }
 }
 
+// Let React state (AuthProvider) follow session changes made outside its own
+// callbacks — e.g. apiFetch clearing the session on a 401. Without this the
+// app believed it was still signed in while every request was failing.
+const SESSION_EVENT = 'prepiq:session-changed';
+
+function notifySessionChanged() {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(SESSION_EVENT));
+}
+
 export function persistSession(session: AuthSession) {
   if (typeof window === "undefined") return;
   localStorage.setItem(TOKEN_KEY, session.access_token);
   localStorage.setItem(USER_KEY, JSON.stringify(session.user));
+  notifySessionChanged();
 }
 
 export function clearSession() {
   if (typeof window === "undefined") return;
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  notifySessionChanged();
 }
 
 export async function loginWithEmail(

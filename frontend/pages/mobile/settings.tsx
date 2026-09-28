@@ -7,6 +7,9 @@ import { useProfile } from '@/lib/hooks/useProfile';
 import { userService } from '@/lib/services/user.service';
 import { getWizardPath } from '@/lib/utils/device';
 
+// Same key the desktop settings page uses — prefs stay in sync across screens.
+const NOTIF_KEY = 'prepiq-notification-settings';
+
 export default function MobileSettings() {
   const { profile, isLoading, updateProfile } = useProfile();
   const router = useRouter();
@@ -16,17 +19,25 @@ export default function MobileSettings() {
   const [emailNotifs, setEmailNotifs] = useState(true);
   const [studyReminders, setStudyReminders] = useState(true);
   const [predictionUpdates, setPredictionUpdates] = useState(false);
+  const [prefSaving, setPrefSaving] = useState(false);
+  const [prefSaved, setPrefSaved] = useState(false);
 
   // Form state — seeded from profile once loaded
   const [fullName, setFullName] = useState('');
   const [collegeName, setCollegeName] = useState('');
+  const [program, setProgram] = useState('');
+  const [yearOfStudy, setYearOfStudy] = useState('');
   const [examDate, setExamDate] = useState('');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [savedFlash, setSavedFlash] = useState(false);
 
   useEffect(() => {
     if (profile) {
       setFullName(profile.full_name ?? '');
       setCollegeName(profile.college_name ?? '');
+      setProgram(profile.program ?? '');
+      setYearOfStudy(profile.year_of_study ? String(profile.year_of_study) : '');
       if (profile.exam_date) {
         // Format as YYYY-MM-DD for the date input
         setExamDate(profile.exam_date.split('T')[0]);
@@ -34,17 +45,52 @@ export default function MobileSettings() {
     }
   }, [profile]);
 
+  // Restore device-local notification preferences on mount
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(NOTIF_KEY) ?? '{}');
+      if (typeof stored.emailNotifs === 'boolean') setEmailNotifs(stored.emailNotifs);
+      if (typeof stored.studyReminders === 'boolean') setStudyReminders(stored.studyReminders);
+      if (typeof stored.predictionUpdates === 'boolean') setPredictionUpdates(stored.predictionUpdates);
+    } catch {
+      // keep defaults
+    }
+  }, []);
+
   const handleSave = async () => {
     setSaving(true);
+    setSaveError('');
     try {
       await updateProfile({
         full_name: fullName.trim() || undefined,
         college_name: collegeName.trim() || undefined,
+        program: program || undefined,
+        year_of_study: yearOfStudy ? Number(yearOfStudy) : undefined,
+        exam_date: examDate || undefined,
       });
-    } catch {
-      // error handled silently — profile hook manages state
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 2500);
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error && err.message ? err.message : 'Save failed. Please try again.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSavePreferences = () => {
+    setPrefSaving(true);
+    try {
+      const existing = JSON.parse(localStorage.getItem(NOTIF_KEY) ?? '{}');
+      localStorage.setItem(NOTIF_KEY, JSON.stringify({
+        ...existing,
+        emailNotifs,
+        studyReminders,
+        predictionUpdates,
+      }));
+      setPrefSaved(true);
+      setTimeout(() => setPrefSaved(false), 2500);
+    } finally {
+      setPrefSaving(false);
     }
   };
 
@@ -111,9 +157,14 @@ export default function MobileSettings() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-medium tracking-wider text-on-surface-variant uppercase">Program</label>
-                    <select className="w-full h-11 px-3 text-on-surface appearance-none border border-outline-variant bg-transparent focus:ring-1 focus:ring-primary focus:border-primary">
-                      <option>{profile?.program || 'Select'}</option>
+                    <label className="text-[10px] font-medium tracking-wider text-on-surface-variant uppercase" htmlFor="settings-program">Program</label>
+                    <select
+                      id="settings-program"
+                      className="w-full h-11 px-3 text-on-surface appearance-none border border-outline-variant bg-transparent focus:ring-1 focus:ring-primary focus:border-primary"
+                      value={program}
+                      onChange={(e) => setProgram(e.target.value)}
+                    >
+                      <option value="">Select</option>
                       <option>BTech</option>
                       <option>BE</option>
                       <option>BSc</option>
@@ -123,11 +174,16 @@ export default function MobileSettings() {
                     </select>
                   </div>
                   <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-medium tracking-wider text-on-surface-variant uppercase">Year</label>
-                    <select className="w-full h-11 px-3 text-on-surface appearance-none border border-outline-variant bg-transparent focus:ring-1 focus:ring-primary focus:border-primary">
-                      <option>{profile?.year_of_study ? `Year ${profile.year_of_study}` : 'Select'}</option>
+                    <label className="text-[10px] font-medium tracking-wider text-on-surface-variant uppercase" htmlFor="settings-year">Year</label>
+                    <select
+                      id="settings-year"
+                      className="w-full h-11 px-3 text-on-surface appearance-none border border-outline-variant bg-transparent focus:ring-1 focus:ring-primary focus:border-primary"
+                      value={yearOfStudy}
+                      onChange={(e) => setYearOfStudy(e.target.value)}
+                    >
+                      <option value="">Select</option>
                       {[1, 2, 3, 4, 5, 6].map((y) => (
-                        <option key={y}>Year {y}</option>
+                        <option key={y} value={y}>Year {y}</option>
                       ))}
                     </select>
                   </div>
@@ -159,14 +215,17 @@ export default function MobileSettings() {
               </div>
             )}
 
-            <div className="flex justify-end">
+            <div className="flex flex-col items-end gap-2">
               <button
                 onClick={handleSave}
                 disabled={saving || isLoading}
                 className="bg-primary hover:bg-on-primary-fixed-variant text-on-primary px-5 h-10 font-medium text-sm transition-all border border-outline-variant disabled:opacity-40"
               >
-                {saving ? 'SAVING…' : 'SAVE CHANGES'}
+                {saving ? 'SAVING…' : savedFlash ? 'SAVED ✓' : 'SAVE CHANGES'}
               </button>
+              {saveError && (
+                <p className="text-[10px] text-error uppercase tracking-wider text-right">{saveError}</p>
+              )}
             </div>
           </section>
 
@@ -176,14 +235,6 @@ export default function MobileSettings() {
               <h2 className="text-sm font-semibold uppercase tracking-widest">Preferences</h2>
             </div>
             <div className="space-y-4">
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-medium tracking-wider text-on-surface-variant uppercase">Language</label>
-                <select className="w-full h-11 px-3 text-on-surface appearance-none border border-outline-variant bg-transparent focus:ring-1 focus:ring-primary focus:border-primary">
-                  <option>English (US)</option>
-                  <option>Spanish</option>
-                  <option>French</option>
-                </select>
-              </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-medium tracking-wider text-on-surface-variant uppercase">Notifications</label>
                 <div className="space-y-2">
@@ -212,8 +263,13 @@ export default function MobileSettings() {
               </div>
             </div>
             <div className="flex justify-end pt-3">
-              <button className="bg-primary hover:bg-on-primary-fixed-variant text-on-primary px-5 h-10 font-medium text-sm transition-all border border-outline-variant">
-                SAVE PREFERENCES
+              <button
+                type="button"
+                onClick={handleSavePreferences}
+                disabled={prefSaving}
+                className="bg-primary hover:bg-on-primary-fixed-variant text-on-primary px-5 h-10 font-medium text-sm transition-all border border-outline-variant disabled:opacity-40"
+              >
+                {prefSaving ? 'SAVING…' : prefSaved ? 'SAVED ✓' : 'SAVE PREFERENCES'}
               </button>
             </div>
           </section>
@@ -246,38 +302,20 @@ export default function MobileSettings() {
               <h2 className="text-sm font-semibold uppercase tracking-widest">Account Security</h2>
             </div>
             <div className="space-y-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-medium tracking-wider text-on-surface-variant uppercase">Current Password</label>
-                <input className="w-full h-11 px-3 text-on-surface border border-outline-variant bg-transparent focus:ring-1 focus:ring-primary focus:border-primary" type="password" defaultValue="........" />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-medium tracking-wider text-on-surface-variant uppercase">New Password</label>
-                <div className="relative">
-                  <input className="w-full h-11 px-3 text-on-surface border border-outline-variant bg-transparent focus:ring-1 focus:ring-primary focus:border-primary pr-10" placeholder="Min 8 characters" type="password" />
-                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant cursor-pointer">
-                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                </div>
-                <div className="w-full h-1.5 border border-outline-variant mt-2 overflow-hidden">
-                  <div className="h-full w-[65%] bg-primary" />
-                </div>
-                <p className="text-[10px] text-on-surface-variant uppercase tracking-wider">Strength: Moderate</p>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-medium tracking-wider text-on-surface-variant uppercase">Confirm Password</label>
-                <input className="w-full h-11 px-3 text-on-surface border border-outline-variant bg-transparent focus:ring-1 focus:ring-primary focus:border-primary" placeholder="Confirm your new password" type="password" />
-              </div>
+              <p className="text-sm font-semibold text-on-surface">Password Management</p>
+              <p className="text-xs text-on-surface/60 leading-relaxed">
+                Password changes aren&apos;t supported yet. Contact support to reset your
+                password.
+              </p>
             </div>
             <div className="flex flex-col gap-6 pt-3">
-              <div className="flex justify-end">
-                <button className="bg-primary hover:bg-on-primary-fixed-variant text-on-primary px-5 h-10 font-medium text-sm transition-all border border-outline-variant">
-                  CHANGE PASSWORD
-                </button>
-              </div>
               <div className="pt-4 border-t border-outline-variant/20 space-y-3">
                 <p className="text-[10px] text-on-surface-variant uppercase tracking-wider">Careful! This action cannot be undone.</p>
-                <button className="w-full h-10 border border-outline-variant text-on-surface-variant font-medium text-sm hover:bg-outline-variant/5 transition-colors uppercase tracking-widest">
+                <button
+                  type="button"
+                  onClick={() => alert('Account deletion is not yet available. Please contact support.')}
+                  className="w-full h-10 border border-outline-variant text-on-surface-variant font-medium text-sm hover:bg-outline-variant/5 transition-colors uppercase tracking-widest"
+                >
                   DELETE ACCOUNT
                 </button>
               </div>

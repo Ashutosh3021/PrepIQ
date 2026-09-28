@@ -32,7 +32,7 @@ export default function DesktopTests() {
   if (error) {
     return (
       <DesktopLayout>
-        <div className="text-red-600">Failed to load tests</div>
+        <div className="text-red-600">{error.message || 'Failed to load tests'}</div>
       </DesktopLayout>
     );
   }

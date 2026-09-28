@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
 import { DesktopLayout } from '@/components/desktop';
 import { Skeleton } from '@/components/common';
 import { useAuth } from '@/lib/context/AuthContext';
@@ -134,9 +135,11 @@ export default function DesktopProfile() {
                   {program} · {college}
                 </p>
               </div>
-              <button className="bg-primary text-on-primary px-8 py-4 font-bold text-sm tracking-wider hover:bg-primary/90 transition-opacity">
-                EDIT PROFILE
-              </button>
+              <Link href="/desktop/settings">
+                <button type="button" className="bg-primary text-on-primary px-8 py-4 font-bold text-sm tracking-wider hover:bg-primary/90 transition-opacity">
+                  EDIT PROFILE
+                </button>
+              </Link>
             </div>
           </div>
         </section>

@@ -1,14 +1,30 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Head from 'next/head';
 import { MobileLayout } from '@/components/mobile';
 import { Skeleton } from '@/components/common';
 import { useSubjects } from '@/lib/hooks/useSubjects';
+import { getAccessToken } from '@/lib/services/base.service';
+
+const ACCEPTED = '.pdf,.doc,.docx,.ppt,.pptx';
+const MAX_MB = 20;
+
+interface UploadStatus {
+  status: string;
+  current_step?: string;
+  overall_progress?: number;
+  errors?: string[];
+}
 
 export default function MobileUpload() {
   const { subjects, isLoading: subjectsLoading } = useSubjects();
 
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedSubjectId, setSelectedSubjectId] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+  const [statusMsg, setStatusMsg] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Seed first subject once loaded
   React.useEffect(() => {
@@ -16,6 +32,123 @@ export default function MobileUpload() {
       setSelectedSubjectId(subjects[0].id);
     }
   }, [subjects, selectedSubjectId]);
+
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, []);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    setError('');
+    if (!file) return;
+    const ext = '.' + (file.name.split('.').pop()?.toLowerCase() ?? '');
+    if (!ACCEPTED.split(',').includes(ext)) {
+      setError(`Unsupported file type: ${file.name}`);
+    } else if (file.size > MAX_MB * 1024 * 1024) {
+      setError(`${file.name} exceeds ${MAX_MB} MB.`);
+    } else {
+      setSelectedFile(file);
+    }
+    // Allow re-selecting the same file later
+    e.target.value = '';
+  };
+
+  const stopPolling = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile) {
+      setError('Select a file first.');
+      return;
+    }
+    if (!selectedSubjectId) {
+      setError('Select a subject first.');
+      return;
+    }
+    const token = getAccessToken();
+    if (!token) {
+      setError('You must be logged in to upload files.');
+      return;
+    }
+
+    setUploading(true);
+    setError('');
+    setStatusMsg('Uploading…');
+
+    try {
+      const apiUrl = `${process.env.NEXT_PUBLIC_API_URL ?? ''}/api/v1`;
+      const formData = new FormData();
+      formData.append('files', selectedFile);
+      formData.append('subject_id', selectedSubjectId);
+      formData.append('material_type', 'study_material');
+
+      const res = await fetch(`${apiUrl}/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const detail = data && typeof data.detail === 'string'
+          ? data.detail
+          : Array.isArray(data?.detail)
+            ? data.detail.map((d: { msg?: string }) => d.msg ?? JSON.stringify(d)).join('; ')
+            : '';
+        throw new Error(detail || `Upload failed (${res.status})`);
+      }
+
+      const uploadId: string | undefined = data?.upload_id;
+      if (!uploadId) {
+        setStatusMsg(data?.message ?? 'Upload complete.');
+        setSelectedFile(null);
+        setUploading(false);
+        return;
+      }
+
+      setStatusMsg('Processing…');
+      // Poll until the backend finishes extraction
+      pollIntervalRef.current = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`${apiUrl}/upload/status/${uploadId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!statusRes.ok) return;
+          const status: UploadStatus = await statusRes.json();
+          if (status.current_step) {
+            setStatusMsg(`Processing: ${status.current_step}`);
+          }
+          if (status.status === 'completed' || status.status === 'failed') {
+            stopPolling();
+            if (status.status === 'completed') {
+              setStatusMsg('Analysis complete. Questions were added to your subject.');
+              setSelectedFile(null);
+            } else {
+              setError(
+                (status.errors && status.errors.length > 0)
+                  ? `Analysis failed: ${status.errors.join(', ')}`
+                  : 'Analysis failed. Please try again.'
+              );
+              setStatusMsg('');
+            }
+            setUploading(false);
+          }
+        } catch {
+          // transient poll error — keep trying
+        }
+      }, 1000);
+    } catch (err: unknown) {
+      setError(err instanceof Error && err.message ? err.message : 'Upload failed. Please try again.');
+      setStatusMsg('');
+      setUploading(false);
+    }
+  };
 
   return (
     <>
@@ -43,7 +176,20 @@ export default function MobileUpload() {
               </div>
               <h3 className="text-sm font-medium uppercase tracking-widest text-on-surface mb-1">Transfer Files</h3>
               <p className="text-on-surface-variant text-xs mb-6">PDF, DOCX, PPTX (MAX 20MB)</p>
-              <button className="bg-primary text-white px-6 py-2 font-medium text-xs tracking-widest uppercase transition-colors hover:bg-on-surface">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ACCEPTED}
+                onChange={handleFileChange}
+                className="hidden"
+                aria-label="Select archive"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="bg-primary text-white px-6 py-2 font-medium text-xs tracking-widest uppercase transition-colors hover:bg-on-surface disabled:opacity-40"
+              >
                 Select Archive
               </button>
             </div>
@@ -59,11 +205,17 @@ export default function MobileUpload() {
                     </svg>
                   </div>
                   <div>
-                    <p className="text-xs font-semibold text-on-surface truncate max-w-[180px] uppercase tracking-tighter">{selectedFile}</p>
-                    <p className="text-[10px] text-on-surface-variant uppercase">PDF</p>
+                    <p className="text-xs font-semibold text-on-surface truncate max-w-[180px] uppercase tracking-tighter">{selectedFile.name}</p>
+                    <p className="text-[10px] text-on-surface-variant uppercase">{(selectedFile.name.split('.').pop() ?? '').toUpperCase()}</p>
                   </div>
                 </div>
-                <button onClick={() => setSelectedFile(null)} className="w-8 h-8 flex items-center justify-center text-on-surface hover:text-error transition-colors" aria-label="Remove file">
+                <button
+                  type="button"
+                  onClick={() => !uploading && setSelectedFile(null)}
+                  className="w-8 h-8 flex items-center justify-center text-on-surface hover:text-error transition-colors disabled:opacity-40"
+                  disabled={uploading}
+                  aria-label="Remove file"
+                >
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M18 6 6 18" />
                     <path d="m6 6 12 12" />
@@ -74,15 +226,17 @@ export default function MobileUpload() {
 
             {/* Subject Selection */}
             <div className="space-y-2">
-              <label className="text-[10px] font-bold text-on-surface-variant ml-1 uppercase tracking-[0.2em]">Catalogue Subject</label>
+              <label className="text-[10px] font-bold text-on-surface-variant ml-1 uppercase tracking-[0.2em]" htmlFor="upload-subject">Catalogue Subject</label>
               {subjectsLoading ? (
                 <Skeleton className="h-12 w-full" />
               ) : (
                 <div className="relative">
                   <select
+                    id="upload-subject"
                     value={selectedSubjectId}
                     onChange={(e) => setSelectedSubjectId(e.target.value)}
-                    className="w-full bg-transparent border border-outline-variant h-12 px-4 text-on-surface text-sm appearance-none focus:ring-1 focus:ring-on-surface focus:border-on-surface transition-all cursor-pointer"
+                    disabled={uploading}
+                    className="w-full bg-transparent border border-outline-variant h-12 px-4 text-on-surface text-sm appearance-none focus:ring-1 focus:ring-on-surface focus:border-on-surface transition-all cursor-pointer disabled:opacity-60"
                   >
                     {subjects.length === 0 ? (
                       <option value="">No subjects yet — add one first</option>
@@ -103,11 +257,21 @@ export default function MobileUpload() {
 
             {/* Primary Action */}
             <button
-              disabled={subjects.length === 0}
+              type="button"
+              onClick={handleUpload}
+              disabled={subjects.length === 0 || uploading}
               className="w-full bg-primary hover:bg-on-surface text-white h-12 font-bold uppercase tracking-[0.2em] text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Execute Analysis
+              {uploading ? 'Working…' : 'Execute Analysis'}
             </button>
+            {statusMsg && (
+              <p className="text-xs text-on-surface/70 text-center" role="status">{statusMsg}</p>
+            )}
+            {error && (
+              <div className="px-4 py-3 text-sm border-l-2 border-error bg-error/5 text-error" role="alert">
+                {error}
+              </div>
+            )}
           </div>
 
           {/* AI Insights Preview */}

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -41,6 +42,25 @@ class CachedReadFailed(RuntimeError):
     what turned one PyroCore hiccup into a 500 on ``/dashboard/stats`` and
     ``/subjects``.
     """
+
+
+def is_auth_error(exc: BaseException) -> bool:
+    """True when PyroCore rejected our credentials/scope — a configuration
+    problem, not a data problem.
+
+    Auth failures must never degrade to an empty result: a dead PYRONITES_KEY
+    that turns every list into ``[]`` looks exactly like "user has no data"
+    and produces no error anywhere. Transient failures (429/5xx/timeouts) still
+    degrade as before; only rejected credentials surface loudly.
+    """
+    if type(exc).__name__ in ("AuthError", "AuthenticationError"):
+        return True
+    text = str(exc).lower()
+    if "missing or invalid authentication" in text:
+        return True
+    if "unauthorized" in text or "forbidden" in text:
+        return True
+    return bool(re.search(r"\b(?:401|403)\b", text))
 
 
 def _cache_get(key: str, fail_ttl: float) -> Any:
@@ -111,8 +131,11 @@ def _cached(key: str, producer, fail_ttl: float = _FAIL_CACHE_TTL) -> Any:
         val = producer()
         _cache_set(key, val)
         return val
-    except Exception:
-        _cache_set(key, _MISS)
+    except Exception as e:
+        # Never cache rejected credentials: a failure marker would turn a
+        # config error into a short run of silently-empty results.
+        if not is_auth_error(e):
+            _cache_set(key, _MISS)
         raise
     finally:
         with _inflight_lock:
@@ -253,7 +276,9 @@ def select_eq(table_name: str, column: str, value: Any) -> List[Dict[str, Any]]:
 
     try:
         return _cached(key, _produce)
-    except Exception:
+    except Exception as e:
+        if is_auth_error(e):
+            raise
         # Failure was cached briefly; surface empty rather than 500 to caller.
         return []
 
@@ -278,13 +303,17 @@ def get_by_id(table_name: str, row_id: str) -> Optional[Dict[str, Any]]:
         if hasattr(t, "get"):
             try:
                 return _retry(lambda: t.get(row_id))
-            except Exception:
+            except Exception as e:
+                if is_auth_error(e):
+                    raise
                 return None
         return None
 
     try:
         direct = _cached(key, _produce)
-    except Exception:
+    except Exception as e:
+        if is_auth_error(e):
+            raise
         direct = None
     one = _as_one(direct)
     if one:
@@ -293,6 +322,8 @@ def get_by_id(table_name: str, row_id: str) -> Optional[Dict[str, Any]]:
         rows = select_eq(table_name, "id", row_id)
         return rows[0] if rows else None
     except Exception as e:
+        if is_auth_error(e):
+            raise
         logger.error("get_by_id %s/%s failed: %s", table_name, row_id, e)
         return None
 

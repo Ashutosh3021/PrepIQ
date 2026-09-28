@@ -22,6 +22,8 @@ def list_for_subject(subject_id: str) -> List[Dict[str, Any]]:
     try:
         return base.select_eq(TABLE, "subject_id", subject_id)
     except Exception as e:
+        if base.is_auth_error(e):
+            raise
         logger.error("list_for_subject %s failed: %s", subject_id, e)
         return []
 
