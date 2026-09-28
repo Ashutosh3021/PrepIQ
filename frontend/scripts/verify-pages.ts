@@ -37,6 +37,16 @@ const KNOWN_STANDALONES = [
   'pages/desktop/start-test.tsx',
   'pages/mobile/start-test.tsx',
   'pages/mobile/profile.tsx', // Not in mobile bottom nav (space-limited) but accessible via settings
+  // Reached by in-app actions (dashboard CTAs, router pushes), not by nav links:
+  'pages/desktop/progress.tsx',
+  'pages/desktop/study-plan.tsx',
+  'pages/desktop/test-history.tsx',
+  'pages/desktop/test-results.tsx',
+  'pages/desktop/tests.tsx',
+  'pages/mobile/ai-tutor.tsx',
+  // Post-signup targeting gate — redirected to by the auth guard, never linked:
+  'pages/desktop/wizard.tsx',
+  'pages/mobile/wizard.tsx',
 ];
 
 /**

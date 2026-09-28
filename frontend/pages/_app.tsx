@@ -3,6 +3,8 @@ import type { AppProps } from 'next/app';
 import { AuthProvider, useAuth } from '@/lib/context/AuthContext';
 import { useRouter } from 'next/router';
 import { useEffect, useRef, ReactNode } from 'react';
+import { apiFetch } from '@/lib/services/base.service';
+import { getWizardPath } from '@/lib/utils/device';
 import '@/styles/globals.css';
 
 // Routes that don't require authentication
@@ -36,6 +38,38 @@ function AuthGuard({ children }: { children: ReactNode }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, loading]);
+
+  // ── Wizard gate ───────────────────────────────────────────────────────
+  // The setup wizard has no nav entry, so without this gate an unfinished
+  // account has no way to reach it: every authenticated page simply rendered
+  // with empty targeting data. Check once per signed-in session and send
+  // incomplete accounts to the wizard. Fails open — a status outage must not
+  // lock users out of the app.
+  const wizardChecked = useRef(false);
+  const wasAuthenticated = useRef(false);
+  useEffect(() => {
+    if (wasAuthenticated.current && !isAuthenticated) {
+      wizardChecked.current = false; // signed out — re-check for the next user
+    }
+    wasAuthenticated.current = isAuthenticated;
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (loading || !isAuthenticated) return;
+    if (isPublicRef.current || isWizardRef.current) return;
+    if (wizardChecked.current) return;
+    wizardChecked.current = true;
+
+    apiFetch<{ completed: boolean }>('/wizard/status', { completed: false })
+      .then((status) => {
+        if (status && status.completed === false) {
+          router.replace(getWizardPath());
+        }
+      })
+      .catch(() => {
+        /* fail open */
+      });
+  }, [loading, isAuthenticated, router]);
 
   // Allow public and wizard routes through immediately
   if (isPublic || isWizard) {

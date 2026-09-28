@@ -37,7 +37,12 @@ export default function StartTest() {
 
   // Load test on mount
   useEffect(() => {
-    if (!testId) return;
+    if (!router.isReady) return;
+    if (!testId) {
+      // No test to run — the old behaviour spun on "Loading…" forever.
+      router.replace('/desktop/mock-tests');
+      return;
+    }
 
     const loadTest = async () => {
       try {
@@ -62,7 +67,7 @@ export default function StartTest() {
     };
 
     loadTest();
-  }, [testId]);
+  }, [testId, router]);
 
   // Timer effect
   useEffect(() => {

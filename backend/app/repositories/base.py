@@ -33,8 +33,18 @@ _inflight: Dict[str, threading.Event] = {}
 _inflight_lock = threading.Lock()
 
 
+class CachedReadFailed(RuntimeError):
+    """A recent read of the same key failed and its failure marker is still live.
+
+    Raised (rather than returning ``None``) so callers keep their normal
+    empty-result contract — returning ``None`` from a ``List``-typed helper is
+    what turned one PyroCore hiccup into a 500 on ``/dashboard/stats`` and
+    ``/subjects``.
+    """
+
+
 def _cache_get(key: str, fail_ttl: float) -> Any:
-    """Return cached value, or _UNSET if missing/expired. _MISS normalises to None."""
+    """Return cached value, _MISS for a live failure marker, or _UNSET if absent."""
     with _read_cache_lock:
         item = _read_cache.get(key)
         if item is None:
@@ -44,7 +54,7 @@ def _cache_get(key: str, fail_ttl: float) -> Any:
         if (time.monotonic() - ts) >= ttl:
             _read_cache.pop(key, None)
             return _UNSET
-        return None if val is _MISS else val
+        return val
 
 
 def _cache_set(key: str, val: Any) -> None:
@@ -61,8 +71,14 @@ def _cache_set(key: str, val: Any) -> None:
 
 def _cached(key: str, producer, fail_ttl: float = _FAIL_CACHE_TTL) -> Any:
     """Run `producer()` once per key, coalescing concurrent calls and caching
-    the result (or a short-lived failure marker) to avoid repeated remote hits."""
+    the result (or a short-lived failure marker) to avoid repeated remote hits.
+
+    A cached failure marker raises :class:`CachedReadFailed` so callers can
+    apply their own empty/fallback semantics instead of receiving ``None``.
+    """
     cached = _cache_get(key, fail_ttl)
+    if cached is _MISS:
+        raise CachedReadFailed(key)
     if cached is not _UNSET:
         return cached
 
@@ -71,6 +87,8 @@ def _cached(key: str, producer, fail_ttl: float = _FAIL_CACHE_TTL) -> Any:
     if ev is not None:
         ev.wait()
         cached = _cache_get(key, fail_ttl)
+        if cached is _MISS:
+            raise CachedReadFailed(key)
         if cached is not _UNSET:
             return cached
 
@@ -82,6 +100,8 @@ def _cached(key: str, producer, fail_ttl: float = _FAIL_CACHE_TTL) -> Any:
         if existing is not None:
             existing.wait()
         cached = _cache_get(key, fail_ttl)
+        if cached is _MISS:
+            raise CachedReadFailed(key)
         if cached is not _UNSET:
             return cached
         ev = threading.Event()
@@ -89,7 +109,7 @@ def _cached(key: str, producer, fail_ttl: float = _FAIL_CACHE_TTL) -> Any:
 
     try:
         val = producer()
-        _cache_set(key, val if val is not None else _MISS)
+        _cache_set(key, val)
         return val
     except Exception:
         _cache_set(key, _MISS)
@@ -100,13 +120,17 @@ def _cached(key: str, producer, fail_ttl: float = _FAIL_CACHE_TTL) -> Any:
         ev.set()
 
 
-def _invalidate(table_name: str, row_id: Any) -> None:
-    """Drop cached reads for a row after a successful write."""
-    rid = str(row_id)
-    prefix = f"select:{table_name}:id:{rid}"
+def _invalidate(table_name: str, row_id: Any = None) -> None:
+    """Drop every cached read for a table after a successful write.
+
+    Clearing by table (rather than by row id) also catches lookups keyed on
+    non-id columns — e.g. ``select:user_profiles:email:...`` would otherwise
+    keep serving the pre-write row for the rest of the read TTL.
+    """
+    prefixes = (f"get:{table_name}:", f"select:{table_name}:")
     with _read_cache_lock:
         for k in list(_read_cache.keys()):
-            if k.startswith(f"get:{table_name}:{rid}") or k.startswith(prefix):
+            if k.startswith(prefixes):
                 _read_cache.pop(k, None)
 
 # The pyronites SDK (v1.2.0+) handles 429 retries and Retry-After internally.
@@ -125,6 +149,10 @@ def _retry(fn):
 
     The pyronites SDK handles 429 retries internally. This wrapper only
     checks the circuit breaker and records success/failure.
+
+    Returns None (not a row) when the breaker is open — callers must treat
+    that as "no data", never as a successful write. Use :func:`_retry_write`
+    on write paths so an open breaker raises instead of pretending to succeed.
     """
     from app.core.circuit_breaker import pyrocore_breaker
 
@@ -141,17 +169,54 @@ def _retry(fn):
         raise
 
 
+def _retry_write(fn):
+    """Like :func:`_retry`, but an open circuit breaker raises.
+
+    Writes must never report success without reaching PyroCore — that is how
+    "saved" wizard steps and profiles went missing.
+    """
+    from app.core.circuit_breaker import pyrocore_breaker
+
+    if pyrocore_breaker.is_open:
+        raise RuntimeError("PyroCore circuit breaker is open — write not attempted")
+
+    try:
+        result = fn()
+        pyrocore_breaker.record_success()
+        return result
+    except Exception as e:
+        if _is_rate_limited(e):
+            pyrocore_breaker.record_failure()
+        raise
+
+
+def _is_error_shape(row: Dict[str, Any]) -> bool:
+    """True for an API error payload rather than a data row.
+
+    Errors look like ``{"code": 404, "message": "..."}`` (or ``{"error": ...}``)
+    and never carry row identity. Data rows do — and some legitimately carry
+    their own ``code``/``message`` columns (``subjects.code``, chat messages),
+    which the old ``"code" not in row`` heuristic silently dropped, making
+    freshly created rows vanish from list results.
+    """
+    if any(k in row for k in ("id", "email", "name", "subject_id", "user_id", "created_at")):
+        return False
+    return any(k in row for k in ("message", "error", "code", "status"))
+
+
 def _as_list(result: Any) -> List[Dict[str, Any]]:
     if result is None:
         return []
     if isinstance(result, list):
-        return [r for r in result if isinstance(r, dict) and "code" not in r and "message" not in r]
+        return [r for r in result if isinstance(r, dict) and not _is_error_shape(r)]
     if isinstance(result, dict):
         for key in ("data", "rows", "items", "results"):
             if key in result and isinstance(result[key], list):
-                return [r for r in result[key] if isinstance(r, dict) and "code" not in r and "message" not in r]
+                return [
+                    r for r in result[key] if isinstance(r, dict) and not _is_error_shape(r)
+                ]
         # single row object — but reject error shapes
-        if "code" in result or "message" in result:
+        if _is_error_shape(result):
             return []
         if "id" in result or any(k in result for k in ("email", "name", "subject_id", "user_id")):
             return [result]
@@ -237,17 +302,18 @@ def insert_row(table_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         t = table(table_name)
         result = t.insert(payload)
         if hasattr(result, "execute"):
-            result = _retry(lambda: result.execute())
+            result = _retry_write(lambda: result.execute())
         row = _as_one(result)
+        # Always drop cached reads for this id: a stale "row absent" entry is
+        # what makes a fresh insert look like it never happened.
+        _invalidate(table_name, (row or {}).get("id") or payload.get("id"))
         if row:
             return row
         if isinstance(result, dict):
             # merge so id from server wins if present
             merged = dict(payload)
             merged.update(result)
-            _invalidate(table_name, merged.get("id", payload.get("id")))
             return merged
-        _invalidate(table_name, payload.get("id"))
         return payload
     except Exception as e:
         logger.error("insert %s failed: %s", table_name, e)
@@ -260,12 +326,12 @@ def update_eq(table_name: str, column: str, value: Any, payload: Dict[str, Any])
         q = t.update(payload)
         if hasattr(q, "eq"):
             q = q.eq(column, value)
-        result = _retry(lambda: q.execute()) if hasattr(q, "execute") else q
+        result = _retry_write(lambda: q.execute()) if hasattr(q, "execute") else q
         row = _as_one(result)
+        _invalidate(table_name, (row or {}).get("id") or value)
         if row:
-            _invalidate(table_name, value)
             return row
-        # fallback read
+        # fallback read — invalidate first so it cannot serve the pre-write row
         if column == "id":
             return get_by_id(table_name, str(value)) or {**payload, column: value}
         return payload
@@ -281,7 +347,7 @@ def delete_eq(table_name: str, column: str, value: Any) -> bool:
         if hasattr(q, "eq"):
             q = q.eq(column, value)
         if hasattr(q, "execute"):
-            _retry(lambda: q.execute())
+            _retry_write(lambda: q.execute())
         _invalidate(table_name, value)
         return True
     except Exception as e:

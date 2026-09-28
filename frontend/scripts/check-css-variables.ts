@@ -1,11 +1,14 @@
 /**
  * check-css-variables.ts (QUAL-04)
  *
- * Scans PROTOTYPE-D and PROTOTYPE-M HTML files for CSS variable usage,
- * checks each variable exists in styles/globals.css, and reports missing ones.
+ * Scans the Next.js app source (pages/components/lib/styles) for `var(--x)`
+ * usage and verifies every referenced custom property is defined in a CSS file.
+ *
+ * The previous version only scanned the deleted PROTOTYPE-D/M directories, so
+ * it always reported "0 CSS variables used" and passed — a false green.
  *
  * Usage: npx tsx scripts/check-css-variables.ts
- * Exit: 0 if all variables exist, 1 if any missing
+ * Exit: 0 if all variables are defined, 1 if any missing or nothing was scanned
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -13,42 +16,35 @@ import * as path from 'path';
 // ANSI color codes
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
-const YELLOW = '\x1b[33m';
 const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 const CYAN = '\x1b[36m';
 
-// Resolve paths
 const FRONTEND_DIR = path.resolve(__dirname, '..');
-const PROJECT_ROOT = path.resolve(FRONTEND_DIR, '..');
-const PROTOTYPE_D = path.join(PROJECT_ROOT, 'PROTOTYPE-D');
-const PROTOTYPE_M = path.join(PROJECT_ROOT, 'PROTOTYPE-M');
-const GLOBALS_CSS = path.join(FRONTEND_DIR, 'styles', 'globals.css');
 
-/**
- * Recursively find all .html files in a directory.
- */
-function findHtmlFiles(dir: string): string[] {
+// Directories that make up the app.
+const SOURCE_DIRS = ['pages', 'components', 'lib', 'styles', 'public'];
+const SOURCE_EXTENSIONS = new Set(['.tsx', '.ts', '.jsx', '.js', '.css']);
+const IGNORE_DIRS = new Set(['node_modules', '.next', 'out', 'coverage']);
+
+function findFiles(dir: string, extensions: Set<string>): string[] {
   if (!fs.existsSync(dir)) return [];
   const files: string[] = [];
   for (const entry of fs.readdirSync(dir)) {
+    if (IGNORE_DIRS.has(entry)) continue;
     const fullPath = path.join(dir, entry);
     const stat = fs.statSync(fullPath);
     if (stat.isDirectory()) {
-      files.push(...findHtmlFiles(fullPath));
-    } else if (entry.endsWith('.html')) {
+      files.push(...findFiles(fullPath, extensions));
+    } else if (extensions.has(path.extname(entry))) {
       files.push(fullPath);
     }
   }
   return files;
 }
 
-/**
- * Extract CSS variable references from HTML content.
- * Matches patterns like var(--color-primary) or var(--spacing-4).
- */
 function extractCssVariables(content: string): Set<string> {
-  const varRegex = /var\((--[a-zA-Z0-9_-]+)/g;
+  const varRegex = /var\(\s*(--[a-zA-Z0-9_-]+)/g;
   const variables = new Set<string>();
   let match;
   while ((match = varRegex.exec(content)) !== null) {
@@ -57,9 +53,6 @@ function extractCssVariables(content: string): Set<string> {
   return variables;
 }
 
-/**
- * Extract CSS variable definitions from globals.css.
- */
 function extractDefinedVariables(cssContent: string): Set<string> {
   const varRegex = /(--[a-zA-Z0-9_-]+)\s*:/g;
   const variables = new Set<string>();
@@ -70,69 +63,85 @@ function extractDefinedVariables(cssContent: string): Set<string> {
   return variables;
 }
 
-async function main(): Promise<void> {
-  console.log(`\n${BOLD}🔍 Checking CSS variable consistency...${RESET}\n`);
+function main(): void {
+  console.log(`\n${BOLD}Checking CSS variable consistency...${RESET}\n`);
 
-  // Read globals.css
-  if (!fs.existsSync(GLOBALS_CSS)) {
-    console.log(`${RED}❌ globals.css not found at: ${GLOBALS_CSS}${RESET}\n`);
+  const cssFiles = findFiles(FRONTEND_DIR, new Set(['.css']));
+  const definedVariables = new Set<string>();
+  for (const file of cssFiles) {
+    for (const v of extractDefinedVariables(fs.readFileSync(file, 'utf-8'))) {
+      definedVariables.add(v);
+    }
+  }
+
+  console.log(`  ${CYAN}Defined custom properties in CSS:${RESET} ${definedVariables.size}`);
+
+  const sourceFiles: string[] = [];
+  for (const dir of SOURCE_DIRS) {
+    sourceFiles.push(...findFiles(path.join(FRONTEND_DIR, dir), SOURCE_EXTENSIONS));
+  }
+
+  if (sourceFiles.length === 0) {
+    console.log(
+      `${RED}${BOLD}No source files scanned — the checker is not looking at anything.${RESET}\n`
+    );
     process.exit(1);
   }
 
-  const globalsCss = fs.readFileSync(GLOBALS_CSS, 'utf-8');
-  const definedVariables = extractDefinedVariables(globalsCss);
-
-  console.log(`  ${CYAN}Defined variables in globals.css:${RESET} ${definedVariables.size}`);
-
-  // Scan prototype directories
-  const prototypeDirs = [
-    { name: 'PROTOTYPE-D', path: PROTOTYPE_D },
-    { name: 'PROTOTYPE-M', path: PROTOTYPE_M },
-  ];
-
-  const allUsedVariables = new Set<string>();
-  const filesScanned: string[] = [];
-
-  for (const proto of prototypeDirs) {
-    const htmlFiles = findHtmlFiles(proto.path);
-    for (const file of htmlFiles) {
-      const content = fs.readFileSync(file, 'utf-8');
-      const vars = extractCssVariables(content);
-      for (const v of Array.from(vars)) {
-        allUsedVariables.add(v);
-      }
-      if (vars.size > 0) {
-        filesScanned.push(path.relative(FRONTEND_DIR, file));
-      }
+  // Custom properties can also be defined in source: inline style objects
+  // (`'--s': '48px'`) and template-string CSS blocks (`--x: 1px`).
+  for (const file of sourceFiles) {
+    const content = fs.readFileSync(file, 'utf-8');
+    const defRegex = /(['"]?)(--[a-zA-Z0-9_-]+)\1\s*:/g;
+    let m;
+    while ((m = defRegex.exec(content)) !== null) {
+      definedVariables.add(m[2]);
     }
   }
 
-  console.log(`  ${CYAN}Prototype files scanned:${RESET} ${filesScanned.length}`);
-  console.log(`  ${CYAN}Unique CSS variables used:${RESET} ${allUsedVariables.size}\n`);
+  const missingByFile = new Map<string, string[]>();
+  let usageCount = 0;
+  const allUsed = new Set<string>();
 
-  // Check for missing variables
-  const missingVariables: string[] = [];
-  for (const usedVar of Array.from(allUsedVariables)) {
-    if (!definedVariables.has(usedVar)) {
-      missingVariables.push(usedVar);
+  for (const file of sourceFiles) {
+    const content = fs.readFileSync(file, 'utf-8');
+    const used = extractCssVariables(content);
+    if (used.size === 0) continue;
+    usageCount += 1;
+    const missing: string[] = [];
+    for (const v of used) {
+      allUsed.add(v);
+      if (!definedVariables.has(v)) missing.push(v);
+    }
+    if (missing.length > 0) {
+      missingByFile.set(path.relative(FRONTEND_DIR, file), missing);
     }
   }
 
-  // Report results
-  if (missingVariables.length === 0) {
-    console.log(`${GREEN}${BOLD}✅ All ${allUsedVariables.size} CSS variables are defined in globals.css${RESET}\n`);
+  console.log(`  ${CYAN}Source files scanned:${RESET} ${sourceFiles.length}`);
+  console.log(`  ${CYAN}Files using custom properties:${RESET} ${usageCount}`);
+  console.log(
+    `  ${CYAN}Unique custom properties used:${RESET} ${allUsed.size} (checked against CSS definitions)\n`
+  );
+
+  if (missingByFile.size === 0) {
+    console.log(
+      `${GREEN}${BOLD}All ${allUsed.size} referenced custom properties are defined${RESET}\n`
+    );
     process.exit(0);
-  } else {
-    console.log(`${RED}${BOLD}❌ ${missingVariables.length} CSS variable(s) used in prototypes but missing from globals.css:${RESET}\n`);
-    for (const variable of missingVariables) {
-      console.log(`  ${RED}•${RESET} ${variable}`);
-    }
-    console.log(`\n  Add these variables to ${GLOBALS_CSS}\n`);
-    process.exit(1);
   }
+
+  console.log(
+    `${RED}${BOLD}Custom properties referenced in source but not defined in CSS:${RESET}\n`
+  );
+  for (const [file, vars] of missingByFile) {
+    console.log(`  ${RED}${file}${RESET}`);
+    for (const v of vars) {
+      console.log(`    • ${v}`);
+    }
+  }
+  console.log(`\n  Define them in ${path.join(FRONTEND_DIR, 'styles')}\n`);
+  process.exit(1);
 }
 
-main().catch((err) => {
-  console.error(`${RED}Fatal error:${RESET}`, err);
-  process.exit(1);
-});
+main();

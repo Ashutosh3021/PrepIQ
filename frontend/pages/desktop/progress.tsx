@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
 import { DesktopLayout } from '@/components/desktop';
 import { useAuth } from '@/lib/context/AuthContext';
 import { apiFetch } from '@/lib/services/base.service';
@@ -228,7 +229,7 @@ export default function Progress() {
               <li className="flex items-start gap-3">
                 <span className="text-primary font-bold mt-1">→</span>
                 <span className="text-sm">
-                  Focus on <strong>{weakTopicsList[0][0]}</strong> - you've struggled with this topic {weakTopicsList[0][1]} times
+                  Focus on <strong>{weakTopicsList[0][0]}</strong> - you&apos;ve struggled with this topic {weakTopicsList[0][1]} times
                 </span>
               </li>
             )}
@@ -261,18 +262,18 @@ export default function Progress() {
 
         {/* Call to Action */}
         <section className="flex gap-4 mb-16">
-          <a
+          <Link
             href="/desktop/tests"
             className="px-8 py-3 bg-primary text-white rounded font-semibold hover:bg-primary/90 transition-colors"
           >
             Generate New Test
-          </a>
-          <a
+          </Link>
+          <Link
             href="/desktop/test-history"
             className="px-8 py-3 border border-primary text-primary rounded font-semibold hover:bg-primary/10 transition-colors"
           >
             View Test History
-          </a>
+          </Link>
         </section>
       </DesktopLayout>
     </>

@@ -133,9 +133,19 @@ async def lifespan(app: FastAPI):
         if not os.getenv(key):
             logger.warning("[WARN] %s not set — some features may be unavailable", key)
 
+    # Never run with an unverifiable signing secret. _jwt_secret() raises on
+    # every mint/decode anyway, so starting without a secret only turns the
+    # failure into per-request 500s; fail fast with an actionable message
+    # instead (previously production-only, and it checked a differently-read
+    # value than the JWT code used).
     _insecure_default = "default-insecure-change-me"
-    if settings.ENVIRONMENT == "production" and settings.SECRET_KEY == _insecure_default:
-        raise RuntimeError("Cannot start in production with the default insecure SECRET_KEY.")
+    _secret = (settings.SECRET_KEY or "").strip()
+    if not _secret or _secret == _insecure_default:
+        raise RuntimeError(
+            "JWT_SECRET (or SECRET_KEY) is missing or is the insecure default. "
+            "Set a strong secret, e.g. `openssl rand -base64 32`. "
+            "Refusing to start: every issued token would be forgeable."
+        )
 
     try:
         from app.core.local_storage import _upload_root
@@ -157,12 +167,15 @@ async def lifespan(app: FastAPI):
         logger.warning("[WARN] Pyronites client init failed: %s", e)
 
     # ── Auto-provision missing Pyronites tables ────────────────────────────
+    # Fail hard: serving traffic without the schema turns every request into a
+    # 500 that looks like an application bug rather than an unprovisioned DB.
     try:
         from app.core.migration import run_startup_migration
 
         run_startup_migration()
     except Exception as e:
-        logger.warning("[migration] Startup table check failed: %s", e)
+        logger.error("[FATAL] Startup schema migration failed: %s", e)
+        raise
 
     _keep_alive_thread = None
     if settings.ENVIRONMENT == "production" and _KEEP_ALIVE_AVAILABLE:

@@ -184,30 +184,86 @@ _TABLES: List[Tuple[str, str, List[Dict[str, Any]]]] = [
             {"name": "updated_at", "type": "TEXT"},
         ],
     ),
+    # Application user profiles + wizard targeting. This is a *data* table on
+    # the project (distinct from PyroCore's auth records — the name "users" is
+    # reserved server-side) and is the durable home for wizard state; it used
+    # to live in a local SQLite file, which is wiped on every Render redeploy.
+    (
+        "user_profiles",
+        "id",
+        [
+            {"name": "id", "type": "TEXT"},
+            {"name": "email", "type": "TEXT"},
+            {"name": "full_name", "type": "TEXT"},
+            {"name": "college_name", "type": "TEXT"},
+            {"name": "program", "type": "TEXT"},
+            {"name": "year_of_study", "type": "INTEGER"},
+            {"name": "exam_type", "type": "TEXT"},
+            {"name": "exam_name", "type": "TEXT"},
+            {"name": "university_name", "type": "TEXT"},
+            {"name": "days_until_exam", "type": "INTEGER"},
+            {"name": "exam_date", "type": "TEXT"},
+            {"name": "focus_subjects", "type": "JSON"},
+            {"name": "study_hours_per_day", "type": "INTEGER"},
+            {"name": "target_score", "type": "INTEGER"},
+            {"name": "preparation_level", "type": "TEXT"},
+            {"name": "wizard_completed", "type": "BOOLEAN"},
+            {"name": "created_at", "type": "TEXT"},
+            {"name": "updated_at", "type": "TEXT"},
+        ],
+    ),
 ]
 
 
-def _check_table_exists_http(project_id: str, table_name: str, url: str, key: str) -> bool:
-    """Check if a table exists via a lightweight GET request."""
+def _list_tables_http(project_id: str, url: str, key: str) -> List[str]:
+    """Return the set of table names on the project.
+
+    Raises RuntimeError when the listing cannot be obtained: a failed existence
+    check used to be treated as "table exists", which is how a project with
+    *zero* app tables booted "successfully" and 500'd on every request.
+    """
     import httpx
 
     try:
         resp = httpx.get(
-            f"{url.rstrip('/')}/api/projects/{project_id}/tables/{table_name}",
+            f"{url.rstrip('/')}/api/projects/{project_id}/tables",
             headers={"Authorization": f"Bearer {key}"},
-            timeout=10,
+            timeout=15,
         )
-        # 200 = exists, 404 = not found
-        if resp.status_code == 200:
-            return True
-        if resp.status_code == 404:
-            return False
-        # Other codes (429, 500) — assume exists to avoid false creation attempts
-        logger.debug("Table %s check returned %s — assuming exists", table_name, resp.status_code)
-        return True
     except Exception as e:
-        logger.debug("Table %s existence check failed: %s", table_name, e)
-        return True  # assume exists on network errors to avoid spurious creation
+        raise RuntimeError(
+            f"Could not list tables for project {project_id}: {e}"
+        ) from e
+
+    if resp.status_code == 429:
+        raise RuntimeError(
+            "PyroCore rate-limited the table listing (429) — cannot verify schema"
+        )
+    if resp.status_code >= 500:
+        raise RuntimeError(
+            f"PyroCore returned HTTP {resp.status_code} for the table listing"
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Unexpected HTTP {resp.status_code} listing tables: {resp.text[:200]}"
+        )
+
+    try:
+        payload = resp.json()
+    except ValueError as e:
+        raise RuntimeError("PyroCore table listing was not valid JSON") from e
+
+    names: List[str] = []
+    for entry in payload if isinstance(payload, list) else payload.get("tables", []):
+        if isinstance(entry, dict):
+            name = entry.get("name") or entry.get("table")
+            if name:
+                names.append(str(name))
+        elif isinstance(entry, str):
+            names.append(entry)
+    # An empty list is a valid answer (brand-new project) — the caller creates
+    # whatever is missing. Only *unobtainable* answers are fatal.
+    return names
 
 
 def _create_table_http(
@@ -270,12 +326,16 @@ def run_startup_migration() -> None:
 
     Called once during FastAPI lifespan startup. Safe to call multiple times
     (thread-safe, idempotent).
+
+    Raises RuntimeError when the schema cannot be verified or a required table
+    cannot be created — the app must not serve traffic against a schema it
+    cannot see. The guard flag is only latched on success so a transient
+    PyroCore outage does not permanently mark the schema as verified.
     """
     global _ran
     with _lock:
         if _ran:
             return
-        _ran = True
 
     url = (os.getenv("PYRONITES_URL") or "").strip()
     key = (os.getenv("PYRONITES_KEY") or "").strip()
@@ -293,34 +353,47 @@ def run_startup_migration() -> None:
         len(_TABLES), project_id,
     )
 
-    created_count = 0
-    failed_count = 0
+    existing = set(_list_tables_http(project_id, url, key))
+    missing = [t for t in _TABLES if t[0] not in existing]
 
-    for table_name, primary_key, columns in _TABLES:
-        if _check_table_exists_http(project_id, table_name, url, key):
-            continue
+    if not missing:
+        logger.info("[migration] All %d tables present — no action needed", len(_TABLES))
+        with _lock:
+            _ran = True
+        return
 
-        logger.info("[migration] Table '%s' not found — attempting creation", table_name)
+    logger.info(
+        "[migration] Missing tables: %s — attempting creation",
+        ", ".join(t[0] for t in missing),
+    )
 
-        # Try SDK first, then raw HTTP
+    created: List[str] = []
+    failed: List[str] = []
+    for table_name, primary_key, columns in missing:
+        # SDK first, then raw HTTP
         success = _create_table_via_sdk(table_name, columns)
         if not success:
             success = _create_table_http(project_id, table_name, primary_key, columns, url, key)
+        (created if success else failed).append(table_name)
 
-        if success:
-            created_count += 1
-        else:
-            failed_count += 1
-            logger.warning(
-                "[migration] Could not create table '%s'. "
-                "Create it manually via the PyroCore dashboard for project %s",
-                table_name, project_id,
-            )
+    # Verify against the data plane rather than trusting creation responses.
+    verified = set(_list_tables_http(project_id, url, key))
+    still_missing = [name for name, _, _ in missing if name not in verified]
 
-    if created_count or failed_count:
-        logger.info(
-            "[migration] Done — created: %d, failed: %d, already existed: %d",
-            created_count, failed_count, len(_TABLES) - created_count - failed_count,
+    if created:
+        logger.info("[migration] Created: %s", ", ".join(created))
+    if failed:
+        logger.warning(
+            "[migration] Create reported failure for: %s", ", ".join(failed)
         )
-    else:
-        logger.info("[migration] All %d tables present — no action needed", len(_TABLES))
+
+    if still_missing:
+        raise RuntimeError(
+            "Required tables missing on PyroCore project "
+            f"{project_id}: {', '.join(still_missing)}. "
+            "Create them via the PyroCore dashboard or fix Pyronites permissions."
+        )
+
+    logger.info("[migration] Verified %d tables present", len(verified))
+    with _lock:
+        _ran = True

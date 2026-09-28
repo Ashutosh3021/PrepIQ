@@ -94,6 +94,13 @@ def get_pyronites_client() -> Any:
             return _client
         url, key = _require_env()
         project_id = _get_project_id()
+        # pyronites 1.2.0 replays the first response per path forever and caches
+        # identity for 30s on this shared client — patch both before first use.
+        try:
+            from app.core.pyronites_patch import apply_pyronites_patches
+            apply_pyronites_patches()
+        except Exception as e:  # pragma: no cover - patch is best effort
+            logger.warning("Could not apply pyronites patches: %s", e)
         try:
             from pyronites import create_client
         except ImportError as e:

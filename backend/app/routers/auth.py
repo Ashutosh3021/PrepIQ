@@ -15,7 +15,19 @@ from app.repositories import users as users_repo
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
-security = HTTPBearer()
+# auto_error=False: FastAPI's HTTPBearer answers a missing header with 403,
+# which the frontend does not treat as "session over" (it only clears on 401).
+security = HTTPBearer(auto_error=False)
+
+
+def _require_bearer(credentials: HTTPAuthorizationCredentials | None) -> str:
+    if credentials is None or not credentials.credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization header required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return credentials.credentials
 
 
 @router.post("/signup", response_model=UserResponse)
@@ -52,7 +64,7 @@ async def logout():
 
 @router.get("/profile")
 async def get_profile(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    user = await get_current_user_from_token(f"Bearer {credentials.credentials}")
+    user = await get_current_user_from_token(f"Bearer {_require_bearer(credentials)}")
     db_user = {}
     try:
         db_user = users_repo.get(user["id"]) or {}
@@ -75,11 +87,13 @@ async def get_profile(credentials: HTTPAuthorizationCredentials = Depends(securi
 
 @router.get("/me")
 async def get_current_user_info(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    return await get_current_user_from_token(f"Bearer {credentials.credentials}")
+    return await get_current_user_from_token(f"Bearer {_require_bearer(credentials)}")
 
 
 @router.get("/verify-token")
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if credentials is None or not credentials.credentials:
+        return {"valid": False}
     try:
         user = await get_current_user_from_token(f"Bearer {credentials.credentials}")
         return {"valid": True, "user_id": user["id"], "email": user["email"]}

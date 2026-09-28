@@ -247,7 +247,7 @@ export default function DesktopDashboard() {
                     : 'Upload past papers to generate AI-powered predictions.'}
                 </p>
                 <Link
-                  href="/desktop/start-test"
+                  href="/desktop/mock-tests"
                   className="bg-primary text-on-primary px-6 md:px-10 py-3 md:py-5 font-bold uppercase tracking-widest text-sm inline-flex items-center group hover:bg-primary/90 transition-colors"
                 >
                   Start Studying

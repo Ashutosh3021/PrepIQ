@@ -46,12 +46,15 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
         user_id = current_user["id"]
         subjects = subjects_repo.list_for_user(user_id)
         subjects_count = len(subjects)
+        subject_names = {str(s.get("id")): str(s.get("name") or "Subject") for s in subjects}
 
-        predictions_count = 0
-        for s in subjects:
-            predictions_count += len(
-                predictions_repo.list_for_user_subject(user_id, str(s.get("id")))
-            )
+        # One query for every prediction the user owns. The old handler issued
+        # a per-subject prediction query in five separate loops.
+        predictions = predictions_repo.list_for_user(user_id)
+        predictions_count = len(predictions)
+        predictions_by_subject: Dict[str, List[Dict[str, Any]]] = {}
+        for p in predictions:
+            predictions_by_subject.setdefault(str(p.get("subject_id")), []).append(p)
 
         # Profile is best-effort: the users table may be missing/unreachable
         # (e.g. PyroCore rate limits or not yet migrated). JWT claims already
@@ -74,11 +77,10 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
             d = _parse_date(t.get("created_at"))
             if d:
                 activity_dates.add(d)
-        for s in subjects:
-            for p in predictions_repo.list_for_user_subject(user_id, str(s.get("id"))):
-                d = _parse_date(p.get("created_at"))
-                if d:
-                    activity_dates.add(d)
+        for p in predictions:
+            d = _parse_date(p.get("created_at"))
+            if d:
+                activity_dates.add(d)
 
         study_streak = 0
         check = today
@@ -88,38 +90,40 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
 
         completion_percentage = 0
         if subjects_count > 0:
-            with_pred = 0
-            for s in subjects:
-                if predictions_repo.list_for_user_subject(user_id, str(s.get("id"))):
-                    with_pred += 1
+            with_pred = sum(
+                1
+                for s in subjects
+                if predictions_by_subject.get(str(s.get("id")))
+            )
             completion_percentage = int((with_pred / subjects_count) * 100)
 
         focus_area = "No subjects yet"
         if subjects:
-            focus_area = str(subjects[0].get("name") or "Subject")
-            # prefer latest prediction subject
-            latest_name = None
+            focus_area = subject_names[str(subjects[0].get("id"))]
+            # prefer the subject owning the most recent prediction
             latest_ts = ""
-            for s in subjects:
-                for p in predictions_repo.list_for_user_subject(user_id, str(s.get("id"))):
-                    ts = str(p.get("created_at") or "")
-                    if ts >= latest_ts:
-                        latest_ts = ts
-                        latest_name = s.get("name")
+            latest_name = None
+            for p in predictions:
+                ts = str(p.get("created_at") or "")
+                if ts >= latest_ts:
+                    latest_ts = ts
+                    latest_name = subject_names.get(str(p.get("subject_id")))
             if latest_name:
-                focus_area = str(latest_name)
+                focus_area = latest_name
 
         recent_activity: List[Dict[str, Any]] = []
+        for p in predictions:
+            sname = subject_names.get(str(p.get("subject_id")), "Subject")
+            recent_activity.append(
+                {
+                    "action": f"Generated predictions for {sname}",
+                    "timestamp": str(p.get("created_at") or ""),
+                }
+            )
         for s in subjects:
             sid = str(s.get("id"))
-            sname = s.get("name") or "Subject"
-            for p in predictions_repo.list_for_user_subject(user_id, sid):
-                recent_activity.append(
-                    {
-                        "action": f"Generated predictions for {sname}",
-                        "timestamp": str(p.get("created_at") or ""),
-                    }
-                )
+            sname = subject_names.get(sid, "Subject")
+            # question_papers has no user column, so papers are per-subject.
             for paper in papers_repo.list_for_subject(sid)[:3]:
                 recent_activity.append(
                     {
@@ -146,15 +150,20 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
             "days_to_exam": days_to_exam,
             "recent_activity": recent_activity[:5],
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching dashboard stats: {str(e)}")
+    except Exception:
+        # Full traceback goes to the server log; the client gets a generic
+        # message instead of internals.
+        logger.exception("dashboard stats failed")
+        raise HTTPException(status_code=500, detail="Error fetching dashboard stats")
 
 
 @router.get("/recent-activity")
 async def get_recent_activity(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     items: List[Dict[str, Any]] = []
-    for s in subjects_repo.list_for_user(user_id):
+    subjects = subjects_repo.list_for_user(user_id)
+    subject_names = {str(s.get("id")): str(s.get("name") or "Subject") for s in subjects}
+    for s in subjects:
         items.append(
             {
                 "id": str(s.get("id")),
@@ -164,16 +173,17 @@ async def get_recent_activity(current_user: dict = Depends(get_current_user)):
                 "timestamp": str(s.get("created_at") or ""),
             }
         )
-        for p in predictions_repo.list_for_user_subject(user_id, str(s.get("id"))):
-            items.append(
-                {
-                    "id": str(p.get("id")),
-                    "type": "prediction",
-                    "title": f"Generated {s.get('name')} predictions",
-                    "description": f"Created {p.get('total_questions') or 0} question predictions",
-                    "timestamp": str(p.get("created_at") or ""),
-                }
-            )
+    for p in predictions_repo.list_for_user(user_id):
+        sname = subject_names.get(str(p.get("subject_id")), "Subject")
+        items.append(
+            {
+                "id": str(p.get("id")),
+                "type": "prediction",
+                "title": f"Generated {sname} predictions",
+                "description": f"Created {p.get('total_questions') or 0} question predictions",
+                "timestamp": str(p.get("created_at") or ""),
+            }
+        )
     for t in mock_tests_repo.list_for_user(user_id):
         items.append(
             {
@@ -197,11 +207,10 @@ async def get_study_progress(current_user: dict = Depends(get_current_user)):
         d = _parse_date(t.get("created_at"))
         if d:
             activity_dates.add(d)
-    for s in subjects_repo.list_for_user(user_id):
-        for p in predictions_repo.list_for_user_subject(user_id, str(s.get("id"))):
-            d = _parse_date(p.get("created_at"))
-            if d:
-                activity_dates.add(d)
+    for p in predictions_repo.list_for_user(user_id):
+        d = _parse_date(p.get("created_at"))
+        if d:
+            activity_dates.add(d)
 
     daily_progress = []
     for i in range(6, -1, -1):

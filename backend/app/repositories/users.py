@@ -1,234 +1,55 @@
-"""Local user-profile store for wizard/account data.
+"""User-profile + wizard targeting store backed by PyroCore ``user_profiles``.
 
-Historically this repository wrote to the Pyronites ``users`` *data* table.
-That table is the Pyronites auth table and is not provisioned as a writable
-data table on the PyroCore backend, so every write returned
-``404 table_not_found`` and was silently swallowed — which made
-``/wizard/complete`` fail with ``422 Missing: ...`` because none of the
-targeting fields were ever persisted.
+History: this repository used to write to PyroCore's ``users`` table (reserved
+server-side, so every write 404'd) and then moved to a local SQLite file. The
+SQLite file lives on Render's ephemeral disk, so every redeploy silently
+wiped profiles and wizard state. Profiles now live alongside the rest of the
+application data on the PyroCore project — durable across deploys.
 
-We now persist profile + wizard data in a self-contained local SQLite store.
-No external provisioning or environment variables are required, and the data
-survives restarts, so the wizard can read back what the steps wrote.
+Failure policy (deliberate):
+  * reads  — degrade to ``None``/empty so a PyroCore hiccup never 500s auth;
+  * writes — raise. A wizard step or signup that cannot persist must surface
+    instead of pretending it succeeded.
 """
 from __future__ import annotations
 
+import json
 import logging
-import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import (
-    Boolean,
-    Column,
-    Integer,
-    String,
-    JSON,
-    DateTime,
-    create_engine,
-)
-from sqlalchemy.orm import declarative_base, sessionmaker
+from app.repositories import base
 
 logger = logging.getLogger(__name__)
 
-# ── Local SQLite engine (one file, no external service required) ──────────────
-_BASE = declarative_base()
+TABLE = "user_profiles"
 
-_DB_PATH = None
-_ENGINE = None
-_SESSION = None
-_INIT_LOCK = threading.Lock()
+_BOOL_FIELDS = ("wizard_completed",)
+_INT_FIELDS = (
+    "year_of_study",
+    "days_until_exam",
+    "study_hours_per_day",
+    "target_score",
+)
+_JSON_FIELDS = ("focus_subjects",)
 
-
-def _ensure_initialised() -> bool:
-    """Lazily create the engine + table. Returns True on success.
-
-    Failures are logged but never raised — the callers already treat a missing
-    profile as "empty", so a broken local store degrades to the previous
-    (best-effort) behaviour instead of 500-ing the request.
-    """
-    global _DB_PATH, _ENGINE, _SESSION
-    if _SESSION is not None:
-        return True
-    with _INIT_LOCK:
-        if _SESSION is not None:
-            return True
-        try:
-            import os
-            from pathlib import Path
-
-            data_dir = Path(__file__).resolve().parent.parent.parent / "data"
-            data_dir.mkdir(parents=True, exist_ok=True)
-            _DB_PATH = str(data_dir / "prepiq_users.db")
-            _ENGINE = create_engine(
-                f"sqlite:///{_DB_PATH}",
-                connect_args={"check_same_thread": False},
-                pool_pre_ping=True,
-            )
-            _BASE.metadata.create_all(_ENGINE)
-            _SESSION = sessionmaker(bind=_ENGINE, expire_on_commit=False)
-            logger.info("Local user store initialised at %s", _DB_PATH)
-            return True
-        except Exception as e:  # pragma: no cover - defensive
-            logger.error("Local user store init failed (continuing): %s", e)
-            _SESSION = None
-            return False
-
-
-class _LocalUser(_BASE):
-    __tablename__ = "local_users"
-
-    id = Column(String(64), primary_key=True)
-    email = Column(String(320), unique=True, index=True, nullable=True)
-
-    full_name = Column(String(255), nullable=True)
-    college_name = Column(String(255), nullable=True)
-    program = Column(String(100), nullable=True)
-    year_of_study = Column(Integer, nullable=True)
-
-    exam_type = Column(String(50), nullable=True)
-    exam_name = Column(String(255), nullable=True)
-    university_name = Column(String(255), nullable=True)
-    days_until_exam = Column(Integer, nullable=True)
-    exam_date = Column(String(64), nullable=True)
-
-    focus_subjects = Column(JSON, nullable=True)
-    study_hours_per_day = Column(Integer, nullable=True)
-    target_score = Column(Integer, nullable=True)
-    preparation_level = Column(String(50), nullable=True)
-
-    wizard_completed = Column(Boolean, default=False, nullable=False)
-
-    created_at = Column(DateTime(timezone=True), nullable=True)
-    updated_at = Column(DateTime(timezone=True), nullable=True)
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _to_public(row: Optional[_LocalUser]) -> Optional[Dict[str, Any]]:
-    if row is None:
-        return None
-    return {
-        "id": row.id,
-        "email": row.email,
-        "full_name": row.full_name,
-        "college_name": row.college_name,
-        "program": row.program,
-        "year_of_study": row.year_of_study,
-        "exam_type": row.exam_type,
-        "exam_name": row.exam_name,
-        "university_name": row.university_name,
-        "days_until_exam": row.days_until_exam,
-        "exam_date": row.exam_date,
-        "focus_subjects": row.focus_subjects or [],
-        "study_hours_per_day": row.study_hours_per_day,
-        "target_score": row.target_score,
-        "preparation_level": row.preparation_level,
-        "wizard_completed": bool(row.wizard_completed),
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-    }
-
-
-def get(user_id: str) -> Optional[Dict[str, Any]]:
-    if not _ensure_initialised():
-        return None
-    try:
-        with _SESSION() as s:
-            row = s.get(_LocalUser, str(user_id))
-            return _to_public(row)
-    except Exception as e:
-        logger.warning("local users.get failed for %s (continuing): %s", user_id, e)
-        return None
-
-
-def get_by_email(email: str) -> Optional[Dict[str, Any]]:
-    if not email or not _ensure_initialised():
-        return None
-    try:
-        with _SESSION() as s:
-            row = (
-                s.query(_LocalUser)
-                .filter(_LocalUser.email == str(email).strip().lower())
-                .first()
-            )
-            return _to_public(row)
-    except Exception as e:
-        logger.warning("local users.get_by_email failed (continuing): %s", e)
-        return None
-
-
-def upsert_profile(user_id: str, email: str, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Create or refresh the application user row after auth signup/login."""
-    profile = profile or {}
-    uid = str(user_id)
-    now = _now()
-    if not _ensure_initialised():
-        return {
-            "id": uid,
-            "email": (email or "").strip().lower(),
-            **{k: profile.get(k) for k in (
-                "full_name", "college_name", "program", "year_of_study",
-                "wizard_completed",
-            )},
-        }
-    try:
-        with _SESSION() as s:
-            row = s.get(_LocalUser, uid)
-            if row is None:
-                row = _LocalUser(id=uid)
-                row.created_at = now
-                s.add(row)
-            row.email = (email or "").strip().lower() or row.email
-            row.full_name = profile.get("full_name") or row.full_name
-            row.college_name = profile.get("college_name") or row.college_name
-            row.program = profile.get("program") or row.program or "BTech"
-            row.year_of_study = profile.get("year_of_study") or row.year_of_study or 1
-            if "wizard_completed" in profile:
-                row.wizard_completed = bool(profile["wizard_completed"])
-            row.updated_at = now
-            s.commit()
-            return _to_public(row) or {"id": uid}
-    except Exception as e:
-        logger.error("local users.upsert_profile failed for %s (continuing): %s", uid, e)
-        return {"id": uid, "email": (email or "").strip().lower()}
-
-
-def update(user_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    uid = str(user_id)
-    if not _ensure_initialised():
-        # Mirror the previous best-effort behaviour so callers that don't depend
-        # on a persisted row still proceed.
-        out = dict(fields)
-        out["id"] = uid
-        return out
-    try:
-        with _SESSION() as s:
-            row = s.get(_LocalUser, uid)
-            if row is None:
-                row = _LocalUser(id=uid)
-                row.created_at = _now()
-                s.add(row)
-            allowed = {
-                "email", "full_name", "college_name", "program", "year_of_study",
-                "exam_type", "exam_name", "university_name", "days_until_exam",
-                "exam_date", "focus_subjects", "study_hours_per_day",
-                "target_score", "preparation_level", "wizard_completed",
-            }
-            for key, val in fields.items():
-                if key in allowed:
-                    setattr(row, key, val)
-            row.updated_at = _now()
-            s.commit()
-            return _to_public(row) or {"id": uid}
-    except Exception as e:
-        logger.error("local users.update failed for %s (continuing): %s", uid, e)
-        out = dict(fields)
-        out["id"] = uid
-        return out
-
+_ALLOWED = (
+    "email",
+    "full_name",
+    "college_name",
+    "program",
+    "year_of_study",
+    "exam_type",
+    "exam_name",
+    "university_name",
+    "days_until_exam",
+    "exam_date",
+    "focus_subjects",
+    "study_hours_per_day",
+    "target_score",
+    "preparation_level",
+    "wizard_completed",
+)
 
 # Targeting parameters captured by the setup wizard. Clearing these fully resets
 # the user's exam targeting so the wizard can be replayed without stale data.
@@ -245,6 +66,150 @@ _TARGETING_FIELDS = (
 )
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_jsonish(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except Exception:
+            return value
+    return value
+
+
+def _coerce(row: Dict[str, Any], key: str, value: Any) -> Any:
+    if key in _BOOL_FIELDS:
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+    if key in _INT_FIELDS:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    if key in _JSON_FIELDS:
+        parsed = _parse_jsonish(value)
+        return parsed if isinstance(parsed, list) else []
+    return value
+
+
+def _normalise(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not row:
+        return row
+    out = dict(row)
+    for key in list(out.keys()):
+        if key in _BOOL_FIELDS or key in _INT_FIELDS or key in _JSON_FIELDS:
+            out[key] = _coerce(out, key, out[key])
+    out.setdefault("focus_subjects", [])
+    out["wizard_completed"] = bool(out.get("wizard_completed"))
+    if not out.get("program"):
+        out["program"] = "BTech"
+    if out.get("year_of_study") in (None, 0):
+        out["year_of_study"] = 1
+    if out.get("email"):
+        out["email"] = str(out["email"]).strip().lower()
+    return out
+
+
+def get(user_id: str) -> Optional[Dict[str, Any]]:
+    if not user_id:
+        return None
+    try:
+        return _normalise(base.get_by_id(TABLE, str(user_id)))
+    except Exception as e:
+        logger.warning("user_profiles.get failed for %s (continuing): %s", user_id, e)
+        return None
+
+
+def get_by_email(email: str) -> Optional[Dict[str, Any]]:
+    if not email:
+        return None
+    try:
+        rows = base.select_eq(TABLE, "email", str(email).strip().lower())
+    except Exception as e:
+        logger.warning("user_profiles.get_by_email failed (continuing): %s", e)
+        return None
+    return _normalise(rows[0]) if rows else None
+
+
+def _write_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Filter to writable columns and stamp the timestamp."""
+    payload = {k: v for k, v in fields.items() if k in _ALLOWED}
+    payload["updated_at"] = _now()
+    return payload
+
+
+def upsert_profile(user_id: str, email: str, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Create or refresh the application profile after auth signup/login."""
+    profile = profile or {}
+    uid = str(user_id)
+    clean_email = (email or "").strip().lower() or None
+
+    # Booleans are written whenever the key is present (False must stick);
+    # other fields only overwrite when a value is supplied.
+    incoming = {
+        k: v
+        for k, v in profile.items()
+        if k in _ALLOWED and (k in _BOOL_FIELDS or (v is not None and v != ""))
+    }
+
+    existing = get(uid)
+    if existing is None:
+        payload = {
+            "id": uid,
+            "email": clean_email,
+            "program": "BTech",
+            "year_of_study": 1,
+            "wizard_completed": False,
+            **incoming,
+            "created_at": _now(),
+        }
+        payload["updated_at"] = _now()
+        row = base.insert_row(TABLE, {k: v for k, v in payload.items() if v is not None or k in _BOOL_FIELDS})
+        logger.info("user_profiles created row for %s", uid)
+        return _normalise(row) or _normalise(payload) or {"id": uid}
+
+    if clean_email and clean_email != existing.get("email"):
+        incoming["email"] = clean_email
+    if not incoming:
+        return existing
+
+    row = base.update_eq(TABLE, "id", uid, _write_fields(incoming))
+    return _normalise(row) or _normalise({**existing, **incoming}) or {"id": uid}
+
+
+def update(user_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Persist wizard/profile fields. Raises when the write cannot be made."""
+    uid = str(user_id)
+    payload = _write_fields(fields)
+    if not payload:
+        return get(uid)
+
+    existing = get(uid)
+    if existing is None:
+        payload = {
+            "id": uid,
+            "program": "BTech",
+            "year_of_study": 1,
+            **payload,
+        }
+        row = base.insert_row(TABLE, payload)
+    else:
+        row = base.update_eq(TABLE, "id", uid, payload)
+
+    merged = _normalise(row) or _normalise({**(existing or {}), **payload, "id": uid})
+    return merged
+
+
 def reset_targeting(user_id: str) -> Optional[Dict[str, Any]]:
     """Wipe all previously saved targeting information for the user.
 
@@ -252,6 +217,6 @@ def reset_targeting(user_id: str) -> Optional[Dict[str, Any]]:
     completion flag) so a re-triggered wizard starts from a clean slate and
     cannot conflict with the previous exam configuration.
     """
-    fields = {key: None for key in _TARGETING_FIELDS}
+    fields: Dict[str, Any] = {key: None for key in _TARGETING_FIELDS}
     fields["wizard_completed"] = False
     return update(user_id, fields)

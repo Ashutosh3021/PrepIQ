@@ -1,3 +1,2 @@
-export { detectDevice } from './device';
-export { resolveAlias } from './navAlias';
+export { detectDevice, getWizardPath, getDashboardPath } from './device';
 export { cn } from './cn';

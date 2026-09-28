@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "format": "prettier --write .",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -16,7 +16,8 @@
     "audit-hrefs": "npx tsx scripts/audit-hrefs.ts",
     "check-console": "npx tsx scripts/check-console-errors.ts",
     "check-types": "npx tsc --noEmit",
-    "check-css-vars": "npx tsx scripts/check-css-variables.ts"
+    "check-css-vars": "npx tsx scripts/check-css-variables.ts",
+    "check": "npm run check-types && npm run lint && npm run verify-pages && npm run audit-hrefs && npm run check-css-vars && npm run check-nav"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.1",
@@ -31,6 +32,7 @@
     "three": "^0.184.0"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "3.3.5",
     "@playwright/test": "^1.59.1",
     "@testing-library/jest-dom": "6.6.3",
     "@testing-library/react": "16.2.0",

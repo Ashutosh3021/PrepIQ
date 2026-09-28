@@ -65,7 +65,7 @@ export default function DesktopTests() {
             {testDomains.map((domain) => (
               <button
                 key={domain.name}
-                onClick={() => router.push('/desktop/generate-test')}
+                onClick={() => router.push('/desktop/mock-tests')}
                 className="group flex flex-col items-start p-4 md:p-8 bg-primary text-white border-r border-white/10 last:border-r-0 hover:bg-primary/90 transition-colors duration-200"
               >
                 <span className="mb-3 md:mb-6 text-4xl">
@@ -138,7 +138,9 @@ export default function DesktopTests() {
                     <div className="sm:col-span-2 flex sm:justify-end w-full sm:w-auto">
                       <button
                         className="bg-primary text-white px-6 py-3 text-xs font-bold tracking-widest uppercase hover:bg-primary/90 transition-colors duration-150 w-full sm:w-auto"
-                        onClick={() => router.push('/desktop/start-test')}
+                        onClick={() =>
+                          router.push(`/desktop/start-test?testId=${test.test_id}`)
+                        }
                       >
                         Start Test
                       </button>

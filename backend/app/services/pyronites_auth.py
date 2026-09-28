@@ -208,6 +208,12 @@ def _jwt_secret() -> str:
     return secret
 
 
+def _looks_like_jwt(token: str) -> bool:
+    """True for a structurally JWT-shaped token (header.payload.signature)."""
+    parts = str(token).split(".")
+    return len(parts) == 3 and all(parts)
+
+
 def _jwt_algorithm() -> str:
     return settings.JWT_ALGORITHM
 
@@ -549,15 +555,25 @@ class PyronitesAuthService:
                 uid = str(uid)
             email = str(claims.get("email") or "").strip().lower()
 
-        if not uid and pyronites_configured():
-            try:
-                client = get_pyronites_client()
-                me = client.auth.user() if hasattr(client.auth, "user") else None
-                me_d = _as_dict(me) or {}
-                uid = _pick_id(me_d)
-                email = _pick_email(me_d, email)
-            except Exception as e:
-                logger.info("Pyronites /auth/me token path failed: %s", e)
+        if not uid:
+            # NEVER fall back to the SDK's auth.user() here: that call is
+            # authenticated with the *service* API key, so it answers with the
+            # service's identity — any forged/invalid token would be accepted
+            # as that user. Only a token that proves itself may authorize a
+            # request:
+            #   • a JWT must verify with our secret (claims were None otherwise)
+            #   • an opaque token is offered to PyroCore as a session token and
+            #     accepted only if PyroCore says it authenticates.
+            if _looks_like_jwt(token):
+                raise HTTPException(status_code=401, detail="Invalid authentication token")
+            if pyronites_configured():
+                try:
+                    me_d = _call_auth_me_with_cookie(token) or {}
+                    if me_d.get("authenticated"):
+                        uid = _pick_id(me_d)
+                        email = _pick_email(me_d, email)
+                except Exception as e:
+                    logger.info("session token validation failed: %s", e)
 
         if not uid:
             raise HTTPException(status_code=401, detail="Invalid authentication token")

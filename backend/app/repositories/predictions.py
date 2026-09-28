@@ -39,6 +39,15 @@ def _as_json_value(value: Any, default: Any) -> Any:
     return default
 
 
+def list_for_user(user_id: str) -> List[Dict[str, Any]]:
+    """Every prediction belonging to a user, in a single query.
+
+    Prefer this over per-subject ``list_for_user_subject`` calls when a handler
+    needs the whole set — that pattern is one remote query per subject.
+    """
+    return base.select_eq(TABLE, "user_id", user_id)
+
+
 def list_for_user_subject(user_id: str, subject_id: str) -> List[Dict[str, Any]]:
     rows = base.select_eq(TABLE, "subject_id", subject_id)
     return [r for r in rows if str(r.get("user_id")) == str(user_id)]

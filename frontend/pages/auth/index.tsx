@@ -1,9 +1,10 @@
-import { useState, FormEvent } from "react";
+import { useState, useEffect, FormEvent } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 import Link from "next/link";
 import { useAuth } from "@/lib/context/AuthContext";
 import { isStrongPassword } from "@/lib/auth";
+import { getDashboardPath } from "@/lib/utils/device";
 
 type Mode = "login" | "signup";
 
@@ -19,9 +20,14 @@ export default function AuthPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Redirect if already logged in
+  // Redirect if already logged in (side effect belongs in an effect, not render)
+  useEffect(() => {
+    if (!authLoading && isAuthenticated) {
+      router.replace(getDashboardPath());
+    }
+  }, [authLoading, isAuthenticated, router]);
+
   if (!authLoading && isAuthenticated) {
-    if (typeof window !== "undefined") router.replace("/dashboard");
     return null;
   }
 
@@ -49,7 +55,7 @@ export default function AuthPage() {
       } else {
         await signup(email, password, fullName || undefined);
       }
-      router.replace("/dashboard");
+      router.replace(getDashboardPath());
     } catch (err: unknown) {
       setError(
         err instanceof Error ? err.message : "Something went wrong. Try again."

@@ -1,5 +1,4 @@
 import React from 'react';
-import Link from 'next/link';
 import TopNav from './TopNav';
 import { ErrorBoundary } from '@/components/common';
 import { cn } from '@/lib/utils/cn';
@@ -32,22 +31,6 @@ const DesktopLayout: React.FC<DesktopLayoutProps> = ({
           <p className="text-sm text-on-surface/60">
             &copy; {new Date().getFullYear()} PrepIQ. All rights reserved.
           </p>
-          <nav aria-label="Footer navigation">
-            <ul className="flex items-center gap-4 md:gap-6 flex-wrap justify-center">
-              <li>
-                <Link href="/privacy" className="text-sm text-on-surface/60 hover:text-primary transition-colors">Privacy</Link>
-              </li>
-              <li>
-                <Link href="/terms" className="text-sm text-on-surface/60 hover:text-primary transition-colors">Terms</Link>
-              </li>
-              <li>
-                <Link href="/help" className="text-sm text-on-surface/60 hover:text-primary transition-colors">Help</Link>
-              </li>
-              <li>
-                <Link href="/contact" className="text-sm text-on-surface/60 hover:text-primary transition-colors">Contact</Link>
-              </li>
-            </ul>
-          </nav>
         </div>
       </footer>
     </div>
