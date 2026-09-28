@@ -215,12 +215,32 @@ _TABLES: List[Tuple[str, str, List[Dict[str, Any]]]] = [
 ]
 
 
+class TableListingAuthError(RuntimeError):
+    """PyroCore rejected PYRONITES_KEY for the table *management* API (401/403).
+
+    The key may still be perfectly valid for the data plane (row reads/writes),
+    so this is not automatically fatal — the caller falls back to verifying the
+    schema through the row API, which needs no management scope.
+    """
+
+
+def _key_fingerprint(key: str) -> str:
+    """Short non-reversible id of a key so two environments can be compared
+    from logs without ever printing the secret itself."""
+    import hashlib
+
+    return hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
 def _list_tables_http(project_id: str, url: str, key: str) -> List[str]:
     """Return the set of table names on the project.
 
     Raises RuntimeError when the listing cannot be obtained: a failed existence
     check used to be treated as "table exists", which is how a project with
     *zero* app tables booted "successfully" and 500'd on every request.
+    Raises TableListingAuthError on 401/403 so the caller can try a data-plane
+    verification instead of dying (a data-scoped key can read rows but cannot
+    list tables).
     """
     import httpx
 
@@ -235,6 +255,13 @@ def _list_tables_http(project_id: str, url: str, key: str) -> List[str]:
             f"Could not list tables for project {project_id}: {e}"
         ) from e
 
+    if resp.status_code in (401, 403):
+        raise TableListingAuthError(
+            f"PyroCore rejected PYRONITES_KEY for the table-management API "
+            f"(HTTP {resp.status_code}) on project {project_id} at {url} "
+            f"[key_fp={_key_fingerprint(key)}]. The key needs project-admin "
+            "scope to list/create tables; data-plane row access may still work."
+        )
     if resp.status_code == 429:
         raise RuntimeError(
             "PyroCore rate-limited the table listing (429) — cannot verify schema"
@@ -266,6 +293,48 @@ def _list_tables_http(project_id: str, url: str, key: str) -> List[str]:
     return names
 
 
+def _exists_via_data_plane(table_name: str) -> bool:
+    """Check one table through the row API, which needs only data-plane scope.
+
+    Used when the management listing endpoint rejects the key (401/403).
+    Returns True when a `SELECT ... LIMIT 1` reaches the table, False when
+    PyroCore reports it as missing. Any other outcome (auth failure on the row
+    API, outage) raises — an unverifiable schema must not be called "present".
+    """
+    try:
+        from app.core.pyronites_client import get_pyronites_client
+
+        get_pyronites_client().table(table_name).select().limit(1).execute()
+        return True
+    except Exception as e:
+        text = str(e)
+        lowered = text.lower()
+        if "table_not_found" in text or "table not found" in lowered:
+            logger.info("[migration] Data-plane probe: table '%s' is missing", table_name)
+            return False
+        if (
+            "401" in text
+            or "403" in text
+            or "unauthorized" in lowered
+            or "forbidden" in lowered
+            or "missing or invalid authentication" in lowered
+        ):
+            raise RuntimeError(
+                f"PyroCore rejected PYRONITES_KEY while probing table "
+                f"'{table_name}' — the key cannot reach the data plane either. "
+                "Fix PYRONITES_KEY in this environment."
+            ) from e
+        raise RuntimeError(
+            f"Could not verify table '{table_name}' through the data plane: "
+            f"{type(e).__name__}: {text[:200]}"
+        ) from e
+
+
+def _probe_tables_via_data_plane(table_names: List[str]) -> set:
+    """Return the subset of `table_names` that exist (data-plane probes)."""
+    return {name for name in table_names if _exists_via_data_plane(name)}
+
+
 def _create_table_http(
     project_id: str, table_name: str, primary_key: str, columns: List[Dict[str, Any]], url: str, key: str
 ) -> bool:
@@ -291,6 +360,13 @@ def _create_table_http(
             # Table already exists — not an error
             logger.debug("[migration] Table '%s' already exists (409)", table_name)
             return True
+        if resp.status_code in (401, 403):
+            logger.warning(
+                "[migration] Management API rejected PYRONITES_KEY (HTTP %s) "
+                "creating table '%s' [key_fp=%s] — the key needs project-admin scope.",
+                resp.status_code, table_name, _key_fingerprint(key),
+            )
+            return False
         logger.warning(
             "[migration] Failed to create table '%s': HTTP %s — %s",
             table_name, resp.status_code, resp.text[:200],
@@ -331,6 +407,11 @@ def run_startup_migration() -> None:
     cannot be created — the app must not serve traffic against a schema it
     cannot see. The guard flag is only latched on success so a transient
     PyroCore outage does not permanently mark the schema as verified.
+
+    When PyroCore rejects the key for the *management* listing (401/403) but
+    the row API still works, the schema is verified table-by-table through the
+    data plane instead; creation stays unavailable in that mode, so a missing
+    table remains fatal with an actionable message.
     """
     global _ran
     with _lock:
@@ -353,11 +434,32 @@ def run_startup_migration() -> None:
         len(_TABLES), project_id,
     )
 
-    existing = set(_list_tables_http(project_id, url, key))
+    management_denied = False
+    try:
+        existing = set(_list_tables_http(project_id, url, key))
+    except TableListingAuthError as e:
+        # A data-scoped key can read/write rows but may not be allowed to list
+        # or create tables. Verify the schema through the row API instead of
+        # refusing to boot — but a table that is genuinely missing below is
+        # still fatal, because we then have no way to provision it.
+        management_denied = True
+        logger.warning(
+            "[migration] %s Falling back to data-plane probes for the %d required tables.",
+            e, len(_TABLES),
+        )
+        existing = _probe_tables_via_data_plane([name for name, _, _ in _TABLES])
+
     missing = [t for t in _TABLES if t[0] not in existing]
 
     if not missing:
         logger.info("[migration] All %d tables present — no action needed", len(_TABLES))
+        if management_denied:
+            logger.warning(
+                "[migration] Schema verified through the data plane only: the key "
+                "lacks table-management scope, so auto-provisioning of missing "
+                "tables is disabled. Grant project-admin scope to PYRONITES_KEY "
+                "or keep tables in sync via the PyroCore dashboard."
+            )
         with _lock:
             _ran = True
         return
@@ -377,7 +479,10 @@ def run_startup_migration() -> None:
         (created if success else failed).append(table_name)
 
     # Verify against the data plane rather than trusting creation responses.
-    verified = set(_list_tables_http(project_id, url, key))
+    if management_denied:
+        verified = _probe_tables_via_data_plane([name for name, _, _ in missing])
+    else:
+        verified = set(_list_tables_http(project_id, url, key))
     still_missing = [name for name, _, _ in missing if name not in verified]
 
     if created:
@@ -388,10 +493,18 @@ def run_startup_migration() -> None:
         )
 
     if still_missing:
+        if management_denied:
+            hint = (
+                "PyroCore rejected PYRONITES_KEY for the table-management API "
+                "(401/403), so these tables could not be created from here — "
+                "grant the key project-admin scope or create them in the "
+                "PyroCore dashboard."
+            )
+        else:
+            hint = "Create them via the PyroCore dashboard or fix Pyronites permissions."
         raise RuntimeError(
             "Required tables missing on PyroCore project "
-            f"{project_id}: {', '.join(still_missing)}. "
-            "Create them via the PyroCore dashboard or fix Pyronites permissions."
+            f"{project_id}: {', '.join(still_missing)}. {hint}"
         )
 
     logger.info("[migration] Verified %d tables present", len(verified))
