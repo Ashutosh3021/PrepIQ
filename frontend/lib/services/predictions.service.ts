@@ -53,13 +53,13 @@ export const predictionsService = {
    * Note: GET /predictions/{id} is a DIFFERENT route — it fetches a single
    * stored prediction by prediction id and 404s for subject ids.
    */
-  getBySubject: (subjectId: number) =>
+  getBySubject: (subjectId: string) =>
     apiFetch<PredictionResponse>(`/predictions/subject/${subjectId}`, EMPTY_RESPONSE),
 
   /**
    * Refresh predictions for the subject (same route — regeneration is
    * server-side; there is no separate POST /refresh route on the backend).
    */
-  refresh: (subjectId: number) =>
+  refresh: (subjectId: string) =>
     apiFetch<PredictionResponse>(`/predictions/subject/${subjectId}`, EMPTY_RESPONSE),
 };

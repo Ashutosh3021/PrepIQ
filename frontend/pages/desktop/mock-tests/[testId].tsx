@@ -41,13 +41,13 @@ function ScoreDisplay({ pct }: { pct: number | null }) {
 
 export default function MockTestPage() {
   const router = useRouter();
-  const testId = router.query.testId ? Number(router.query.testId) : null;
+  const testId = router.query.testId ? String(router.query.testId) : null;
 
   const { test, isLoading } = useMockTest(testId);
   const { submit } = useMockTests();
 
   // Per-question answers: questionId → answer text
-  const [answers, setAnswers] = useState<Record<number, string>>({});
+  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [currentIndex, setCurrentIndex] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -194,7 +194,7 @@ export default function MockTestPage() {
     setSubmitError('');
     try {
       const payload: Answer[] = Object.entries(answers).map(([qId, text]) => ({
-        question_id: Number(qId),
+        question_id: qId,
         answer_text: text,
       }));
       const res = await submit(test.test_id, payload);

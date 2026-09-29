@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Any, Literal, Union
 from datetime import datetime
 from uuid import UUID
 import uuid as uuid_module
@@ -431,7 +431,9 @@ class MockTestListItem(BaseModel):
 
 
 class TestSubmission(BaseModel):
-    answers: List[Dict[str, str]]
+    # Accepts both shapes the handlers normalise: {question_id: answer} map
+    # (sent by both frontend services) or a list of {question_id, answer} dicts.
+    answers: Union[Dict[str, Any], List[Dict[str, Any]]]
 
 
 class TestSubmissionResponse(BaseModel):

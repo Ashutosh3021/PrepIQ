@@ -33,7 +33,7 @@ export function useMockTests() {
   };
 
   const submit = async (
-    testId: number,
+    testId: string,
     answers: Answer[]
   ): Promise<TestSubmitResponse> => {
     const result = await mockTestsService.submit(testId, answers);
@@ -52,7 +52,7 @@ export function useMockTests() {
 }
 
 /** Hook for a single test with its questions. */
-export function useMockTest(testId: number | null) {
+export function useMockTest(testId: string | null) {
   const { data, error, isLoading } = useSWR<MockTestResponse>(
     testId != null ? `mock-tests/${testId}` : null,
     () => mockTestsService.getById(testId!)

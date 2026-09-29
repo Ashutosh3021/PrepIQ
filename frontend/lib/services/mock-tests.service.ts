@@ -11,17 +11,17 @@ import { apiFetch } from './base.service';
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type Difficulty = 'easy' | 'medium' | 'hard' | 'mixed';
-export type TestSource = 'predictions' | 'all';
+export type TestSource = 'predictions' | 'all_questions';
 
 export interface MockTestCreate {
-  subject_id: number;
+  subject_id: string;
   num_questions: number;
   difficulty: Difficulty;
   source: TestSource;
 }
 
 export interface MockTestQuestion {
-  id: number;
+  id: string;
   question_text: string;
   topic: string;
   marks: number;
@@ -29,11 +29,11 @@ export interface MockTestQuestion {
 }
 
 export interface MockTest {
-  test_id: number;
-  subject_id: number;
-  subject_name: string;
+  test_id: string;
+  subject_id: string;
+  subject_name?: string;
   total_questions: number;
-  difficulty: Difficulty;
+  difficulty?: Difficulty;
   status: 'pending' | 'completed';
   score_percentage: number | null;
   created_at: string;
@@ -41,25 +41,27 @@ export interface MockTest {
 
 export interface MockTestResponse extends MockTest {
   questions: MockTestQuestion[];
+  error?: string;
+  message?: string;
 }
 
 export interface Answer {
-  question_id: number;
+  question_id: string;
   answer_text: string;
 }
 
 export interface TestSubmitResponse {
-  test_id: number;
+  test_id: string;
   score_percentage: number | null;
-  message: string;
-  answers_recorded: number;
+  total_questions: number;
+  answers_graded: number;
 }
 
 // ── Mock fallbacks ────────────────────────────────────────────────────────────
 
 const EMPTY_TEST: MockTestResponse = {
-  test_id: 0,
-  subject_id: 0,
+  test_id: '',
+  subject_id: '',
   subject_name: '',
   total_questions: 0,
   difficulty: 'mixed',
@@ -98,24 +100,23 @@ export const mockTestsService = {
    * GET /tests/{testId}
    * Returns a single mock test with its questions.
    */
-  getById: (testId: number) =>
+  getById: (testId: string) =>
     apiFetch<MockTestResponse>(`/tests/${testId}`, EMPTY_TEST),
 
   /**
    * POST /tests/{testId}/submit
    * Submit answers and get the result back.
    */
-  submit: (testId: number, answers: Answer[]) =>
+  submit: (testId: string, answers: Answer[]) =>
     apiFetch<TestSubmitResponse>(
       `/tests/${testId}/submit`,
-      { test_id: testId, score_percentage: null, message: '', answers_recorded: 0 },
+      { test_id: testId, score_percentage: null, total_questions: 0, answers_graded: 0 },
       {
         method: 'POST',
         body: JSON.stringify({
           answers: Object.fromEntries(
             answers.map((a) => [String(a.question_id), a.answer_text])
           ),
-          end_time: new Date().toISOString(),
         }),
       }
     ),

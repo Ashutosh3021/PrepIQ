@@ -49,7 +49,7 @@ export default function DesktopMockTests() {
   const { tests, isLoading: testsLoading, generate } = useMockTests();
 
   // Form state
-  const [subjectId, setSubjectId] = useState<number | ''>('');
+  const [subjectId, setSubjectId] = useState<string | ''>('');
   const [numQuestions, setNumQuestions] = useState(10);
   const [difficulty, setDifficulty] = useState<Difficulty>('mixed');
   const [source, setSource] = useState<TestSource>('predictions');
@@ -76,15 +76,19 @@ export default function DesktopMockTests() {
     setGenerateError('');
     try {
       const payload: MockTestCreate = {
-        subject_id: Number(subjectId),
+        subject_id: subjectId,
         num_questions: numQuestions,
         difficulty,
         source,
       };
       const test = await generate(payload);
-      if (test.test_id) {
-        router.push(`/desktop/mock-tests/${test.test_id}`);
+      if (!test.test_id || test.test_id === 'none') {
+        setGenerateError(
+          test.message || test.error || 'No questions available for this subject yet.'
+        );
+        return;
       }
+      router.push(`/desktop/mock-tests/${test.test_id}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setGenerateError(msg);
@@ -141,9 +145,7 @@ export default function DesktopMockTests() {
                       id="mt-subject"
                       className="w-full bg-surface-container-low border-b-2 border-primary/20 focus:border-primary appearance-none py-3 px-4 text-on-surface text-sm font-medium focus:ring-0 cursor-pointer"
                       value={subjectId}
-                      onChange={(e) =>
-                        setSubjectId(e.target.value ? Number(e.target.value) : '')
-                      }
+                      onChange={(e) => setSubjectId(e.target.value)}
                     >
                       <option value="">Select a subject…</option>
                       {subjects.map((s) => (
@@ -234,8 +236,8 @@ export default function DesktopMockTests() {
                 <div className="flex gap-2">
                   {(
                     [
-                      { value: 'predictions' as TestSource, label: 'From Predictions' },
-                      { value: 'all' as TestSource, label: 'All Questions' },
+              { value: 'predictions' as TestSource, label: 'From Predictions' },
+              { value: 'all_questions' as TestSource, label: 'All Questions' },
                     ] as const
                   ).map(({ value, label }) => (
                     <button

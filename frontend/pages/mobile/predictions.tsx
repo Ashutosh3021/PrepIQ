@@ -94,7 +94,7 @@ function PredictionCard({ prediction }: { prediction: Prediction }) {
 
 export default function MobilePredictions() {
   const { subjects, isLoading: subjectsLoading } = useSubjects();
-  const [selectedSubjectId, setSelectedSubjectId] = useState<number | null>(null);
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState('');
 
@@ -155,15 +155,7 @@ export default function MobilePredictions() {
                 className="w-full bg-surface-container-low border-b-2 border-primary/20 focus:border-primary appearance-none py-3 px-4 text-on-surface text-sm font-medium cursor-pointer"
                 value={selectedSubjectId ?? ''}
                 onChange={(e) => {
-                  const val = e.target.value;
-                  if (!val || val === '') {
-                    setSelectedSubjectId(null);
-                    return;
-                  }
-                  const parsed = parseInt(val, 10);
-                  if (!isNaN(parsed)) {
-                    setSelectedSubjectId(parsed);
-                  }
+                  setSelectedSubjectId(e.target.value || null);
                 }}
               >
                 <option value="">Select a subject…</option>

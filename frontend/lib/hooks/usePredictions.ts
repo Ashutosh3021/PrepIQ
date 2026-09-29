@@ -2,19 +2,17 @@ import useSWR, { mutate as globalMutate } from 'swr';
 import { useAuth } from '../context/AuthContext';
 import { predictionsService, PredictionResponse } from '../services/predictions.service';
 
-function cacheKey(userId: string, subjectId: number) {
+function cacheKey(userId: string, subjectId: string) {
   return `predictions/${subjectId}/${userId}`;
 }
 
-export function usePredictions(subjectId: number | null) {
+export function usePredictions(subjectId: string | null) {
   const { user } = useAuth();
-  // Guard: only enable the fetch when subjectId is a valid, non-NaN number
-  const validSubjectId =
-    subjectId !== null && subjectId !== undefined && !isNaN(subjectId)
-      ? subjectId
-      : null;
+  // Guard: only enable the fetch when subjectId is a non-empty string (UUID).
+  // Never coerce ids with parseInt — UUIDs would be truncated to leading digits.
+  const validSubjectId = subjectId ? subjectId : null;
   const key =
-    user?.id && validSubjectId != null ? cacheKey(user.id, validSubjectId) : null;
+    user?.id && validSubjectId ? cacheKey(user.id, validSubjectId) : null;
 
   const { data, error, isLoading, mutate } = useSWR<PredictionResponse>(
     key,
