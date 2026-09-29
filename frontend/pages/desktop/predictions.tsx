@@ -87,7 +87,7 @@ function PredictionCard({ prediction }: { prediction: Prediction }) {
 
       {/* Question text */}
       <p className="text-on-surface font-medium leading-relaxed text-sm">
-        {prediction.question_text}
+        {prediction.text}
       </p>
 
       {/* Confidence bar */}
@@ -139,7 +139,7 @@ export default function DesktopPredictions() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState('');
 
-  const { data, isLoading: predictionsLoading, refresh } = usePredictions(selectedSubjectId);
+  const { data, isLoading: predictionsLoading, error, refresh } = usePredictions(selectedSubjectId);
 
   // Configuration guard
   if (!API_URL) {
@@ -174,6 +174,8 @@ export default function DesktopPredictions() {
   const fallbackReason = data?.fallback_reason ?? null;
 
   const isLoading = subjectsLoading || (selectedSubjectId != null && predictionsLoading);
+  // Initial-load failure with no data to show (e.g. 404 subject/prediction missing).
+  const fetchError = error && !data ? error.message : '';
 
   return (
     <>
@@ -304,6 +306,20 @@ export default function DesktopPredictions() {
           </div>
         )}
 
+        {/* Fetch error (initial load failed) */}
+        {fetchError && (
+          <div className="mb-6 px-4 py-3 text-sm border-l-2 border-error bg-error/5 text-error flex items-center justify-between gap-3">
+            <span>Failed to load predictions: {fetchError}</span>
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="text-xs font-bold uppercase tracking-widest underline shrink-0 disabled:opacity-40"
+            >
+              {refreshing ? 'Retrying…' : 'Retry'}
+            </button>
+          </div>
+        )}
+
         {/* No subject selected */}
         {!selectedSubjectId && !subjectsLoading && (
           <div className="text-center py-24 text-on-surface/50">
@@ -337,7 +353,7 @@ export default function DesktopPredictions() {
         )}
 
         {/* Content */}
-        {!isLoading && selectedSubjectId != null && (
+        {!isLoading && !fetchError && selectedSubjectId != null && (
           <>
             {/* Fallback banner */}
             {fallbackUsed && fallbackReason === 'no_papers' && (
@@ -461,8 +477,8 @@ export default function DesktopPredictions() {
                     <span className="text-xs text-on-surface/50 italic">{data.message}</span>
                   )}
                 </div>
-                {predictions.map((p) => (
-                  <PredictionCard key={p.id} prediction={p} />
+                {predictions.map((p, idx) => (
+                  <PredictionCard key={`${idx}-${p.question_number}`} prediction={p} />
                 ))}
               </div>
             )}

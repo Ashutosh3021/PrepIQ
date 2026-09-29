@@ -7,19 +7,29 @@ import { apiFetch } from './base.service';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+/** Mirrors backend schemas.PredictedQuestionFull. */
 export interface Prediction {
-  id: number;
-  question_text: string;
-  topic: string;
-  confidence_score: number; // 0.0 – 1.0
+  question_number: number;
+  text: string;
+  topic: string | null;
+  unit: string | null;
+  marks: number;
+  probability: string;
+  confidence_score: number;
   reasoning: string;
-  source: 'ml' | 'ml_fallback' | 'syllabus_fallback';
+  source: string | null;
 }
 
+/** Mirrors backend schemas.SubjectPredictionResponse. */
 export interface PredictionResponse {
+  id?: string | null;
+  subject_id?: string;
   predictions: Prediction[];
+  total_marks?: number;
+  coverage_percentage?: number;
   fallback_used: boolean;
-  fallback_reason: 'no_papers' | 'syllabus_fallback' | null;
+  fallback_reason: string | null;
+  warning?: string | null;
   message: string | null;
 }
 
@@ -36,20 +46,20 @@ const EMPTY_RESPONSE: PredictionResponse = {
 
 export const predictionsService = {
   /**
-   * GET /predictions/{subjectId}
-   * Returns current predictions for the subject (uses cache on backend).
+   * GET /predictions/subject/{subjectId}
+   * Returns predictions for the subject. The backend regenerates them
+   * server-side on every call, so this is always fresh.
+   *
+   * Note: GET /predictions/{id} is a DIFFERENT route — it fetches a single
+   * stored prediction by prediction id and 404s for subject ids.
    */
   getBySubject: (subjectId: number) =>
-    apiFetch<PredictionResponse>(`/predictions/${subjectId}`, EMPTY_RESPONSE),
+    apiFetch<PredictionResponse>(`/predictions/subject/${subjectId}`, EMPTY_RESPONSE),
 
   /**
-   * POST /predictions/{subjectId}/refresh
-   * Forces re-generation of predictions and returns the fresh result.
+   * Refresh predictions for the subject (same route — regeneration is
+   * server-side; there is no separate POST /refresh route on the backend).
    */
   refresh: (subjectId: number) =>
-    apiFetch<PredictionResponse>(
-      `/predictions/${subjectId}/refresh`,
-      EMPTY_RESPONSE,
-      { method: 'POST' }
-    ),
+    apiFetch<PredictionResponse>(`/predictions/subject/${subjectId}`, EMPTY_RESPONSE),
 };

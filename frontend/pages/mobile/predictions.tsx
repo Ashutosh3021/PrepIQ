@@ -57,7 +57,7 @@ function PredictionCard({ prediction }: { prediction: Prediction }) {
         </span>
       </div>
       <p className="text-sm text-on-surface font-medium leading-relaxed">
-        {prediction.question_text}
+        {prediction.text}
       </p>
       <ConfidenceBar score={prediction.confidence_score} />
       <div>
@@ -96,8 +96,9 @@ export default function MobilePredictions() {
   const { subjects, isLoading: subjectsLoading } = useSubjects();
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState('');
 
-  const { data, isLoading: predictionsLoading, refresh } = usePredictions(selectedSubjectId);
+  const { data, isLoading: predictionsLoading, error, refresh } = usePredictions(selectedSubjectId);
 
   if (!API_URL) {
     return (
@@ -115,11 +116,20 @@ export default function MobilePredictions() {
   const fallbackUsed = data?.fallback_used ?? false;
   const fallbackReason = data?.fallback_reason ?? null;
   const isLoading = subjectsLoading || (selectedSubjectId != null && predictionsLoading);
+  // Initial-load failure with no data to show (e.g. 404 subject/prediction missing).
+  const fetchError = error && !data ? error.message : '';
 
   const handleRefresh = async () => {
     if (!selectedSubjectId) return;
     setRefreshing(true);
-    try { await refresh(); } finally { setRefreshing(false); }
+    setRefreshError('');
+    try {
+      await refresh();
+    } catch (err) {
+      setRefreshError(err instanceof Error ? err.message : 'Failed to refresh predictions.');
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   return (
@@ -189,6 +199,27 @@ export default function MobilePredictions() {
             </button>
           )}
 
+          {/* Refresh error */}
+          {refreshError && (
+            <div className="px-4 py-3 text-xs border-l-2 border-error bg-error/5 text-error">
+              {refreshError}
+            </div>
+          )}
+
+          {/* Fetch error (initial load failed) */}
+          {fetchError && (
+            <div className="px-4 py-3 text-xs border-l-2 border-error bg-error/5 text-error flex items-center justify-between gap-3">
+              <span>Failed to load predictions: {fetchError}</span>
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="font-bold uppercase tracking-widest underline shrink-0 disabled:opacity-40"
+              >
+                {refreshing ? 'Retrying…' : 'Retry'}
+              </button>
+            </div>
+          )}
+
           {/* Fallback banners */}
           {fallbackUsed && fallbackReason === 'no_papers' && (
             <div className="flex items-start gap-2 px-4 py-3 bg-amber-50 border border-amber-300 text-amber-800 text-xs">
@@ -230,10 +261,10 @@ export default function MobilePredictions() {
           )}
 
           {/* Predictions list */}
-          {!isLoading && predictions.length > 0 && (
+          {!isLoading && !fetchError && predictions.length > 0 && (
             <div className="space-y-4">
-              {predictions.map((p) => (
-                <PredictionCard key={p.id} prediction={p} />
+              {predictions.map((p, idx) => (
+                <PredictionCard key={`${idx}-${p.question_number}`} prediction={p} />
               ))}
             </div>
           )}
