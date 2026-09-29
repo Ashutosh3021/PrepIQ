@@ -212,6 +212,92 @@ _TABLES: List[Tuple[str, str, List[Dict[str, Any]]]] = [
             {"name": "updated_at", "type": "TEXT"},
         ],
     ),
+    # ── Phase 0 (implementation-plan.md) ─────────────────────────────────────
+    # Question families: the generative template behind question variants.
+    # All engines (prediction scoring, rubrics, S/T/C, mastery) key off these.
+    (
+        "question_families",
+        "id",
+        [
+            {"name": "id", "type": "TEXT"},
+            {"name": "scope", "type": "TEXT"},
+            {"name": "user_id", "type": "TEXT"},
+            {"name": "subject_id", "type": "TEXT"},
+            {"name": "branch", "type": "TEXT"},
+            {"name": "canonical_text", "type": "TEXT"},
+            {"name": "normalized_hash", "type": "TEXT"},
+            {"name": "topic", "type": "TEXT"},
+            {"name": "bloom_level", "type": "TEXT"},
+            {"name": "command_verb", "type": "TEXT"},
+            {"name": "marks_typical", "type": "INTEGER"},
+            {"name": "difficulty", "type": "TEXT"},
+            {"name": "solvability", "type": "REAL"},
+            {"name": "transfer", "type": "REAL"},
+            {"name": "study_cost", "type": "REAL"},
+            {"name": "stc_cached_at", "type": "TEXT"},
+            {"name": "seed_source", "type": "TEXT"},
+            {"name": "created_at", "type": "TEXT"},
+        ],
+    ),
+    # Free-tier LLM response cache: capability + prompt_hash -> response.
+    # Every family assignment / rubric generation goes through this first.
+    (
+        "llm_cache",
+        "id",
+        [
+            {"name": "id", "type": "TEXT"},
+            {"name": "capability", "type": "TEXT"},
+            {"name": "prompt_hash", "type": "TEXT"},
+            {"name": "response_json", "type": "JSON"},
+            {"name": "created_at", "type": "TEXT"},
+        ],
+    ),
+    # Background job queue (family assignment, rubric backfill, exam scoring).
+    # Worker pattern mirrors services/exam_context_job.py.
+    (
+        "jobs",
+        "id",
+        [
+            {"name": "id", "type": "TEXT"},
+            {"name": "kind", "type": "TEXT"},
+            {"name": "payload_json", "type": "JSON"},
+            {"name": "status", "type": "TEXT"},
+            {"name": "attempts", "type": "INTEGER"},
+            {"name": "last_error", "type": "TEXT"},
+            {"name": "created_at", "type": "TEXT"},
+            {"name": "updated_at", "type": "TEXT"},
+        ],
+    ),
+    # Gradeability artifacts per question: MCQ options/distractors or
+    # descriptive model answer + rubric bullets + keyword anchors.
+    # One cached LLM call per question, ever (needs_review -> Phase 4 audit).
+    (
+        "question_rubrics",
+        "id",
+        [
+            {"name": "id", "type": "TEXT"},
+            {"name": "question_id", "type": "TEXT"},
+            {"name": "family_id", "type": "TEXT"},
+            {"name": "mode", "type": "TEXT"},
+            {"name": "model_answer", "type": "TEXT"},
+            {"name": "rubric_json", "type": "JSON"},
+            {"name": "keywords_json", "type": "JSON"},
+            {"name": "options_json", "type": "JSON"},
+            {"name": "needs_review", "type": "BOOLEAN"},
+            {"name": "generated_at", "type": "TEXT"},
+            {"name": "created_at", "type": "TEXT"},
+        ],
+    ),
+]
+
+# Columns that must exist on *pre-existing* tables (PyroCore has no ALTER flow
+# in the management API; verified writable via the SQL endpoint in Step 0.1).
+# Each entry: (table_name, column_name, column_type).
+_COLUMNS: List[Tuple[str, str, str]] = [
+    ("questions", "family_id", "TEXT"),
+    ("subjects", "blueprint_json", "JSON"),
+    ("mock_tests", "grading_mode", "TEXT"),
+    ("mock_tests", "self_grade_json", "JSON"),
 ]
 
 
@@ -393,8 +479,83 @@ def _create_table_via_sdk(table_name: str, columns: List[Dict[str, Any]]) -> boo
             logger.info("[migration] SDK schema created table '%s'", table_name)
             return True
     except Exception as e:
-        logger.debug("[migration] SDK table creation not available: %s", e)
+        logger.debug("SDK table creation not available: %s", e)
     return False
+
+
+def _table_column_names(table_name: str) -> set:
+    """Column names of one table via the data-plane schema endpoint."""
+    from app.core.pyronites_client import get_pyronites_client
+
+    schema = get_pyronites_client().table(table_name).schema()
+    names = set()
+    for col in schema if isinstance(schema, list) else []:
+        if isinstance(col, dict):
+            name = col.get("name") or col.get("column")
+            if name:
+                names.add(str(name))
+        elif col:
+            names.add(str(col))
+    return names
+
+
+def _ensure_columns() -> None:
+    """Add any missing columns from _COLUMNS to pre-existing tables.
+
+    Uses the PyroCore SQL endpoint (verified writable in Step 0.1 of
+    implementation-plan.md). Idempotent: existing columns are skipped after a
+    schema probe. Fatal on failure — the app must not serve traffic against a
+    schema it cannot see — and the error message carries the exact SQL the
+    operator can run in the PyroCore dashboard's SQL console as a fallback.
+    """
+    from app.core.pyronites_client import get_pyronites_client
+
+    client = get_pyronites_client()
+
+    by_table: Dict[str, List[Tuple[str, str]]] = {}
+    for table_name, column_name, column_type in _COLUMNS:
+        by_table.setdefault(table_name, []).append((column_name, column_type))
+
+    added = 0
+    for table_name, specs in by_table.items():
+        try:
+            present = _table_column_names(table_name)
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not verify columns for table '{table_name}' on PyroCore: {e}"
+            ) from e
+
+        for column_name, column_type in specs:
+            if column_name in present:
+                continue
+            stmt = f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+            try:
+                client.sql(stmt)
+            except Exception as e:
+                raise RuntimeError(
+                    f"PyroCore rejected SQL while adding column "
+                    f"'{table_name}.{column_name}': {type(e).__name__}: {e}. "
+                    f"Run manually in the PyroCore dashboard SQL console: {stmt}"
+                ) from e
+            try:
+                after = _table_column_names(table_name)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Column '{table_name}.{column_name}' was added but could not "
+                    f"be re-verified: {e}"
+                ) from e
+            if column_name not in after:
+                raise RuntimeError(
+                    f"Column '{table_name}.{column_name}' is still missing after "
+                    f"ALTER. Run manually in the PyroCore dashboard SQL console: {stmt}"
+                )
+            added += 1
+            logger.info("[migration] Added column %s.%s", table_name, column_name)
+
+    logger.info(
+        "[migration] Columns verified (%d present, %d added)",
+        len(_COLUMNS), added,
+    )
 
 
 def run_startup_migration() -> None:
@@ -460,6 +621,7 @@ def run_startup_migration() -> None:
                 "tables is disabled. Grant project-admin scope to PYRONITES_KEY "
                 "or keep tables in sync via the PyroCore dashboard."
             )
+        _ensure_columns()
         with _lock:
             _ran = True
         return
@@ -508,5 +670,6 @@ def run_startup_migration() -> None:
         )
 
     logger.info("[migration] Verified %d tables present", len(verified))
+    _ensure_columns()
     with _lock:
         _ran = True

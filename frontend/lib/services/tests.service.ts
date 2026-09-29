@@ -36,14 +36,19 @@ export interface BackendTestResult {
 export interface BackendTestResults {
   test_id: string;
   score: number;
-  percentage: number;
+  /** null while descriptive answers await self-check (hybrid grading) */
+  percentage: number | null;
+  grading_mode?: string | null; // auto | pending_self_grade | self_verified | none
   question_analysis: {
     question_id: string;
     marks: number;
+    /** correct | incorrect | skipped | pending_self_grade | verified */
     status: string;
     user_answer: string;
     correct_answer: string;
     explanation: string;
+    /** self-verified awarded points (null for auto/skipped items) */
+    points?: number | null;
   }[];
   weak_topics: string[];
   strong_topics: string[];

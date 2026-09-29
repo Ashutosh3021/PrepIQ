@@ -208,6 +208,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("[exam-context] failed to start background thread: %s", e)
 
+    # Background job worker (family assignment / rubric backfill) — drains the
+    # jobs table. See services/job_queue.py (implementation-plan.md 0.5).
+    _job_worker_started = False
+    try:
+        from app.services.job_queue import start_job_worker_thread, stop_job_worker_thread
+
+        start_job_worker_thread(logger_=logger)
+        _job_worker_started = True
+        logger.info("[jobs] worker thread started (poll=%ss)", os.getenv("JOB_POLL_SECONDS", "15"))
+    except Exception as e:
+        logger.warning("[jobs] failed to start worker thread: %s", e)
+
     yield
 
     if _keep_alive_thread is not None:
@@ -215,6 +227,11 @@ async def lifespan(app: FastAPI):
     if _exam_context_thread is not None:
         try:
             stop_exam_context_thread()
+        except Exception:
+            pass
+    if _job_worker_started:
+        try:
+            stop_job_worker_thread()
         except Exception:
             pass
     logger.info("[INFO] Shutting down PrepIQ Backend Application")

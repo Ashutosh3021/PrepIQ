@@ -1,11 +1,19 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { DesktopLayout } from '@/components/desktop';
 import { Skeleton } from '@/components/common';
 import { useSubjects } from '@/lib/hooks/useSubjects';
 import { useMockTests } from '@/lib/hooks/useMockTests';
-import type { Difficulty, TestSource, MockTestCreate } from '@/lib/services/mock-tests.service';
+import { mockTestsService } from '@/lib/services/mock-tests.service';
+import type {
+  Difficulty,
+  TestSource,
+  MockTestCreate,
+  BlueprintPreset,
+  BlueprintSectionSpec,
+  BlueprintView,
+} from '@/lib/services/mock-tests.service';
 import { cn } from '@/lib/utils/cn';
 
 // ── Config check ──────────────────────────────────────────────────────────────
@@ -41,6 +49,389 @@ function StatusBadge({ status }: { status: 'pending' | 'completed' }) {
   );
 }
 
+const BLOOM_OPTIONS = ['recall', 'understand', 'apply', 'analyze'] as const;
+const MAX_SECTIONS = 4;
+
+// ── Blueprint section editor row ──────────────────────────────────────────────
+
+function BlueprintSectionEditor({
+  section,
+  index,
+  onChange,
+  onRemove,
+  canRemove,
+}: {
+  section: BlueprintSectionSpec;
+  index: number;
+  onChange: (next: BlueprintSectionSpec) => void;
+  onRemove: () => void;
+  canRemove: boolean;
+}) {
+  const bloom = section.bloom ?? [];
+  const toggleBloom = (level: string) => {
+    const has = bloom.includes(level as (typeof BLOOM_OPTIONS)[number]);
+    onChange({
+      ...section,
+      bloom: has ? bloom.filter((b) => b !== level) : [...bloom, level as (typeof BLOOM_OPTIONS)[number]],
+    });
+  };
+
+  const numCls =
+    'w-full bg-surface border border-outline-variant/30 focus:border-primary focus:ring-0 px-3 py-2 text-sm text-on-surface';
+
+  return (
+    <div className="border border-outline-variant/20 p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-primary shrink-0">
+          Section {index + 1}
+        </span>
+        <input
+          type="text"
+          value={section.name ?? ''}
+          onChange={(e) => onChange({ ...section, name: e.target.value })}
+          placeholder="Section name"
+          aria-label={`Section ${index + 1} name`}
+          className="flex-1 min-w-0 bg-surface border border-outline-variant/30 focus:border-primary focus:ring-0 px-3 py-1.5 text-sm text-on-surface"
+        />
+        {canRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            aria-label={`Remove section ${index + 1}`}
+            className="text-on-surface/40 hover:text-error text-lg leading-none px-1"
+          >
+            ×
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface/50">
+            Questions
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={30}
+            value={section.count}
+            onChange={(e) => onChange({ ...section, count: Number(e.target.value) })}
+            className={numCls}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface/50">
+            Marks each
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={section.marks}
+            onChange={(e) => onChange({ ...section, marks: Number(e.target.value) })}
+            className={numCls}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface/50">
+            Choice (opt.)
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={section.count}
+            value={section.attempt ?? ''}
+            placeholder="all"
+            onChange={(e) =>
+              onChange({
+                ...section,
+                attempt: e.target.value === '' ? null : Number(e.target.value),
+              })
+            }
+            className={numCls}
+          />
+        </label>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface/50">
+            Difficulty
+          </span>
+          <select
+            value={section.difficulty}
+            onChange={(e) => onChange({ ...section, difficulty: e.target.value as Difficulty })}
+            className="w-full bg-surface border border-outline-variant/30 focus:border-primary focus:ring-0 px-3 py-2 text-sm text-on-surface cursor-pointer"
+          >
+            {(['easy', 'medium', 'hard', 'mixed'] as Difficulty[]).map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface/50">
+            Question type
+          </span>
+          <select
+            value={section.qtype}
+            onChange={(e) =>
+              onChange({ ...section, qtype: e.target.value as BlueprintSectionSpec['qtype'] })
+            }
+            className="w-full bg-surface border border-outline-variant/30 focus:border-primary focus:ring-0 px-3 py-2 text-sm text-on-surface cursor-pointer"
+          >
+            <option value="any">any</option>
+            <option value="mcq">mcq</option>
+            <option value="descriptive">descriptive</option>
+          </select>
+        </label>
+      </div>
+
+      {/* Cognitive (Bloom) mix */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface/50 mr-1">
+          Cognitive mix
+        </span>
+        {BLOOM_OPTIONS.map((level) => (
+          <button
+            key={level}
+            type="button"
+            onClick={() => toggleBloom(level)}
+            aria-pressed={bloom.includes(level)}
+            className={cn(
+              'px-2 py-1 text-[10px] font-bold uppercase tracking-wider border transition-colors',
+              bloom.includes(level)
+                ? 'bg-primary text-on-primary border-primary'
+                : 'border-outline-variant/30 text-on-surface/50 hover:border-primary/40'
+            )}
+          >
+            {level}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Blueprint drawer ──────────────────────────────────────────────────────────
+
+function BlueprintDrawer({
+  subjectId,
+  presets,
+  view,
+  loading,
+  error,
+  onSavePreset,
+  onSaveSections,
+  saving,
+}: {
+  subjectId: string;
+  presets: BlueprintPreset[];
+  view: BlueprintView | null;
+  loading: boolean;
+  error: string;
+  saving: boolean;
+  onSavePreset: (presetId: string) => void;
+  onSaveSections: (duration: number, sections: BlueprintSectionSpec[]) => void;
+}) {
+  const [sections, setSections] = useState<BlueprintSectionSpec[] | null>(null);
+  const [duration, setDuration] = useState<number>(60);
+  const [localError, setLocalError] = useState('');
+
+  // Re-sync local edits whenever the server view changes (load or after save).
+  useEffect(() => {
+    const bp = view?.blueprint;
+    if (!bp || !Array.isArray(bp.sections) || bp.sections.length === 0) return;
+    setSections(bp.sections.map((s) => ({ ...s, bloom: s.bloom ?? [] })));
+    setDuration(bp.duration_minutes ?? 60);
+    setLocalError('');
+  }, [view]);
+
+  const effective = sections ?? view?.blueprint?.sections ?? [];
+  const totalQ = effective.reduce((sum, s) => sum + (Number(s.count) || 0), 0);
+  const totalM = effective.reduce(
+    (sum, s) => sum + (Number(s.count) || 0) * (Number(s.marks) || 0),
+    0
+  );
+
+  const updateSection = (i: number, next: BlueprintSectionSpec) => {
+    setSections((prev) => {
+      const base = prev ?? (view?.blueprint?.sections ?? []).map((s) => ({ ...s }));
+      return base.map((s, idx) => (idx === i ? next : s));
+    });
+  };
+
+  const removeSection = (i: number) => {
+    setSections((prev) => {
+      const base = prev ?? (view?.blueprint?.sections ?? []).map((s) => ({ ...s }));
+      return base.filter((_, idx) => idx !== i);
+    });
+  };
+
+  const addSection = () => {
+    setSections((prev) => {
+      const base = prev ?? (view?.blueprint?.sections ?? []).map((s) => ({ ...s }));
+      if (base.length >= MAX_SECTIONS) return base;
+      return [
+        ...base,
+        {
+          name: `Section ${String.fromCharCode(65 + base.length)}`,
+          count: 2,
+          marks: 5,
+          attempt: null,
+          difficulty: 'mixed' as Difficulty,
+          qtype: 'any' as const,
+          bloom: [],
+        },
+      ];
+    });
+  };
+
+  const handleSave = () => {
+    setLocalError('');
+    if (!sections || sections.length === 0) {
+      setLocalError('Add at least one section.');
+      return;
+    }
+    if (totalQ > 30) {
+      setLocalError(`Total questions ${totalQ} exceeds the cap of 30.`);
+      return;
+    }
+    if (totalQ < 1) {
+      setLocalError('Blueprint needs at least 1 question.');
+      return;
+    }
+    onSaveSections(duration, sections);
+  };
+
+  const presetId = view?.preset ?? '';
+  const source = view?.source ?? 'generic';
+
+  if (!subjectId) return null;
+
+  return (
+    <div className="border border-primary/20 bg-surface-container-low p-4 space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-primary">
+            Exam blueprint
+          </p>
+          <p className="text-xs text-on-surface/60 mt-1">
+            Sections, marks and duration the generated test follows.
+          </p>
+        </div>
+        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-primary/10 text-primary shrink-0">
+          {source === 'subject' ? 'custom' : presetId || 'generic'}
+        </span>
+      </div>
+
+      {loading && !view ? <Skeleton className="h-24" /> : null}
+
+      {/* Preset picker */}
+      {presets.length > 0 && (
+        <div className="space-y-2">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface/50">
+            Start from a preset
+          </span>
+          <div className="grid grid-cols-1 gap-2">
+            {presets.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => onSavePreset(p.id)}
+                disabled={saving}
+                className={cn(
+                  'text-left border px-3 py-2 transition-colors disabled:opacity-50',
+                  source !== 'subject' && presetId === p.id
+                    ? 'border-primary bg-primary/5'
+                    : 'border-outline-variant/30 hover:border-primary/40'
+                )}
+              >
+                <span className="text-xs font-bold text-on-surface block">{p.label}</span>
+                <span className="text-[11px] text-on-surface/50 block">{p.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Section editors */}
+      {sections && sections.length > 0 ? (
+        <div className="space-y-3">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface/50">
+            Sections
+          </span>
+          {sections.map((s, i) => (
+            <BlueprintSectionEditor
+              key={i}
+              index={i}
+              section={s}
+              canRemove={sections.length > 1}
+              onChange={(next) => updateSection(i, next)}
+              onRemove={() => removeSection(i)}
+            />
+          ))}
+          {sections.length < MAX_SECTIONS && (
+            <button
+              type="button"
+              onClick={addSection}
+              className="w-full border border-dashed border-outline-variant/40 text-on-surface/50 hover:border-primary/50 hover:text-primary py-2 text-[10px] font-bold uppercase tracking-widest transition-colors"
+            >
+              + Add section
+            </button>
+          )}
+        </div>
+      ) : (
+        !loading && (
+          <p className="text-xs text-on-surface/50">No sections loaded for this subject yet.</p>
+        )
+      )}
+
+      {/* Duration */}
+      <label className="flex items-center justify-between gap-3">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface/50">
+          Duration (minutes)
+        </span>
+        <input
+          type="number"
+          min={1}
+          max={600}
+          value={duration}
+          onChange={(e) => setDuration(Number(e.target.value))}
+          className="w-24 bg-surface border border-outline-variant/30 focus:border-primary focus:ring-0 px-3 py-1.5 text-sm text-on-surface"
+        />
+      </label>
+
+      {/* Totals */}
+      <div className="flex items-center justify-between text-xs text-on-surface/60 border-t border-outline-variant/20 pt-3">
+        <span>
+          <strong className="text-on-surface">{totalQ}</strong> questions ·{' '}
+          <strong className="text-on-surface">{totalM}</strong> marks
+        </span>
+        <span>
+          <strong className="text-on-surface">{duration}</strong> min
+        </span>
+      </div>
+
+      {(localError || error) && (
+        <div className="px-3 py-2 text-xs border-l-2 border-error bg-error/5 text-error">
+          {localError || error}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={handleSave}
+        disabled={saving || !sections}
+        className="w-full border border-primary text-primary py-2.5 text-[10px] font-bold uppercase tracking-widest hover:bg-primary/10 transition-colors disabled:opacity-40"
+      >
+        {saving ? 'Saving…' : 'Save blueprint'}
+      </button>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function DesktopMockTests() {
@@ -55,6 +446,55 @@ export default function DesktopMockTests() {
   const [source, setSource] = useState<TestSource>('predictions');
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState('');
+
+  // Blueprint drawer state (Phase 1.6)
+  const [useBlueprint, setUseBlueprint] = useState(true);
+  const [presets, setPresets] = useState<BlueprintPreset[]>([]);
+  const [bpView, setBpView] = useState<BlueprintView | null>(null);
+  const [bpLoading, setBpLoading] = useState(false);
+  const [bpSaving, setBpSaving] = useState(false);
+  const [bpError, setBpError] = useState('');
+
+  // Load preset list once.
+  useEffect(() => {
+    let dead = false;
+    mockTestsService
+      .getBlueprintPresets()
+      .then((p) => {
+        if (!dead) setPresets(p ?? []);
+      })
+      .catch(() => {
+        // presets are optional; the drawer can still edit the resolved blueprint
+      });
+    return () => {
+      dead = true;
+    };
+  }, []);
+
+  // Load the subject's resolved blueprint whenever the subject changes.
+  useEffect(() => {
+    if (!subjectId) {
+      setBpView(null);
+      return;
+    }
+    let dead = false;
+    setBpLoading(true);
+    setBpError('');
+    mockTestsService
+      .getSubjectBlueprint(subjectId)
+      .then((v) => {
+        if (!dead) setBpView(v);
+      })
+      .catch((e: unknown) => {
+        if (!dead) setBpError(e instanceof Error ? e.message : 'Failed to load blueprint.');
+      })
+      .finally(() => {
+        if (!dead) setBpLoading(false);
+      });
+    return () => {
+      dead = true;
+    };
+  }, [subjectId]);
 
   if (!API_URL) {
     return (
@@ -80,6 +520,7 @@ export default function DesktopMockTests() {
         num_questions: numQuestions,
         difficulty,
         source,
+        useBlueprint,
       };
       const test = await generate(payload);
       if (!test.test_id || test.test_id === 'none') {
@@ -94,6 +535,42 @@ export default function DesktopMockTests() {
       setGenerateError(msg);
     } finally {
       setGenerating(false);
+    }
+  };
+
+  // ── Blueprint persistence ────────────────────────────────────────────────
+
+  const handleSavePreset = async (presetId: string) => {
+    if (!subjectId) return;
+    setBpSaving(true);
+    setBpError('');
+    try {
+      const view = await mockTestsService.putSubjectBlueprint(subjectId, { preset: presetId });
+      setBpView(view);
+    } catch (err: unknown) {
+      setBpError(err instanceof Error ? err.message : 'Failed to apply preset.');
+    } finally {
+      setBpSaving(false);
+    }
+  };
+
+  const handleSaveSections = async (
+    duration: number,
+    sections: BlueprintSectionSpec[]
+  ) => {
+    if (!subjectId) return;
+    setBpSaving(true);
+    setBpError('');
+    try {
+      const view = await mockTestsService.putSubjectBlueprint(subjectId, {
+        duration_minutes: duration,
+        sections,
+      });
+      setBpView(view);
+    } catch (err: unknown) {
+      setBpError(err instanceof Error ? err.message : 'Failed to save blueprint.');
+    } finally {
+      setBpSaving(false);
     }
   };
 
@@ -173,6 +650,41 @@ export default function DesktopMockTests() {
                 )}
               </div>
 
+              {/* Generation mode */}
+              <div className="flex flex-col gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface/60">
+                  Generation
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setUseBlueprint(true)}
+                    className={cn(
+                      'flex-1 py-2 text-xs font-bold uppercase tracking-wider border transition-colors',
+                      useBlueprint
+                        ? 'bg-primary text-on-primary border-primary'
+                        : 'border-outline-variant/30 text-on-surface/60 hover:border-primary/40'
+                    )}
+                  >
+                    Exam blueprint
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUseBlueprint(false)}
+                    className={cn(
+                      'flex-1 py-2 text-xs font-bold uppercase tracking-wider border transition-colors',
+                      !useBlueprint
+                        ? 'bg-primary text-on-primary border-primary'
+                        : 'border-outline-variant/30 text-on-surface/60 hover:border-primary/40'
+                    )}
+                  >
+                    Quick pick
+                  </button>
+                </div>
+              </div>
+
+              {!useBlueprint && (
+                <>
               {/* Number of questions */}
               <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">
@@ -256,6 +768,23 @@ export default function DesktopMockTests() {
                   ))}
                 </div>
               </div>
+
+                </>
+              )}
+
+              {/* Blueprint drawer (exam-blueprint mode) */}
+              {useBlueprint && subjectId && (
+                <BlueprintDrawer
+                  subjectId={subjectId}
+                  presets={presets}
+                  view={bpView}
+                  loading={bpLoading}
+                  saving={bpSaving}
+                  error={bpError}
+                  onSavePreset={handleSavePreset}
+                  onSaveSections={handleSaveSections}
+                />
+              )}
 
               {/* Insufficient data notice */}
               {isInsufficientData && (

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 from typing import Optional, List, Dict, Any, Literal, Union
 from datetime import datetime
 from uuid import UUID
@@ -143,6 +143,49 @@ class SubjectResponse(SubjectBase):
         if isinstance(v, uuid_module.UUID):
             return str(v)
         return v
+
+# Blueprint Schemas (Phase 1 — implementation-plan.md 1.1 / 1.5)
+class BlueprintSection(BaseModel):
+    name: Optional[str] = None
+    count: int = Field(ge=1, le=30)
+    marks: int = Field(ge=1, le=100)
+    attempt: Optional[int] = Field(default=None, ge=1, le=30)
+    difficulty: Literal["easy", "medium", "hard", "mixed"] = "mixed"
+    qtype: Literal["any", "mcq", "descriptive"] = "any"
+    bloom: List[str] = []
+
+
+class BlueprintConfig(BaseModel):
+    """PUT /subjects/{id}/blueprint body: a full blueprint or a preset ref."""
+
+    preset: Optional[str] = None
+    duration_minutes: Optional[int] = Field(default=None, ge=1, le=600)
+    sections: Optional[List[BlueprintSection]] = None
+
+    @model_validator(mode="after")
+    def _require_sections_or_preset(self):
+        if self.sections is None and not self.preset:
+            raise ValueError("provide 'sections' or a known 'preset'")
+        if self.sections is not None and not self.sections:
+            raise ValueError("'sections' must be a non-empty list when provided")
+        return self
+
+
+class BlueprintView(BaseModel):
+    subject_id: str
+    source: str  # "subject" | "preset" | "generic"
+    preset: str
+    blueprint: Dict[str, Any]
+    total_questions: int
+    total_marks: int
+
+
+class BlueprintPreset(BaseModel):
+    id: str
+    label: str
+    description: str
+    blueprint: Dict[str, Any]
+
 
 # Paper Schemas
 class PaperUploadResponse(BaseModel):
@@ -338,9 +381,13 @@ class MockTestRequest(BaseModel):
     subject_id: str
     num_questions: int = 10
     difficulty: str = "mixed"
-    source: str = "predictions"
+    source: str = "all_questions"
     time_limit_minutes: int = 90
     question_source: Optional[str] = None
+    # implementation-plan 1.2: blueprint-constrained generation (default on);
+    # a request-level blueprint dict overrides the subject blueprint.
+    use_blueprint: bool = True
+    blueprint: Optional[Dict[str, Any]] = None
 
     @field_validator("num_questions")
     @classmethod
@@ -379,6 +426,10 @@ class MockTestQuestion(BaseModel):
     text: Optional[str] = None
     unit: Optional[str] = None
     type: Optional[str] = None
+    # choice-group marker (implementation-plan 1.2): {"group","attempt","of"}
+    group: Optional[int] = None
+    attempt: Optional[int] = None
+    of: Optional[int] = None
 
     @field_validator("id", mode="before")
     @classmethod
@@ -443,6 +494,87 @@ class TestSubmissionResponse(BaseModel):
     score_percentage: Optional[float] = None
     total_questions: int
     answers_graded: int
+    # hybrid grading (implementation-plan 1.4/1.5):
+    #   "auto" | "pending_self_grade" | "self_verified" | "none"
+    grading_mode: Optional[str] = None
+    # how many answered descriptive questions still await self-verification
+    pending_self_grade: Optional[int] = None
+
+    @field_validator("test_id", mode="before")
+    @classmethod
+    def _coerce_uuid(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
+
+
+# Hybrid-grading error classes the student picks during self-verify (plan D4).
+ERROR_CLASSES = ("Knowledge", "Retrieval", "Conceptual", "Execution")
+
+
+class SelfGradeItem(BaseModel):
+    question_id: str
+    points_hit: float = Field(ge=0)
+    error_class: str
+
+    @field_validator("question_id", mode="before")
+    @classmethod
+    def _coerce_uuid(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
+
+    @field_validator("error_class")
+    @classmethod
+    def _validate_error_class(cls, v: str) -> str:
+        canon = {c.lower(): c for c in ERROR_CLASSES}
+        key = (v or "").strip().lower()
+        if key not in canon:
+            raise ValueError(f"error_class must be one of {ERROR_CLASSES}")
+        return canon[key]
+
+
+class SelfGradeRequest(BaseModel):
+    items: List[SelfGradeItem] = Field(min_length=1)
+
+
+class TestReviewItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
+    question_id: str
+    question_number: int
+    question_text: str
+    topic: str
+    marks: int
+    mode: str  # "mcq" | "descriptive"
+    user_answer: Optional[str] = None
+    auto_result: Optional[str] = None  # correct | incorrect | skipped | None
+    provisional_points: Optional[float] = None
+    verified_points: Optional[float] = None
+    error_class: Optional[str] = None
+    model_answer: Optional[str] = None
+    rubric_bullets: Optional[List[str]] = None
+    keyword_anchors: Optional[List[str]] = None
+    needs_review: bool = False
+
+    @field_validator("question_id", mode="before")
+    @classmethod
+    def _coerce_uuid(cls, v):
+        if isinstance(v, uuid_module.UUID):
+            return str(v)
+        return v
+
+
+class TestReviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    test_id: str
+    grading_mode: str
+    percentage: Optional[float] = None  # null until every pending item is verified
+    pending_self_grade: int = 0
+    total_questions: int
+    total_marks: int
+    items: List[TestReviewItem] = []
 
     @field_validator("test_id", mode="before")
     @classmethod
@@ -460,10 +592,12 @@ TestSubmitResponse = TestSubmissionResponse
 class QuestionAnalysis(BaseModel):
     question_id: str
     marks: int
-    status: str
+    status: str  # correct | incorrect | skipped | pending_self_grade | verified
     user_answer: str
     correct_answer: str
     explanation: str
+    # self-verified awarded points (Phase 1.4) — null for auto/skipped items
+    points: Optional[float] = None
 
     @field_validator("question_id", mode="before")
     @classmethod
@@ -479,6 +613,7 @@ class TestResultsResponse(BaseModel):
     test_id: str
     score: int
     percentage: Optional[float] = None  # null when not gradeable
+    grading_mode: Optional[str] = None  # auto | pending_self_grade | self_verified | none
     question_analysis: List[QuestionAnalysis]
     weak_topics: List[str]
     strong_topics: List[str]

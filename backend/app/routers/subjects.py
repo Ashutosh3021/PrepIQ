@@ -3,6 +3,7 @@ from typing import List, Any, Dict
 import logging
 
 from .. import schemas
+from .. import blueprints
 from ..services.pyronites_auth import get_current_user_from_token
 from ..services.syllabus_gate import get_syllabus_status, subject_requires_syllabus_gate
 from ..services.syllabus_extraction import run_syllabus_extraction, SyllabusExtractionError
@@ -115,6 +116,55 @@ async def update_subject(
     }
     updated = subjects_repo.update(subject_id, data) or {**subject, **data}
     return _enrich(updated)
+
+
+def _blueprint_view(subject: Dict[str, Any], source: str, bp: Dict[str, Any]) -> Dict[str, Any]:
+    total_q, total_m = blueprints.blueprint_totals(bp)
+    return {
+        "subject_id": str(subject.get("id")),
+        "source": source,
+        "preset": str(bp.get("preset") or "custom"),
+        "blueprint": bp,
+        "total_questions": total_q,
+        "total_marks": total_m,
+    }
+
+
+@router.get("/{subject_id}/blueprint", response_model=schemas.BlueprintView)
+async def get_subject_blueprint(
+    subject_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    subject = subjects_repo.get_for_user(subject_id, current_user["id"])
+    if not subject:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
+    bp, source = blueprints.resolve_with_source(subject)
+    return _blueprint_view(subject, source, bp)
+
+
+@router.put("/{subject_id}/blueprint", response_model=schemas.BlueprintView)
+async def put_subject_blueprint(
+    subject_id: str,
+    payload: schemas.BlueprintConfig,
+    current_user: dict = Depends(get_current_user),
+):
+    subject = subjects_repo.get_for_user(subject_id, current_user["id"])
+    if not subject:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
+    data = payload.model_dump(exclude_none=True)
+    try:
+        bp = blueprints.validate_blueprint(data)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    try:
+        subjects_repo.update(subject_id, {"blueprint_json": bp})
+    except Exception as e:
+        logger.error("blueprint save failed for %s: %s", subject_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not save blueprint",
+        )
+    return _blueprint_view(subject, "subject", bp)
 
 
 @router.delete("/{subject_id}")

@@ -17,7 +17,9 @@ function ScoreDisplay({ pct }: { pct: number | null }) {
   if (pct == null) {
     return (
       <div className="text-center py-4">
-        <p className="text-on-surface/50 text-sm italic">Score unavailable</p>
+        <p className="text-on-surface/50 text-sm italic">
+          Score pending — self-check below to finalise it.
+        </p>
       </div>
     );
   }
@@ -129,6 +131,47 @@ export default function MockTestPage() {
             <h1 className="text-3xl font-serif italic mb-8">Test Results</h1>
 
             <ScoreDisplay pct={result.score_percentage} />
+
+            {/* Self-verify prompt (hybrid grading — plan 1.4/1.6) */}
+            {result.grading_mode === 'pending_self_grade' && (
+              <div className="mt-6 border-2 border-amber-300 bg-amber-50 p-6 text-center">
+                <p className="text-xs font-bold uppercase tracking-widest text-amber-700 mb-2">
+                  Awaiting self-check · {result.pending_self_grade} answer
+                  {result.pending_self_grade === 1 ? '' : 's'}
+                </p>
+                <p className="text-sm text-amber-800 leading-relaxed mb-5">
+                  Descriptive answers can&apos;t be auto-marked honestly. Compare yours with the
+                  model answer, tick the rubric points you actually hit, and award yourself marks —
+                  finding today&apos;s gaps is how they stop costing marks in the exam.
+                </p>
+                <button
+                  onClick={() => router.push(`/desktop/test-results?testId=${test.test_id}`)}
+                  className="px-8 py-3 bg-primary text-on-primary text-xs font-bold uppercase tracking-widest hover:bg-primary/90 transition-colors"
+                >
+                  Self-verify my answers
+                </button>
+              </div>
+            )}
+
+            {result.grading_mode === 'self_verified' && (
+              <div className="mt-6 border-2 border-green-300 bg-green-50 p-4 flex items-center justify-center gap-3">
+                <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 bg-green-600 text-white">
+                  Self-Verified
+                </span>
+                <span className="text-sm text-green-800">
+                  You checked every answer against the rubric. Honest review beats a lucky guess.
+                </span>
+              </div>
+            )}
+
+            {(result.grading_mode === 'auto' || result.grading_mode === 'none' || !result.grading_mode) && (
+              <button
+                onClick={() => router.push(`/desktop/test-results?testId=${test.test_id}`)}
+                className="mt-6 w-full border border-primary text-primary py-3 text-xs font-bold uppercase tracking-widest hover:bg-primary/10 transition-colors"
+              >
+                View full analysis
+              </button>
+            )}
 
             <div className="mt-10 space-y-4">
               <h2 className="text-xs font-bold uppercase tracking-widest text-primary pb-3 border-b border-outline-variant/20">

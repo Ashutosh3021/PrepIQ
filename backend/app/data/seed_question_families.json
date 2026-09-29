@@ -1,0 +1,186 @@
+{
+  "version": 1,
+  "note": "Expert-seeded CSE question families (implementation-plan.md D5). LLM-drafted starter set — expert reviews/replaces this file; content only, no code changes needed. Add 'electrical' and 'neet' branches as JSON entries in later phases.",
+  "seeds": [
+    {
+      "canonical_text": "Compute CPU scheduling (FCFS/SJF/RR) metrics: Gantt chart, average waiting time, average turnaround time for given process burst times",
+      "branch": "cse",
+      "topic": "Operating Systems",
+      "bloom_level": "apply",
+      "command_verb": "calculate",
+      "marks_typical": 6,
+      "difficulty": "medium",
+      "keywords": ["scheduling", "gantt", "turnaround", "waiting", "round robin", "burst"]
+    },
+    {
+      "canonical_text": "Trace page replacement (FIFO/LRU/OPT) for a given reference string and compute page faults and hits",
+      "branch": "cse",
+      "topic": "Operating Systems",
+      "bloom_level": "apply",
+      "command_verb": "trace",
+      "marks_typical": 5,
+      "difficulty": "medium",
+      "keywords": ["page", "replacement", "fault", "lru", "fifo", "reference string"]
+    },
+    {
+      "canonical_text": "Apply Banker's algorithm to given allocation/max/available matrices: determine safe sequence or deadlock state",
+      "branch": "cse",
+      "topic": "Operating Systems",
+      "bloom_level": "analyze",
+      "command_verb": "determine",
+      "marks_typical": 8,
+      "difficulty": "hard",
+      "keywords": ["banker", "safety", "deadlock", "allocation", "available", "safe sequence"]
+    },
+    {
+      "canonical_text": "Distinguish process vs thread with context-switching scenario; explain when each is preferred",
+      "branch": "cse",
+      "topic": "Operating Systems",
+      "bloom_level": "understand",
+      "command_verb": "explain",
+      "marks_typical": 4,
+      "difficulty": "easy",
+      "keywords": ["process", "thread", "context switch", "concurrent", "pcb"]
+    },
+    {
+      "canonical_text": "Convert infix expression to postfix/prefix using stack and evaluate the result",
+      "branch": "cse",
+      "topic": "Data Structures",
+      "bloom_level": "apply",
+      "command_verb": "convert",
+      "marks_typical": 5,
+      "difficulty": "medium",
+      "keywords": ["infix", "postfix", "prefix", "stack", "expression", "precedence"]
+    },
+    {
+      "canonical_text": "Perform insertion/deletion sequence on BST/AVL tree and show rotation steps to restore balance",
+      "branch": "cse",
+      "topic": "Data Structures",
+      "bloom_level": "apply",
+      "command_verb": "draw",
+      "marks_typical": 6,
+      "difficulty": "medium",
+      "keywords": ["avl", "rotation", "bst", "insert", "balance", "binary tree"]
+    },
+    {
+      "canonical_text": "Analyze time/space complexity (big-O) of given code snippet or algorithm with nested loops/recursion",
+      "branch": "cse",
+      "topic": "Data Structures",
+      "bloom_level": "analyze",
+      "command_verb": "analyze",
+      "marks_typical": 4,
+      "difficulty": "medium",
+      "keywords": ["complexity", "big o", "nested", "loop", "recursive", "efficiency"]
+    },
+    {
+      "canonical_text": "Find minimum spanning tree (Kruskal's/Prim's) and total cost for given weighted graph",
+      "branch": "cse",
+      "topic": "Data Structures",
+      "bloom_level": "apply",
+      "command_verb": "find",
+      "marks_typical": 6,
+      "difficulty": "medium",
+      "keywords": ["spanning", "kruskal", "prim", "mst", "weighted", "edge"]
+    },
+    {
+      "canonical_text": "Perform BFS/DFS traversal from given source and compute shortest path (Dijkstra) on weighted graph",
+      "branch": "cse",
+      "topic": "Data Structures",
+      "bloom_level": "apply",
+      "command_verb": "compute",
+      "marks_typical": 6,
+      "difficulty": "medium",
+      "keywords": ["dijkstra", "bfs", "dfs", "shortest", "traversal", "graph"]
+    },
+    {
+      "canonical_text": "Given relation with functional dependencies: test for 3NF/BCNF and produce lossless decomposition",
+      "branch": "cse",
+      "topic": "Database Management",
+      "bloom_level": "analyze",
+      "command_verb": "normalize",
+      "marks_typical": 8,
+      "difficulty": "hard",
+      "keywords": ["functional dependency", "normal", "bcnf", "3nf", "decomposition", "lossless"]
+    },
+    {
+      "canonical_text": "Write SQL query on given schema using joins, GROUP BY, HAVING and aggregate functions",
+      "branch": "cse",
+      "topic": "Database Management",
+      "bloom_level": "apply",
+      "command_verb": "write",
+      "marks_typical": 6,
+      "difficulty": "medium",
+      "keywords": ["select", "join", "group by", "having", "aggregate", "schema"]
+    },
+    {
+      "canonical_text": "Distinguish TCP vs UDP and explain three-way handshake with a given data-transfer scenario",
+      "branch": "cse",
+      "topic": "Computer Networks",
+      "bloom_level": "understand",
+      "command_verb": "explain",
+      "marks_typical": 4,
+      "difficulty": "easy",
+      "keywords": ["tcp", "udp", "handshake", "connection", "protocol", "port"]
+    },
+    {
+      "canonical_text": "Subnetting: given IP block and requirements compute subnet mask, usable hosts, broadcast address",
+      "branch": "cse",
+      "topic": "Computer Networks",
+      "bloom_level": "apply",
+      "command_verb": "calculate",
+      "marks_typical": 5,
+      "difficulty": "medium",
+      "keywords": ["subnet", "mask", "cidr", "broadcast", "address", "host"]
+    },
+    {
+      "canonical_text": "Cache mapping calculation: tag/index/offset bits and hit ratio for given cache configuration",
+      "branch": "cse",
+      "topic": "Computer Organization",
+      "bloom_level": "apply",
+      "command_verb": "calculate",
+      "marks_typical": 6,
+      "difficulty": "hard",
+      "keywords": ["cache", "tag", "index", "offset", "mapping", "hit ratio"]
+    },
+    {
+      "canonical_text": "Convert given NFA/DFA: minimize to equivalent minimal DFA or derive regular expression for the language",
+      "branch": "cse",
+      "topic": "Theory of Computation",
+      "bloom_level": "analyze",
+      "command_verb": "design",
+      "marks_typical": 8,
+      "difficulty": "hard",
+      "keywords": ["dfa", "nfa", "automata", "state", "transition", "language"]
+    },
+    {
+      "canonical_text": "Convert grammar to Chomsky/Greibach normal form with step-by-step unit and production removal",
+      "branch": "cse",
+      "topic": "Theory of Computation",
+      "bloom_level": "apply",
+      "command_verb": "convert",
+      "marks_typical": 6,
+      "difficulty": "hard",
+      "keywords": ["grammar", "normal form", "chomsky", "production", "nonterminal"]
+    },
+    {
+      "canonical_text": "Solve recurrence relation using recursion tree or master theorem and state final complexity",
+      "branch": "cse",
+      "topic": "Algorithms",
+      "bloom_level": "apply",
+      "command_verb": "solve",
+      "marks_typical": 5,
+      "difficulty": "medium",
+      "keywords": ["recurrence", "master theorem", "recursion tree", "logarithm", "complexity"]
+    },
+    {
+      "canonical_text": "Distinguish symmetric vs asymmetric encryption and map to a given secure-communication scenario",
+      "branch": "cse",
+      "topic": "Information Security",
+      "bloom_level": "understand",
+      "command_verb": "explain",
+      "marks_typical": 4,
+      "difficulty": "easy",
+      "keywords": ["encryption", "rsa", "aes", "public key", "private key", "secret"]
+    }
+  ]
+}

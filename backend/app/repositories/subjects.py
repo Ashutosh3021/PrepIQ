@@ -49,6 +49,9 @@ def normalize_subject(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]
             out[key] = sj.get(key)
     if sj:
         out["syllabus_json"] = sj
+    bj = _parse_jsonish(out.get("blueprint_json"))
+    if isinstance(bj, (dict, list)) and bj:
+        out["blueprint_json"] = bj
     return out
 
 

@@ -5,7 +5,7 @@ All text-generation / structured-JSON LLM calls should go through
 `get_llm_client(capability)` so model names and API keys are never
 hard-coded in routers, services, or engines.
 
-Capabilities: "prediction" | "extraction" | "chat"
+Capabilities: "prediction" | "extraction" | "chat" | "family" | "rubric"
 Resolution order (per capability):
   1. CAPABILITY_PROVIDER / CAPABILITY_MODEL / CAPABILITY_API_KEY / CAPABILITY_BASE_URL
   2. LLM_DEFAULT_*
@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-_CAPABILITIES = ("prediction", "extraction", "chat")
+_CAPABILITIES = ("prediction", "extraction", "chat", "family", "rubric")
 _lock = threading.Lock()
 _clients: Dict[str, "LLMClient"] = {}
 

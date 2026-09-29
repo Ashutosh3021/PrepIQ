@@ -16,6 +16,7 @@ from ..core.local_storage import delete_upload, resolve_path, save_upload
 from ..services.pyronites_auth import get_current_user_from_token
 from ..services.syllabus_gate import assert_pyq_upload_allowed
 from ..services.unit_tagging import tag_after_upload
+from ..services import job_queue
 from ..repositories import subjects as subjects_repo
 from ..repositories import papers as papers_repo
 from ..repositories import questions as questions_repo
@@ -140,8 +141,33 @@ async def upload_papers(
                     "extraction_method": "local_parser",
                 },
             )
+            # Plan 0.6 — storage budget: OCR text is persisted, so drop the
+            # file (Render 500MB disk). Only when extraction looks sane;
+            # mangled OCR (<200 chars) keeps the file for manual recovery.
+            raw_len = len(text_content or "")
+            if raw_len >= 200:
+                try:
+                    delete_upload(rel_path)
+                    papers_repo.update(paper_id, {"file_path": None})
+                except Exception as del_err:
+                    logger.warning("Post-OCR delete failed for %s: %s", paper_id, del_err)
+            else:
+                logger.warning(
+                    "Keeping file for %s: raw_text too short (%d chars)",
+                    paper_id, raw_len,
+                )
             # Phase 3 — government only (no-op for university)
             tagging = tag_after_upload(subject, paper_id)
+            # Plan 0.7 — async family assignment (worker drains jobs table).
+            try:
+                job_queue.enqueue("family_assign", {"paper_id": paper_id})
+            except Exception as job_err:
+                logger.error("family_assign enqueue failed for %s: %s", paper_id, job_err)
+            # Plan 1.3 — async rubric backfill (gradeability artifacts).
+            try:
+                job_queue.enqueue("rubric_backfill", {"paper_id": paper_id})
+            except Exception as rubric_err:
+                logger.error("rubric_backfill enqueue failed for %s: %s", paper_id, rubric_err)
             results.append(
                 {
                     "paper_id": paper_id,

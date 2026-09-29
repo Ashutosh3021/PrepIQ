@@ -1,23 +1,27 @@
 """
 Mock tests API — Pyronites (Fix Phase C).
 Honest null scores; no fake test_id; reject submit on test_id=none.
+Generation lives in services/test_generator.py (plan 1.2); hybrid grading
+math in services/hybrid_grading.py (plan 1.4).
 """
 from __future__ import annotations
 
-import json
-import random
-import uuid
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from .. import schemas
+from .. import blueprints
 from ..services.pyronites_auth import get_current_user_from_token
+from ..services.test_generator import generate, normalise_question, parse_json_field
+from ..services import hybrid_grading
+from ..services import rubric_generation
 from ..repositories import subjects as subjects_repo
-from ..repositories import predictions as predictions_repo
-from ..repositories import questions as questions_repo
 from ..repositories import mock_tests as mock_tests_repo
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tests", tags=["Tests"])
 
@@ -28,69 +32,46 @@ async def get_current_user(authorization: str = Header(None)):
     return await get_current_user_from_token(authorization)
 
 
-def _normalise_question(raw: Dict[str, Any], order: int) -> Dict[str, Any]:
-    qid = str(raw.get("id") or raw.get("question_id") or uuid.uuid4())
-    text = str(raw.get("question_text") or raw.get("text") or "")
-    topic = str(raw.get("topic") or raw.get("unit") or raw.get("unit_name") or "General")
-    difficulty = str(raw.get("difficulty") or "medium").lower()
+def _load_test(test_id: str, user_id: str, *, require_completed: bool = False) -> Dict[str, Any]:
+    if not test_id or test_id in ("none", "null", "undefined"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+    test = mock_tests_repo.get_for_user(test_id, user_id)
+    if not test:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+    if require_completed and not test.get("is_completed"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Test has not been completed yet"
+        )
+    return test
+
+
+def _artifacts_for(test: Dict[str, Any], questions_data: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Rubric artifacts for the test's questions — grading must never 500 on a
+    rubric read failure (falls back to empty anchors)."""
     try:
-        marks = int(raw.get("marks") or 1)
-    except (TypeError, ValueError):
-        marks = 1
-    return {
-        "id": qid,
-        "question_number": order,
-        "question_text": text,
-        "topic": topic,
-        "difficulty": difficulty,
-        "marks": marks,
-        "correct_answer": raw.get("correct_answer") or None,
-        "options": raw.get("options") or None,
-        "number": order,
-        "text": text,
-        "unit": topic,
-        "type": "mcq" if raw.get("options") else "descriptive",
-        "confidence_score": float(raw.get("confidence_score") or 0),
-    }
+        ids = [str(q.get("id")) for q in questions_data if isinstance(q, dict) and q.get("id")]
+        return rubric_generation.get_artifacts(ids)
+    except Exception:
+        return {}
 
 
-def _weighted_sample(
-    items: List[Dict[str, Any]],
-    k: int,
-    weight_key: str = "confidence_score",
-) -> List[Dict[str, Any]]:
-    if not items:
-        return []
-    k = min(k, len(items))
-    weights = [max(float(it.get(weight_key) or 0), 0.01) for it in items]
-    chosen: List[Dict[str, Any]] = []
-    pool = list(zip(weights, items))
-    for _ in range(k):
-        if not pool:
-            break
-        total = sum(w for w, _ in pool)
-        r = random.uniform(0, total)
-        cumulative = 0.0
-        for idx, (w, item) in enumerate(pool):
-            cumulative += w
-            if cumulative >= r:
-                chosen.append(item)
-                pool.pop(idx)
-                break
-    return chosen
+def _normalise_answers(answers: Any) -> Dict[str, str]:
+    if isinstance(answers, dict):
+        return {str(k): str(v) for k, v in answers.items()}
+    out: Dict[str, str] = {}
+    if isinstance(answers, list):
+        for item in answers:
+            if isinstance(item, dict):
+                qid = str(item.get("question_id") or item.get("id") or "")
+                if qid:
+                    out[qid] = str(item.get("answer") or "")
+    return out
 
 
-def _parse_json_field(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, (list, dict)):
-        return value
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except Exception:
-            return value
-    return value
+@router.get("/blueprints/presets", response_model=List[schemas.BlueprintPreset])
+async def get_blueprint_presets(current_user: dict = Depends(get_current_user)):
+    """Blueprint presets for the test-builder drawer (implementation-plan 1.1)."""
+    return blueprints.list_presets()
 
 
 @router.post("/generate", response_model=schemas.MockTestResponse)
@@ -102,104 +83,7 @@ async def generate_mock_test(
     if not subject:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found")
 
-    num_q = test_request.num_questions
-    difficulty = (test_request.difficulty or "mixed").lower()
-    source = getattr(test_request, "source", None) or "all_questions"
-
-    selected: List[Dict[str, Any]] = []
-
-    if source == "predictions":
-        latest = predictions_repo.get_latest(current_user["id"], test_request.subject_id)
-        pred_pool: List[Dict[str, Any]] = []
-        if latest:
-            raw = _parse_json_field(latest.get("predicted_questions_json"))
-            pred_pool = [p for p in (raw if isinstance(raw, list) else []) if isinstance(p, dict)]
-        if difficulty != "mixed" and pred_pool:
-            filtered = [
-                p for p in pred_pool if str(p.get("difficulty") or "").lower() == difficulty
-            ]
-            pred_pool = filtered if filtered else pred_pool
-        selected = _weighted_sample(pred_pool, num_q, weight_key="confidence_score")
-        deficit = num_q - len(selected)
-        if deficit > 0:
-            bank = questions_repo.list_for_subject(test_request.subject_id)
-            if difficulty != "mixed":
-                fb = [q for q in bank if str(q.get("difficulty") or "").lower() == difficulty]
-                bank = fb if fb else bank
-            for q in random.sample(bank, min(deficit, len(bank))):
-                selected.append(
-                    {
-                        "id": str(q.get("id")),
-                        "question_text": q.get("question_text"),
-                        "topic": q.get("unit_name") or "General",
-                        "difficulty": q.get("difficulty") or "medium",
-                        "marks": q.get("marks") or 1,
-                        "correct_answer": q.get("correct_answer"),
-                        "confidence_score": 0.0,
-                        "source": "backfill",
-                    }
-                )
-    else:
-        bank = questions_repo.list_for_subject(test_request.subject_id)
-        if difficulty != "mixed":
-            fb = [q for q in bank if str(q.get("difficulty") or "").lower() == difficulty]
-            bank = fb if fb else bank
-        for q in random.sample(bank, min(num_q, len(bank))):
-            selected.append(
-                {
-                    "id": str(q.get("id")),
-                    "question_text": q.get("question_text"),
-                    "topic": q.get("unit_name") or "General",
-                    "difficulty": q.get("difficulty") or "medium",
-                    "marks": q.get("marks") or 1,
-                    "correct_answer": q.get("correct_answer"),
-                }
-            )
-
-    if not selected:
-        return {
-            "test_id": "none",
-            "subject_id": test_request.subject_id,
-            "status": "error",
-            "total_questions": 0,
-            "total_marks": 0,
-            "time_limit_minutes": 0,
-            "created_at": datetime.now(timezone.utc),
-            "score_percentage": None,
-            "questions": [],
-            "error": "insufficient_data",
-            "message": "No questions available for this subject yet. Upload past papers first.",
-        }
-
-    normalised = [_normalise_question(q, i + 1) for i, q in enumerate(selected)]
-    total_marks = sum(q["marks"] for q in normalised)
-    duration = test_request.time_limit_minutes or max(len(normalised) * 3, 1)
-
-    row = mock_tests_repo.create(
-        current_user["id"],
-        test_request.subject_id,
-        {
-            "total_questions": len(normalised),
-            "total_marks": total_marks,
-            "duration_minutes": duration,
-            "difficulty_level": difficulty,
-            "questions_json": normalised,
-            "is_completed": False,
-            "start_time": datetime.now(timezone.utc).isoformat(),
-        },
-    )
-
-    return {
-        "test_id": str(row.get("id")),
-        "subject_id": test_request.subject_id,
-        "status": "pending",
-        "total_questions": len(normalised),
-        "total_marks": total_marks,
-        "time_limit_minutes": duration,
-        "created_at": row.get("created_at") or datetime.now(timezone.utc),
-        "score_percentage": None,
-        "questions": normalised,
-    }
+    return generate(current_user["id"], subject, test_request)
 
 
 @router.post("/{test_id}/submit", response_model=schemas.TestSubmissionResponse)
@@ -220,80 +104,62 @@ async def submit_test(
     if test.get("is_completed"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Test has already been submitted.")
 
-    answer_map: Dict[str, str] = {}
-    answers = submission.answers
-    if isinstance(answers, dict):
-        answer_map = {str(k): str(v) for k, v in answers.items()}
-    elif isinstance(answers, list):
-        for item in answers:
-            if isinstance(item, dict):
-                qid = str(item.get("question_id") or item.get("id") or "")
-                ans = str(item.get("answer") or "")
-                if qid:
-                    answer_map[qid] = ans
-
-    questions_data = _parse_json_field(test.get("questions_json")) or []
+    answer_map = _normalise_answers(submission.answers)
+    questions_data = parse_json_field(test.get("questions_json")) or []
     if not isinstance(questions_data, list):
         questions_data = []
 
-    answers_graded = 0
-    gradeable = 0
-    correct_count = 0
-    total_marks_earned = 0
-    weak_topics: List[str] = []
-    strong_topics: List[str] = []
-
-    for q in questions_data:
-        if not isinstance(q, dict):
-            continue
-        qid = str(q.get("id", ""))
-        correct = q.get("correct_answer")
-        topic = q.get("topic") or q.get("unit") or "General"
-        try:
-            marks = int(q.get("marks") or 1)
-        except (TypeError, ValueError):
-            marks = 1
-        user_ans = answer_map.get(qid, "").strip().upper()
-        answers_graded += 1
-        if correct:
-            gradeable += 1
-            if user_ans and user_ans == str(correct).strip().upper():
-                correct_count += 1
-                total_marks_earned += marks
-                if topic not in strong_topics:
-                    strong_topics.append(topic)
-            else:
-                if topic not in weak_topics:
-                    weak_topics.append(topic)
+    artifacts = _artifacts_for(test, questions_data)
+    graded = hybrid_grading.grade_submission(questions_data, answer_map, artifacts)
 
     total_marks = int(test.get("total_marks") or 0)
+    auto_points = float(graded["auto_points"])
+    pending = graded["pending"]
     score_pct: Optional[float]
-    if gradeable > 0 and total_marks > 0:
-        score_pct = round(total_marks_earned / total_marks * 100, 1)
+    self_grade_json: Optional[Dict[str, Any]] = None
+
+    if pending:
+        # Honest nulls until every pending answer is self-verified (plan 1.4).
+        score_pct = None
+        grading_mode = "pending_self_grade"
+        self_grade_json = {
+            "stage": "provisional",
+            "auto_points": auto_points,
+            "provisional": graded["provisional"],
+            "pending": pending,
+            "items": {},
+        }
+    elif graded["gradeable"] > 0 and total_marks > 0:
+        score_pct = round(auto_points / total_marks * 100, 1)
+        grading_mode = "auto"
     else:
         score_pct = None
+        grading_mode = "none"
 
-    mock_tests_repo.update(
-        test_id,
-        {
-            "user_answers_json": answer_map,
-            "end_time": datetime.now(timezone.utc).isoformat(),
-            "is_completed": True,
-            "score": total_marks_earned,
-            "percentage": score_pct,
-            "correct_count": correct_count,
-            "incorrect_count": max(gradeable - correct_count, 0),
-            "skipped_count": max(len(questions_data) - answers_graded, 0),
-            "weak_topics_json": weak_topics[:5],
-            "strong_topics_json": strong_topics[:5],
-        },
-    )
+    update: Dict[str, Any] = {
+        "user_answers_json": answer_map,
+        "end_time": datetime.now(timezone.utc).isoformat(),
+        "is_completed": True,
+        "score": int(round(auto_points)),
+        "percentage": score_pct,
+        "correct_count": int(graded["correct_count"]),
+        "incorrect_count": max(int(graded["gradeable"]) - int(graded["correct_count"]), 0),
+        "skipped_count": int(graded["skipped"]),
+        "weak_topics_json": graded["weak_topics"],
+        "strong_topics_json": graded["strong_topics"],
+        "grading_mode": grading_mode,
+    }
+    if self_grade_json is not None:
+        update["self_grade_json"] = self_grade_json
+    mock_tests_repo.update(test_id, update)
 
     return {
         "test_id": test_id,
         "score_percentage": score_pct,
         "total_questions": int(test.get("total_questions") or len(questions_data)),
-        "answers_graded": answers_graded,
+        "answers_graded": int(graded["answers_graded"]),
+        "grading_mode": grading_mode,
+        "pending_self_grade": len(pending),
     }
 
 
@@ -329,10 +195,10 @@ async def get_test(test_id: str, current_user: dict = Depends(get_current_user))
     test = mock_tests_repo.get_for_user(test_id, current_user["id"])
     if not test:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
-    questions_data = _parse_json_field(test.get("questions_json")) or []
+    questions_data = parse_json_field(test.get("questions_json")) or []
     if not isinstance(questions_data, list):
         questions_data = []
-    normalised = [_normalise_question(q, i + 1) for i, q in enumerate(questions_data) if isinstance(q, dict)]
+    normalised = [normalise_question(q, i + 1) for i, q in enumerate(questions_data) if isinstance(q, dict)]
     pct = test.get("percentage")
     return {
         "test_id": str(test.get("id")),
@@ -357,12 +223,16 @@ async def get_test_results(test_id: str, current_user: dict = Depends(get_curren
     if not test.get("is_completed"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Test has not been completed yet")
 
-    questions_data = _parse_json_field(test.get("questions_json")) or []
+    questions_data = parse_json_field(test.get("questions_json")) or []
     if not isinstance(questions_data, list):
         questions_data = []
-    user_answers = _parse_json_field(test.get("user_answers_json")) or {}
+    user_answers = parse_json_field(test.get("user_answers_json")) or {}
     if not isinstance(user_answers, dict):
         user_answers = {}
+    self_grade = parse_json_field(test.get("self_grade_json")) or {}
+    if not isinstance(self_grade, dict):
+        self_grade = {}
+    verified_points = self_grade.get("items") or {}
 
     question_analysis = []
     weak_topics: List[str] = []
@@ -372,33 +242,62 @@ async def get_test_results(test_id: str, current_user: dict = Depends(get_curren
         if not isinstance(q, dict):
             continue
         qid = str(q.get("id", ""))
-        user_ans = str(user_answers.get(qid, "")).strip().upper()
+        user_raw = str(user_answers.get(qid, "") or "").strip()
+        user_ans = user_raw.upper()
         correct = str(q.get("correct_answer") or "").strip().upper()
         topic = q.get("topic") or q.get("unit") or "General"
         is_correct = bool(user_ans and correct and user_ans == correct)
-        if correct:
-            if is_correct:
-                if topic not in strong_topics:
-                    strong_topics.append(topic)
-            else:
-                if topic not in weak_topics:
-                    weak_topics.append(topic)
+        v = verified_points.get(qid) if isinstance(verified_points.get(qid), dict) else None
+
+        # status (hybrid grading plan 1.4): auto-corrected questions keep
+        # correct/incorrect; descriptive answers are honest — pending until the
+        # student self-verifies, then "verified" with awarded points.
+        pts: Optional[float] = None
+        if not user_raw:
+            status = "skipped"
+        elif correct:
+            status = "correct" if is_correct else "incorrect"
+        elif v is not None:
+            status = "verified"
+            pts = float(v.get("points_hit") or 0)
+        else:
+            status = "pending_self_grade"
+
+        if status == "correct" and topic not in strong_topics:
+            strong_topics.append(topic)
+        if status == "incorrect" and topic not in weak_topics:
+            weak_topics.append(topic)
+
         question_analysis.append(
             {
                 "question_id": qid,
                 "marks": int(q.get("marks") or 0),
-                "status": "correct" if is_correct else ("skipped" if not user_ans else "incorrect"),
-                "user_answer": user_ans or "Skipped",
+                "status": status,
+                "user_answer": user_raw or "Skipped",
                 "correct_answer": correct or "N/A",
                 "explanation": f"Question about {topic}",
+                "points": pts,
             }
         )
+
+    # Topics: prefer the stored (graded) sets — they include self-verified
+    # weak/strong recomputation; fall back to auto-only computation above.
+    stored_weak = parse_json_field(test.get("weak_topics_json")) or []
+    stored_strong = parse_json_field(test.get("strong_topics_json")) or []
+    if isinstance(stored_weak, list) and stored_weak:
+        weak_topics = [str(t) for t in stored_weak]
+    if isinstance(stored_strong, list) and stored_strong:
+        strong_topics = [str(t) for t in stored_strong]
 
     pct = test.get("percentage")
     return {
         "test_id": test_id,
         "score": int(test.get("score") or 0),
         "percentage": float(pct) if pct is not None else None,
+        "grading_mode": str(
+            test.get("grading_mode")
+            or ("auto" if pct is not None else "none")
+        ),
         "question_analysis": question_analysis,
         "weak_topics": weak_topics[:5],
         "strong_topics": strong_topics[:5],
@@ -407,4 +306,209 @@ async def get_test_results(test_id: str, current_user: dict = Depends(get_curren
             if weak_topics
             else ["Keep up the good work!", "Try a harder difficulty level"]
         ),
+    }
+
+
+# ── Phase 1.4: review + self-grade (hybrid grading) ──────────────────────────
+
+@router.get("/{test_id}/review", response_model=schemas.TestReviewResponse)
+async def get_test_review(test_id: str, current_user: dict = Depends(get_current_user)):
+    """Model answers + rubrics for every question (completed tests only)."""
+    test = _load_test(test_id, current_user["id"], require_completed=True)
+    questions_data = parse_json_field(test.get("questions_json")) or []
+    if not isinstance(questions_data, list):
+        questions_data = []
+    answer_map = parse_json_field(test.get("user_answers_json")) or {}
+    if not isinstance(answer_map, dict):
+        answer_map = {}
+    self_grade = parse_json_field(test.get("self_grade_json")) or {}
+    if not isinstance(self_grade, dict):
+        self_grade = {}
+    artifacts = _artifacts_for(test, questions_data)
+
+    provisional = self_grade.get("provisional") or {}
+    verified = self_grade.get("items") or {}
+    pending = [str(q) for q in (self_grade.get("pending") or [])]
+    grading_mode = str(
+        test.get("grading_mode")
+        or ("auto" if test.get("percentage") is not None else "none")
+    )
+
+    items: List[Dict[str, Any]] = []
+    for i, q in enumerate(questions_data):
+        if not isinstance(q, dict):
+            continue
+        qid = str(q.get("id") or "")
+        art = artifacts.get(qid) or {}
+        try:
+            marks = int(q.get("marks") or 1)
+        except (TypeError, ValueError):
+            marks = 1
+        user_raw = str(answer_map.get(qid, "") or "").strip()
+        correct = q.get("correct_answer")
+        mode = str(art.get("mode") or ("mcq" if q.get("options") else "descriptive"))
+        anchors = art.get("keyword_anchors") or []
+        if not anchors and mode == "descriptive":
+            anchors = hybrid_grading.fallback_anchors(str(q.get("question_text") or ""))
+
+        auto_result: Optional[str] = None
+        if correct:
+            if not user_raw:
+                auto_result = "skipped"
+            elif user_raw.lower() == str(correct).strip().lower():
+                auto_result = "correct"
+            else:
+                auto_result = "incorrect"
+
+        v = verified.get(qid) or {}
+        items.append(
+            {
+                "question_id": qid,
+                "question_number": int(q.get("question_number") or i + 1),
+                "question_text": str(q.get("question_text") or ""),
+                "topic": str(q.get("topic") or q.get("unit") or "General"),
+                "marks": marks,
+                "mode": mode,
+                "user_answer": user_raw or None,
+                "auto_result": auto_result,
+                "provisional_points": provisional.get(qid),
+                "verified_points": v.get("points_hit") if v else None,
+                "error_class": v.get("error_class") if v else None,
+                "model_answer": art.get("model_answer"),
+                "rubric_bullets": art.get("rubric_bullets"),
+                "keyword_anchors": anchors or None,
+                "needs_review": bool(art.get("needs_review")),
+            }
+        )
+
+    pct = test.get("percentage")
+    return {
+        "test_id": str(test.get("id")),
+        "grading_mode": grading_mode,
+        "percentage": float(pct) if pct is not None else None,
+        "pending_self_grade": len(pending),
+        "total_questions": int(test.get("total_questions") or len(items)),
+        "total_marks": int(test.get("total_marks") or 0),
+        "items": items,
+    }
+
+
+@router.post("/{test_id}/self-grade", response_model=schemas.TestSubmissionResponse)
+async def self_grade_test(
+    test_id: str,
+    body: schemas.SelfGradeRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Student self-verification: award points + error class per pending
+    answer -> final Self-Verified score (plan 1.4 / D4)."""
+    test = _load_test(test_id, current_user["id"], require_completed=True)
+    questions_data = parse_json_field(test.get("questions_json")) or []
+    if not isinstance(questions_data, list):
+        questions_data = []
+    answer_map = parse_json_field(test.get("user_answers_json")) or {}
+    if not isinstance(answer_map, dict):
+        answer_map = {}
+    self_grade = parse_json_field(test.get("self_grade_json")) or {}
+    if not isinstance(self_grade, dict):
+        self_grade = {}
+
+    qmap: Dict[str, Dict[str, Any]] = {
+        str(q["id"]): q for q in questions_data if isinstance(q, dict) and q.get("id")
+    }
+    pending = [str(x) for x in (self_grade.get("pending") or [])]
+    if not pending:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Test has no answers awaiting self-grade.",
+        )
+
+    # validate items strictly: known question, still pending, points in 0..marks
+    seen: set = set()
+    for item in body.items:
+        qid = str(item.question_id)
+        if qid in seen:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"duplicate question_id {qid}")
+        seen.add(qid)
+        if qid not in qmap:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"unknown question_id {qid}")
+        if qid not in pending:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"question {qid} is not awaiting self-grade")
+        try:
+            marks = int(qmap[qid].get("marks") or 1)
+        except (TypeError, ValueError):
+            marks = 1
+        if item.points_hit > marks:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"points_hit for {qid} must be 0..{marks}, got {item.points_hit}",
+            )
+
+    auto_points = float(self_grade.get("auto_points") or test.get("score") or 0)
+    previous_items = self_grade.get("items") or {}
+    merged = dict(previous_items)
+    for item in body.items:
+        merged[str(item.question_id)] = {
+            "points_hit": float(item.points_hit),
+            "error_class": item.error_class,
+        }
+
+    all_items = [{"question_id": k, **v} for k, v in merged.items()]
+    total_marks = int(test.get("total_marks") or 0)
+    outcome = hybrid_grading.self_grade_outcome(auto_points, all_items, pending, total_marks)
+    remaining = outcome["pending"]
+    final_points = float(outcome["final_points"])
+    verified_points = {
+        k: float(v.get("points_hit") or 0) for k, v in merged.items()
+    }
+    weak, strong = hybrid_grading.recompute_topics(
+        questions_data, answer_map, {}, verified_points
+    )
+
+    grading_mode = "self_verified" if not remaining else "pending_self_grade"
+    pct = outcome["percentage"]  # None while anything is still pending
+    now = datetime.now(timezone.utc).isoformat()
+    update: Dict[str, Any] = {
+        "score": int(round(final_points)),
+        "percentage": pct,
+        "grading_mode": grading_mode,
+        "self_grade_json": {
+            "stage": "verified" if not remaining else "partial",
+            "auto_points": auto_points,
+            "provisional": self_grade.get("provisional") or {},
+            "pending": remaining,
+            "items": merged,
+            "final_points": final_points,
+            "verified_at": now,
+        },
+        "weak_topics_json": weak,
+        "strong_topics_json": strong,
+    }
+    mock_tests_repo.update(test_id, update)
+
+    if not remaining:
+        # Phase 3 learning-guide seed (stub handler now, real impl later).
+        try:
+            from ..services import job_queue
+
+            job_queue.enqueue("revision_seed", {
+                "test_id": str(test.get("id")),
+                "user_id": str(current_user["id"]),
+                "subject_id": str(test.get("subject_id")),
+                "weak_topics": weak,
+                "strong_topics": strong,
+            })
+        except Exception as job_err:
+            logger.warning("revision_seed enqueue failed for %s: %s", test_id, job_err)
+
+    answered = sum(1 for qid in qmap if str(answer_map.get(qid, "") or "").strip())
+    return {
+        "test_id": str(test.get("id")),
+        "score_percentage": pct,
+        "total_questions": int(test.get("total_questions") or len(qmap)),
+        "answers_graded": answered,
+        "grading_mode": grading_mode,
+        "pending_self_grade": len(remaining),
     }
