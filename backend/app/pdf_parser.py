@@ -54,11 +54,12 @@ except ImportError:
 
 # Image / OCR
 try:
-    from PIL import Image
+    from PIL import Image, ImageOps
     PIL_AVAILABLE = True
 except ImportError:
     logger.warning("Pillow not installed — image OCR unavailable")
     Image = None
+    ImageOps = None
     PIL_AVAILABLE = False
 
 try:
@@ -67,6 +68,16 @@ try:
 except ImportError:
     pytesseract = None
     TESSERACT_AVAILABLE = False
+
+# Windows: the UB-Mannheim installer puts tesseract outside PATH — point
+# pytesseract at it explicitly (same fix as the STT reference project).
+if TESSERACT_AVAILABLE:
+    try:
+        pytesseract.get_tesseract_version()
+    except Exception:
+        _default_tesseract = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        if Path(_default_tesseract).exists():
+            pytesseract.pytesseract.tesseract_cmd = _default_tesseract
 
 # DOCX
 try:
@@ -185,6 +196,15 @@ def _ensure_nltk() -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 # Main class
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Page markers and OCR failure strings — never "content" when judging whether
+# extraction actually produced usable text (meaningful_length).
+_EXTRACT_JUNK_RE = re.compile(
+    r"\[Page[^\]]*\]"
+    r"|\((?:no text layer|OCR unavailable|OCR failed)[^)]*\)"
+    r"|no text detected by OCR"
+)
+
 
 class PDFParser:
     """
@@ -383,9 +403,16 @@ class PDFParser:
             return "(OCR unavailable — install pytesseract and Pillow)"
         try:
             page = doc.load_page(page_index)
-            pix = page.get_pixmap(dpi=200)
+            pix = page.get_pixmap(dpi=300)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            return pytesseract.image_to_string(img).strip() or "(no text detected by OCR)"
+            img = ImageOps.autocontrast(img.convert("L"))
+            # --psm 4: single column of variable-size text — matches exam-paper
+            # layout (centred headers + numbered questions) better than the
+            # default OSD auto mode, which splits two-column-ish scans badly.
+            return (
+                pytesseract.image_to_string(img, config="--psm 4").strip()
+                or "(no text detected by OCR)"
+            )
         except Exception as exc:
             return f"(OCR failed: {exc})"
 
@@ -556,7 +583,11 @@ class PDFParser:
         if not PIL_AVAILABLE:
             raise RuntimeError("Pillow is not installed. Run: pip install Pillow")
         img = Image.open(image_path)
-        return pytesseract.image_to_string(img).strip() or "(no text detected by OCR)"
+        img = ImageOps.autocontrast(img.convert("L"))
+        return (
+            pytesseract.image_to_string(img, config="--psm 4").strip()
+            or "(no text detected by OCR)"
+        )
 
     # =========================================================================
     # Universal dispatcher
@@ -607,12 +638,37 @@ class PDFParser:
 
         supported = sorted(
             {"pdf", "docx", "doc", "pptx", "ppt", "xlsx", "xlsm", "xls", "ods",
-             "csv", "tsv", "epub", "html", "htm"} | _TEXT_EXTS | _IMAGE_EXTS
+             "csv", "tsv", "epub", "txt", "md", "log", "rst", "json", "xml",
+             "html", "htm"} | _TEXT_EXTS | _IMAGE_EXTS
         )
         raise ValueError(
             f"Unsupported file type: .{ext}. "
             f"Supported: {', '.join(supported)}"
         )
+
+    @staticmethod
+    def meaningful_length(text: str) -> int:
+        """Length of extracted text with page markers / OCR failures removed."""
+        return len(_EXTRACT_JUNK_RE.sub("", text or "").strip())
+
+    @staticmethod
+    def extract_text_with_ocr_fallback(file_path: str) -> str:
+        """
+        Text-layer first; retry with OCR when the layer is missing or thin.
+
+        Scanned papers have no embedded text — a plain ``extract_text`` call
+        returns page markers like ``"(no text layer; pass ocr=True ...)"``.
+        ``ocr=True`` only rasterises pages that lack a text layer, so
+        born-digital PDFs pay no OCR cost.
+        """
+        text = PDFParser.extract_text(file_path, ocr=False) or ""
+        if "(no text layer" not in text and PDFParser.meaningful_length(text) >= 200:
+            return text
+
+        ocr_text = PDFParser.extract_text(file_path, ocr=True) or ""
+        if PDFParser.meaningful_length(ocr_text) > PDFParser.meaningful_length(text):
+            return ocr_text
+        return text
 
     # =========================================================================
     # Exam question parser  (PrepIQ domain logic — keep separate from I/O above)

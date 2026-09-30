@@ -5,18 +5,17 @@ Extraction still via Phase 1 LLM provider / regex fallback.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Header, UploadFile, File, Form
 from typing import List, Dict
-import re
 from datetime import datetime, timezone
 import logging
 
 logger = logging.getLogger(__name__)
 upload_progress: Dict[str, dict] = {}
 
-from ..core.llm_provider import get_llm_client
 from ..core.local_storage import save_upload, resolve_path
 from ..services.pyronites_auth import get_current_user_from_token
 from ..services.syllabus_gate import assert_pyq_upload_allowed
 from ..services.unit_tagging import tag_after_upload
+from ..services import question_extraction
 from ..repositories import subjects as subjects_repo
 from ..repositories import papers as papers_repo
 from ..repositories import questions as questions_repo
@@ -85,7 +84,7 @@ async def upload_and_analyze(
             abs_path = resolve_path(rel)
             upload_progress[upload_id]["current_step"] = f"Extracting text: {file.filename}"
             try:
-                text = _get_pdf_parser().extract_text(str(abs_path))
+                text = _get_pdf_parser().extract_text_with_ocr_fallback(str(abs_path))
                 if text and text.strip():
                     all_text_content.append(text)
                 else:
@@ -174,80 +173,11 @@ async def upload_and_analyze(
 
 
 async def _extract_questions_with_gemini(text: str) -> list:
-    import json as _json
-    client = get_llm_client("extraction")
-    if not client.is_available:
-        logger.warning("Extraction LLM not set — falling back to regex question parser")
-        return _get_pdf_parser().parse_questions_from_text(text)
-    try:
-        truncated = text[:30_000]
-        system_prompt = """Analyze the provided exam paper text and extract every question it contains.
-
-For each question return a JSON object with these fields:
-- "text": the full question text (string, required)
-- "marks": marks/points value as integer, 0 if not specified
-- "question_type": one of "Conceptual/explanation", "Calculation/problem", "Proof/derivation", "Definition", "Comparison", "Mixed/other"
-- "difficulty": one of "Easy", "Medium", "Hard" based on marks and complexity
-- "unit": unit or module reference if mentioned (string or null)
-
-Return ONLY a valid JSON array of question objects. No markdown, no explanation, no code fences.
-If no questions are found, return an empty array []."""
-        raw = client.generate_text(f"{system_prompt}\n\nEXAM PAPER TEXT:\n{truncated}")
-        if raw.startswith("```"):
-            raw = re.sub(r"^```[a-z]*\n?", "", raw)
-            raw = re.sub(r"\n?```$", "", raw)
-        questions_raw = _json.loads(raw)
-        if not isinstance(questions_raw, list):
-            raise ValueError("Extraction LLM returned non-list JSON")
-        questions = []
-        for q in questions_raw:
-            if not isinstance(q, dict) or not q.get("text", "").strip():
-                continue
-            questions.append({
-                "text": q["text"].strip(),
-                "marks": int(q.get("marks") or 0),
-                "question_type": q.get("question_type") or "Mixed/other",
-                "difficulty": q.get("difficulty") or "Medium",
-                "unit": q.get("unit") or None,
-                "keywords": [],
-            })
-        return questions
-    except Exception as exc:
-        logger.error("Extraction LLM failed: %s — regex fallback", exc)
-        return _get_pdf_parser().parse_questions_from_text(text)
+    return question_extraction.extract_questions(text, "question_paper")
 
 
 async def _extract_concepts_with_gemini(text: str) -> list:
-    import json as _json
-    client = get_llm_client("extraction")
-    if not client.is_available:
-        return _get_pdf_parser().parse_questions_from_text(text)
-    try:
-        truncated = text[:30_000]
-        system_prompt = """Analyze the study material and extract key learning items as a JSON array with fields text, marks, question_type, difficulty, unit. Return ONLY JSON."""
-        raw = client.generate_text(f"{system_prompt}\n\nSTUDY MATERIAL TEXT:\n{truncated}")
-        if raw.startswith("```"):
-            raw = re.sub(r"^```[a-z]*\n?", "", raw)
-            raw = re.sub(r"\n?```$", "", raw)
-        items_raw = _json.loads(raw)
-        if not isinstance(items_raw, list):
-            raise ValueError("non-list")
-        items = []
-        for item in items_raw:
-            if not isinstance(item, dict) or not item.get("text", "").strip():
-                continue
-            items.append({
-                "text": item["text"].strip(),
-                "marks": 0,
-                "question_type": item.get("question_type") or "Key Point",
-                "difficulty": item.get("difficulty") or "Medium",
-                "unit": item.get("unit") or None,
-                "keywords": [],
-            })
-        return items
-    except Exception as exc:
-        logger.error("Concept extract failed: %s", exc)
-        return _get_pdf_parser().parse_questions_from_text(text)
+    return question_extraction.extract_questions(text, "study_material")
 
 
 async def generate_upload_analysis(subject_id: str, parsed_questions: list):

@@ -17,6 +17,7 @@ from ..services.pyronites_auth import get_current_user_from_token
 from ..services.syllabus_gate import assert_pyq_upload_allowed
 from ..services.unit_tagging import tag_after_upload
 from ..services import job_queue
+from ..services import question_extraction
 from ..repositories import subjects as subjects_repo
 from ..repositories import papers as papers_repo
 from ..repositories import questions as questions_repo
@@ -121,8 +122,10 @@ async def upload_papers(
         try:
             abs_path = resolve_path(rel_path)
             parser = _get_pdf_parser()
-            text_content = parser.extract_text(str(abs_path))
-            questions_data = parser.parse_questions_from_text(text_content or "")
+            text_content = parser.extract_text_with_ocr_fallback(str(abs_path))
+            questions_data = question_extraction.extract_questions(
+                text_content or "", "question_paper"
+            )
             seen = set()
             unique = []
             for q in questions_data:
@@ -138,13 +141,18 @@ async def upload_papers(
                     "raw_text": (text_content or "")[:200000],
                     "processing_status": "completed",
                     "processed_at": datetime.now(timezone.utc).isoformat(),
-                    "extraction_method": "local_parser",
+                    "extraction_method": (
+                        "local_parser+ocr"
+                        if " — OCR]" in (text_content or "")
+                        else "local_parser"
+                    ),
                 },
             )
             # Plan 0.6 — storage budget: OCR text is persisted, so drop the
             # file (Render 500MB disk). Only when extraction looks sane;
-            # mangled OCR (<200 chars) keeps the file for manual recovery.
-            raw_len = len(text_content or "")
+            # mangled OCR (<200 chars of real text) keeps the file for
+            # manual recovery — page markers / OCR failures don't count.
+            raw_len = parser.meaningful_length(text_content)
             if raw_len >= 200:
                 try:
                     delete_upload(rel_path)
