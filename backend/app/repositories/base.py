@@ -260,16 +260,56 @@ def table(name: str) -> Any:
     return get_pyronites_client().table(name)
 
 
+# PyroCore's REST backend pages results at 50 rows by default and rejects
+# query.limit > 200 (422). A paper with 110 questions, a user with >50 mocks or
+# predictions, etc. was therefore silently truncated on every read. All selects
+# now paginate in 200-row pages until a short page comes back.
+_PAGE_SIZE = 200
+_MAX_PAGES = 50  # safety valve: 10k rows per logical read
+
+
+def _select_pages(build_query, max_rows: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Execute a select, following offset/limit pages until exhaustion.
+
+    ``build_query()`` must return a fresh TableQuery each call (offset and
+    limit are set on it). Returns [] when the circuit breaker is open —
+    matching the old single-shot behaviour.
+    """
+    rows: List[Dict[str, Any]] = []
+    offset = 0
+    while offset < _PAGE_SIZE * _MAX_PAGES:
+        q = build_query()
+        if hasattr(q, "limit"):
+            q = q.limit(_PAGE_SIZE)
+        if offset and hasattr(q, "offset"):
+            q = q.offset(offset)
+        chunk = _retry(lambda: q.execute()) if hasattr(q, "execute") else q
+        chunk = _as_list(chunk)
+        rows.extend(chunk)
+        if len(chunk) < _PAGE_SIZE:
+            break
+        offset += _PAGE_SIZE
+    else:
+        logger.warning(
+            "_select_pages: hit page cap (%d rows) — results may be truncated",
+            _PAGE_SIZE * _MAX_PAGES,
+        )
+    if max_rows is not None:
+        return rows[:max_rows]
+    return rows
+
+
 def select_eq(table_name: str, column: str, value: Any) -> List[Dict[str, Any]]:
     key = f"select:{table_name}:{column}:{value}"
 
     def _produce() -> List[Dict[str, Any]]:
         try:
-            q = table(table_name).select()
-            if hasattr(q, "eq"):
-                q = q.eq(column, value)
-            result = _retry(lambda: q.execute()) if hasattr(q, "execute") else q
-            return _as_list(result)
+            def _build():
+                q = table(table_name).select()
+                if hasattr(q, "eq"):
+                    q = q.eq(column, value)
+                return q
+            return _select_pages(_build)
         except Exception as e:
             logger.error("select_eq %s.%s=%s failed: %s", table_name, column, value, e)
             raise
@@ -285,11 +325,7 @@ def select_eq(table_name: str, column: str, value: Any) -> List[Dict[str, Any]]:
 
 def select_all(table_name: str, limit: int = 500) -> List[Dict[str, Any]]:
     try:
-        q = table(table_name).select()
-        if hasattr(q, "limit"):
-            q = q.limit(limit)
-        result = _retry(lambda: q.execute()) if hasattr(q, "execute") else q
-        return _as_list(result)
+        return _select_pages(lambda: table(table_name).select(), max_rows=limit)
     except Exception as e:
         logger.error("select_all %s failed: %s", table_name, e)
         raise

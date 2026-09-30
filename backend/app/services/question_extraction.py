@@ -32,7 +32,8 @@ Repair the text and extract every question:
 - Fix OCR errors: split or glued words, line-break damage, common confusions (l/1/I, O/0, rn/m), stray dots and artefacts.
 - Rejoin each question into one flowing paragraph; preserve original wording apart from OCR repair.
 - Normalise numbering (1., Q1, (a), i)); use section/unit headers to attribute "unit" to the questions that follow.
-- Discard headers, footers, dates, roll numbers, instructions, "answer all/any" lines, and answer-key or explanatory text.
+- Some exports delimit questions with metadata chips like "2025 · Q141 · MCQ" instead of numbers — split on those too, and drop the chip lines.
+- Discard headers, footers, dates, roll numbers, instructions, "answer all/any" lines, site chrome ("Includes diagram", "Quick practice", "All papers"), lone option-label/value fragments, and answer-key or explanatory text.
 - Never invent questions. Skip any that are unrecoverable.
 - Take marks and unit/module from the text when present; otherwise use 0 and null.
 

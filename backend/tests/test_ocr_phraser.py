@@ -244,3 +244,60 @@ def test_prompt_promises_repair_and_no_invention():
     assert "OCR" in qe.QUESTION_PROMPT
     assert "JSON array" in qe.QUESTION_PROMPT
     assert "Never invent" in qe.QUESTION_PROMPT
+    assert "Q141" in qe.QUESTION_PROMPT  # chip-delimited exports
+
+
+# ── chip-delimited ("2025 · Q141 · MCQ") exports ────────────────────────────
+
+TAG_PAPER = """\
+[Page 1]
+All papers
+The current passing through the battery in the given circuit, is:
+Includes diagram
+2025 · Q141 · MCQ
+A wire of resistance
+is cut into 8 equal pieces. From these pieces two equivalent resistances
+are made. Then these two sets are added in series…
+2025 · Q169 · MCQ
+R
+A
+B
+CD
+The terminal voltage of the battery, whose emf is
+and internal resistance , when connected through an external resistance is:
+Includes diagram
+2024 · Q154 · MCQ
+Quick practice · Current Electricity
+[Page 2]
+The reciprocal of resistance is :
+2022 · Q140 · MCQ
+"""
+
+
+def test_tag_delimited_export_finds_every_question():
+    qs = PDFParser.parse_questions_from_text(TAG_PAPER)
+    assert len(qs) == 4, [q["text"][:60] for q in qs]
+    texts = [q["text"].lower() for q in qs]
+    assert "current passing through the battery" in texts[0]
+    assert "wire of resistance" in texts[1]
+    assert "terminal voltage" in texts[2]
+    assert "reciprocal of resistance" in texts[3]
+    # chips, chrome and option fragments never leak into question text
+    assert not any("MCQ" in t or "includes diagram" in t for t in texts)
+    assert [q["number"] for q in qs] == [1, 2, 3, 4]
+
+
+def test_tag_delimited_requires_three_chips():
+    classic = "1. Explain deadlock prevention techniques. (5 marks)\n2. Define paging."
+    assert len(PDFParser.parse_questions_from_text(classic)) == 2
+
+
+def test_edge_junk_rules():
+    from app.pdf_parser import _edge_junk
+
+    assert _edge_junk("10 V")
+    assert _edge_junk("AB")
+    assert _edge_junk("(22000 ± 5%)Ω")
+    assert not _edge_junk("Two heaters")          # real stem start
+    assert not _edge_junk("Find current in the circuit?")
+    assert not _edge_junk("A cell of emf 4 V and internal resistance")  # len >= 20

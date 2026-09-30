@@ -205,6 +205,22 @@ _EXTRACT_JUNK_RE = re.compile(
     r"|no text detected by OCR"
 )
 
+# Web-export question chips, e.g. "2025 · Q141 · MCQ" — these papers carry no
+# numeric prefixes, so the chips are the only reliable question boundaries.
+_TAG_LINE_RE = re.compile(r"^\s*\d{4}\s*[·•|]\s*Q\.?\s*\d+")
+_PAGE_MARKER_RE = re.compile(r"^\[Page \d+")
+
+
+def _edge_junk(line: str) -> bool:
+    """Standalone option-value / symbol fragments at a block edge (tag mode)."""
+    if re.search(r"[?:.…]", line):
+        return False
+    if len(line) >= 20:
+        return False
+    if re.search(r"\d", line):
+        return True
+    return not re.search(r"[A-Za-z]{3,}", line)
+
 
 class PDFParser:
     """
@@ -687,6 +703,8 @@ class PDFParser:
           - Marks lines: "(5 marks)", "[10M]", "5M" anywhere on the line
           - Verb cues  : lines starting with "Explain", "Define", "Prove", …
           - Fallback   : every substantial line (≥20 chars) when nothing matches
+          - Chip export: "2025 · Q141 · MCQ" metadata lines split the text into
+            one question per gap (web exports like NEET PYQ collections)
         """
         MAX_TEXT = 300_000
         text = text[:MAX_TEXT]
@@ -702,6 +720,7 @@ class PDFParser:
             "part a", "part b", "part c", "section a", "section b",
             "unit i", "unit ii", "unit iii", "unit iv", "unit v",
             "module ", "all questions carry",
+            "includes diagram", "quick practice", "all papers",
         )
 
         def _add(q_text: str, q_number: int) -> None:
@@ -761,6 +780,37 @@ class PDFParser:
                 _add(pending, pending_num)
             pending = ""
             pending_num = 0
+
+        # Chip-delimited exports carry no numeric prefixes — the state machine
+        # below would drop nearly every line, so split on the chips instead.
+        tag_hits = sum(1 for ln in lines if _TAG_LINE_RE.match(ln))
+        if tag_hits >= 3:
+            segments: List[List[str]] = []
+            current: List[str] = []
+            for ln in lines:
+                if _TAG_LINE_RE.match(ln):
+                    segments.append(current)
+                    current = []
+                else:
+                    current.append(ln)
+            segments.append(current)
+
+            for seg in segments:
+                kept = [
+                    ln for ln in seg
+                    if ln
+                    and not _PAGE_MARKER_RE.match(ln)
+                    and not any(ln.lower().startswith(p) for p in _SKIP_PREFIXES)
+                ]
+                while kept and _edge_junk(kept[0]):
+                    kept.pop(0)
+                while kept and _edge_junk(kept[-1]):
+                    kept.pop()
+                block = " ".join(kept).strip()
+                if len(block) >= 12:
+                    q_counter += 1
+                    _add(block, q_counter)
+            return questions
 
         for line in lines:
             if not line:
